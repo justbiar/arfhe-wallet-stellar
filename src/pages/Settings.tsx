@@ -303,7 +303,7 @@ export default function Settings() {
                     <Typography fontWeight={700}>{t('security.biometric')}</Typography>
                 </DialogTitle>
                 <DialogContent sx={{ pt: 3 }}>
-                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2, mt: 1 }}>
+                    <Typography variant="body2" color="text.primary" sx={{ mb: 2, mt: 1, opacity: 0.7 }}>
                         {t('security.biometricEnablePrompt')}
                     </Typography>
                     <TextField

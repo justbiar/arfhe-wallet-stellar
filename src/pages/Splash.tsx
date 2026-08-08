@@ -1,27 +1,23 @@
 import { useNavigate } from "react-router";
-import { Box, Typography, useTheme } from "@mui/material";
+import { Box, Typography } from "@mui/material";
 import { useEffect } from "react";
-import { keyframes } from "@mui/system";
 
-const float = keyframes`
-  0% { transform: translateY(0px); }
-  50% { transform: translateY(-10px); }
-  100% { transform: translateY(0px); }
-`;
-
-const shine = keyframes`
-  to { background-position: 200% center; }
-`;
+// Precise geometry of the ring nested in the sigma mark's notch, measured
+// from public/Arfhe-logo.png (377x369): center ~(83.8%, 48.8%), outer
+// diameter ~23.3% of the logo's width, stroke ~2.9% of the logo's width.
+const LOGO_SIZE = 150; // px, displayed square-ish (image is 377x369)
+const RING_LEFT_PCT = 83.8;
+const RING_TOP_PCT = 48.8;
+const RING_DIAMETER = LOGO_SIZE * 0.233;
+const RING_STROKE = Math.max(3, LOGO_SIZE * 0.029);
 
 function Splash() {
   const navigate = useNavigate();
-  const theme = useTheme();
-  const isDark = theme.palette.mode === 'dark';
 
   useEffect(() => {
     const timer = setTimeout(() => {
       navigate("auth");
-    }, 1800);
+    }, 3000);
     return () => clearTimeout(timer);
   }, [navigate]);
 
@@ -33,40 +29,140 @@ function Splash() {
       flexDirection: 'column',
       justifyContent: 'center',
       alignItems: 'center',
-      background: isDark
-        ? 'linear-gradient(135deg, #0b1120 0%, #2563eb 100%)'
-        : '#eff6ff',
+      background: 'var(--surface-canvas)',
       position: 'relative',
       overflow: 'hidden'
     }}>
 
-      {/* Logo Image */}
-      <Box
-        component="img"
-        src="Arfhe-logo.png"
-        alt="Arfhe Wallet Logo"
-        sx={{
-          width: 120,
-          height: 120,
-          zIndex: 1,
-          mb: 3,
-          animation: `${float} 6s ease-in-out infinite`
-        }}
-      />
+      {/* Sigma mark with animated ring → coin */}
+      <Box sx={{
+        position: 'relative',
+        width: LOGO_SIZE,
+        height: LOGO_SIZE * (369 / 377),
+        mb: 3,
+      }}>
+        <Box
+          component="img"
+          src="/Arfhe-logo.png"
+          alt="Arfhe"
+          sx={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'contain',
+            // Logo ships with a dark stroke; invert so it reads as
+            // "bone glow" on the dark splash background.
+            filter: 'invert(1) brightness(1.05)',
+            display: 'block',
+          }}
+        />
 
-      <Typography variant="h4" fontWeight={800} sx={{
-        zIndex: 1,
-        letterSpacing: 4,
-        background: isDark
-          ? 'linear-gradient(90deg, #1e3a8a, #bfdbfe, #1e3a8a)'
-          : 'linear-gradient(90deg, #dbeafe, #2563eb, #dbeafe)',
-        backgroundSize: '200% auto',
-        WebkitBackgroundClip: 'text',
-        WebkitTextFillColor: 'transparent',
-        animation: `${shine} 3s linear infinite`
+        {/* Mask: covers the logo's static ring right as the decoy ring falls away */}
+        <Box sx={{
+          position: 'absolute',
+          left: `${RING_LEFT_PCT}%`,
+          top: `${RING_TOP_PCT}%`,
+          width: RING_DIAMETER + 6,
+          height: RING_DIAMETER + 6,
+          borderRadius: '50%',
+          bgcolor: 'var(--surface-canvas)',
+          opacity: 0,
+          animation: 'arfheMaskReveal 0.01s steps(1) 0.6s forwards',
+          '@keyframes arfheMaskReveal': {
+            from: { opacity: 0 },
+            to: { opacity: 1 },
+          },
+        }} />
+
+        {/* Decoy ring: identical to the logo's ring, falls away to reveal the mask */}
+        <Box sx={{
+          position: 'absolute',
+          left: `${RING_LEFT_PCT}%`,
+          top: `${RING_TOP_PCT}%`,
+          width: RING_DIAMETER,
+          height: RING_DIAMETER,
+          borderRadius: '50%',
+          border: `${RING_STROKE}px solid var(--color-bone-glow)`,
+          transform: 'translate(-50%, -50%)',
+          animation: 'arfheRingFall 0.6s cubic-bezier(0.55,0,1,0.45) 0.6s forwards',
+          '@keyframes arfheRingFall': {
+            '0%': { transform: 'translate(-50%, -50%) translateY(0) rotate(0deg)', opacity: 1 },
+            '100%': { transform: 'translate(-50%, -50%) translateY(160px) rotate(60deg)', opacity: 0 },
+          },
+        }} />
+
+        {/* BTC coin drops in, holds, then fades */}
+        <Box sx={{
+          position: 'absolute',
+          left: `${RING_LEFT_PCT}%`,
+          top: `${RING_TOP_PCT}%`,
+          width: RING_DIAMETER,
+          height: RING_DIAMETER,
+          borderRadius: '50%',
+          bgcolor: '#F7931A',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#fff',
+          fontFamily: 'var(--font-mono)',
+          fontWeight: 700,
+          fontSize: RING_DIAMETER * 0.55,
+          opacity: 0,
+          animation: 'arfheCoinDrop 0.5s cubic-bezier(0.34,1.56,0.64,1) 1.3s both, arfheCoinFadeOut 0.25s ease-in 2.05s forwards',
+          '@keyframes arfheCoinDrop': {
+            '0%': { transform: 'translate(-50%, -50%) translateY(-140px) scale(0.6)', opacity: 0 },
+            '60%': { transform: 'translate(-50%, -50%) translateY(6px) scale(1.05)', opacity: 1 },
+            '80%': { transform: 'translate(-50%, -50%) translateY(-3px) scale(0.98)' },
+            '100%': { transform: 'translate(-50%, -50%) translateY(0) scale(1)', opacity: 1 },
+          },
+          '@keyframes arfheCoinFadeOut': {
+            from: { opacity: 1 },
+            to: { opacity: 0 },
+          },
+        }}>
+          ₿
+        </Box>
+
+        {/* ETH coin drops in and settles */}
+        <Box sx={{
+          position: 'absolute',
+          left: `${RING_LEFT_PCT}%`,
+          top: `${RING_TOP_PCT}%`,
+          width: RING_DIAMETER,
+          height: RING_DIAMETER,
+          borderRadius: '50%',
+          bgcolor: '#627EEA',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#fff',
+          fontFamily: 'var(--font-mono)',
+          fontWeight: 700,
+          fontSize: RING_DIAMETER * 0.55,
+          opacity: 0,
+          animation: 'arfheCoinDrop2 0.5s cubic-bezier(0.34,1.56,0.64,1) 2.15s both',
+          '@keyframes arfheCoinDrop2': {
+            '0%': { transform: 'translate(-50%, -50%) translateY(-140px) scale(0.6)', opacity: 0 },
+            '60%': { transform: 'translate(-50%, -50%) translateY(6px) scale(1.05)', opacity: 1 },
+            '80%': { transform: 'translate(-50%, -50%) translateY(-3px) scale(0.98)' },
+            '100%': { transform: 'translate(-50%, -50%) translateY(0) scale(1)', opacity: 1 },
+          },
+        }}>
+          Ξ
+        </Box>
+      </Box>
+
+      <Typography variant="h1" sx={{
+        color: 'var(--color-bone-glow)',
+        letterSpacing: 2,
+        mb: 2
       }}>
         ARFHE
       </Typography>
+
+      <Typography variant="caption" sx={{ color: 'var(--color-charcoal-vein)' }}>
+        INITIALIZING SYSTEM...
+      </Typography>
+
     </Box>
   );
 }

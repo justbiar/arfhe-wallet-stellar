@@ -20,8 +20,9 @@ describe('DAppRegistry', () => {
 
   // ─── DAPP_CATEGORIES ──────────────────────────────────────────
   describe('DAPP_CATEGORIES', () => {
-    it('en az 5 kategori tanımlıdır', () => {
-      expect(DAPP_CATEGORIES.length).toBeGreaterThanOrEqual(5);
+    it('arfdao ve fhe kategorileri tanımlıdır', () => {
+      expect(DAPP_CATEGORIES.length).toBe(2);
+      expect(DAPP_CATEGORIES.map(c => c.id).sort()).toEqual(['arfdao', 'fhe']);
     });
 
     it('her kategorinin id, label, labelKey, icon, color alanı vardır', () => {
@@ -68,22 +69,16 @@ describe('DAppRegistry', () => {
 
   // ─── getDAppsByCategory ────────────────────────────────────────
   describe('getDAppsByCategory', () => {
-    it('defi kategorisindeki dApp\'ları getirir', () => {
-      const defi = getDAppsByCategory('defi');
-      expect(defi.length).toBeGreaterThan(0);
-      defi.forEach(d => expect(d.category).toBe('defi'));
+    it('arfdao kategorisindeki dApp\'ları getirir', () => {
+      const arfdao = getDAppsByCategory('arfdao');
+      expect(arfdao.length).toBeGreaterThan(0);
+      arfdao.forEach(d => expect(d.category).toBe('arfdao'));
     });
 
     it('fhe kategorisindeki dApp\'ları getirir', () => {
       const fhe = getDAppsByCategory('fhe');
       expect(fhe.length).toBeGreaterThan(0);
       fhe.forEach(d => expect(d.category).toBe('fhe'));
-    });
-
-    it('dex kategorisindeki dApp\'ları getirir', () => {
-      const dex = getDAppsByCategory('dex');
-      expect(dex.length).toBeGreaterThan(0);
-      dex.forEach(d => expect(d.category).toBe('dex'));
     });
 
     it('var olmayan kategori boş dizi döner', () => {
@@ -100,38 +95,38 @@ describe('DAppRegistry', () => {
       featured.forEach(d => expect(d.featured).toBe(true));
     });
 
-    it('Uniswap featured listesindedir', () => {
+    it('Fhenix featured listesindedir', () => {
       const featured = getFeaturedDApps();
-      const uniswap = featured.find(d => d.id === 'uniswap');
-      expect(uniswap).toBeDefined();
+      const fhenix = featured.find(d => d.id === 'fhenix');
+      expect(fhenix).toBeDefined();
     });
   });
 
   // ─── searchDApps ───────────────────────────────────────────────
   describe('searchDApps', () => {
     it('isimle arama yapar', () => {
-      const results = searchDApps('Uniswap');
+      const results = searchDApps('Fhenix');
       expect(results.length).toBeGreaterThan(0);
-      expect(results[0].name).toBe('Uniswap');
+      expect(results[0].name).toBe('Fhenix');
     });
 
     it('açıklama ile arama yapar', () => {
-      const results = searchDApps('lending');
+      const results = searchDApps('confidential');
       expect(results.length).toBeGreaterThan(0);
     });
 
     it('tag ile arama yapar', () => {
-      const results = searchDApps('swap');
+      const results = searchDApps('DeFi');
       expect(results.length).toBeGreaterThan(0);
     });
 
     it('kategori ile arama yapar', () => {
-      const results = searchDApps('bridge');
+      const results = searchDApps('arfdao');
       expect(results.length).toBeGreaterThan(0);
     });
 
     it('büyük/küçük harf duyarsız arama yapar', () => {
-      const results = searchDApps('AAVE');
+      const results = searchDApps('SUNERGY');
       expect(results.length).toBeGreaterThan(0);
     });
 
@@ -148,16 +143,16 @@ describe('DAppRegistry', () => {
 
   // ─── getDAppById ───────────────────────────────────────────────
   describe('getDAppById', () => {
-    it('uniswap ID ile dApp bulur', () => {
-      const dapp = getDAppById('uniswap');
+    it('fhenix ID ile dApp bulur', () => {
+      const dapp = getDAppById('fhenix');
       expect(dapp).toBeDefined();
-      expect(dapp!.name).toBe('Uniswap');
+      expect(dapp!.name).toBe('Fhenix');
     });
 
-    it('aave-v3 ID ile dApp bulur', () => {
-      const dapp = getDAppById('aave-v3');
+    it('a2saga ID ile dApp bulur', () => {
+      const dapp = getDAppById('a2saga');
       expect(dapp).toBeDefined();
-      expect(dapp!.name).toBe('Aave V3');
+      expect(dapp!.name).toBe('A2 Saga');
     });
 
     it('olmayan ID undefined döner', () => {
@@ -168,35 +163,16 @@ describe('DAppRegistry', () => {
 
   // ─── getDAppsForChain ──────────────────────────────────────────
   describe('getDAppsForChain', () => {
-    it('Ethereum Mainnet (chainId=1) dApp\'larını getirir', () => {
-      const results = getDAppsForChain(1);
-      expect(results.length).toBeGreaterThan(0);
-      results.forEach(d => {
-        expect(d.chains.length === 0 || d.chains.includes(1)).toBe(true);
-      });
-    });
-
-    it('Arbitrum (chainId=42161) dApp\'larını getirir', () => {
-      const results = getDAppsForChain(42161);
-      expect(results.length).toBeGreaterThan(0);
-    });
-
-    it('Base (chainId=8453) dApp\'larını getirir', () => {
-      const results = getDAppsForChain(8453);
-      expect(results.length).toBeGreaterThan(0);
-    });
-
-    it('Fhenix Sepolia (chainId=8008135) dApp\'larını getirir', () => {
+    it('Fhenix Helium (chainId=8008135) dApp\'larını getirir', () => {
       const results = getDAppsForChain(8008135);
-      // Fhenix FHE dApp'lar bu chain'de olmalı
       expect(results.length).toBeGreaterThan(0);
     });
 
     it('chains boş olan dApp\'lar her zincirde görünür', () => {
-      // Zama'nın chains: [] olduğu için tüm zincirlerde gelmeli
+      // Çoğu ArfDAO projesinin chains: [] olduğu için tüm zincirlerde gelmeli
       const results = getDAppsForChain(999999);
-      const zama = results.find(d => d.id === 'zama');
-      expect(zama).toBeDefined();
+      const veriarfy = results.find(d => d.id === 'veriarfy');
+      expect(veriarfy).toBeDefined();
     });
   });
 });

@@ -20,6 +20,7 @@
     "@fhenixprotocol/contracts": "^0.3.1",
     "@mui/icons-material": "^7.3.1",
     "@mui/material": "^7.3.1",
+    "@mui/system": "^9.3.0",
     "@mui/x-charts": "^8.10.0",
     "@simplewebauthn/browser": "^13.2.2",
     "@unstoppabledomains/resolution": "^9.3.3",
@@ -44,6 +45,7 @@
     "react-router": "^7.13.1",
     "react-toastify": "^11.0.5",
     "recharts": "^3.1.2",
+    "tweetnacl": "^1.0.3",
     "vite-plugin-top-level-await": "^1.6.0",
     "vite-plugin-wasm": "^3.5.0",
     "web-bip39": "git+https://github.com/hujiulong/web-bip39.git"

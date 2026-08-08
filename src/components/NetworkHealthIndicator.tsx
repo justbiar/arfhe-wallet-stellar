@@ -193,11 +193,6 @@ function NetworkHealthIndicator() {
                             },
                         }}
                     />
-                    {health && (
-                        <Typography variant="caption" sx={{ fontSize: "0.6rem", color: "text.secondary", fontWeight: 600 }}>
-                            {health.gasPrice !== "—" ? `${health.gasPrice} Gwei` : "—"}
-                        </Typography>
-                    )}
                 </Box>
             </Tooltip>
 

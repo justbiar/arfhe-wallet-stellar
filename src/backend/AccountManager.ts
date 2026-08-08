@@ -160,8 +160,8 @@ export default class AccountManager {
     }
   }
 
-  CreateAccount(): number {
-    let account = Account.Random(this.CreateRandomAccountName());
+  CreateAccount(name?: string): number {
+    let account = Account.Random(name?.trim() || this.CreateRandomAccountName());
     let index = this.AddAccount(account);
 
     if (this.active == -1 || this.active != index) {

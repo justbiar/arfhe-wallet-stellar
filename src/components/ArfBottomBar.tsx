@@ -61,32 +61,32 @@ function ArfBottomBar() {
       case '/home': return 0;
       case '/explore': return 1;
       case '/history': return 3;
-      case '/GraphExplorer': return 4;
+      case '/agent': return 4;
       default: return 0;
     }
   };
 
   return (
     <Box sx={{
+      width: '100%',
+      maxWidth: '400px',
       position: 'fixed',
       bottom: 12,
-      left: 0,
-      right: 0,
+      left: '50%',
+      transform: 'translateX(-50%)',
       display: 'flex',
       justifyContent: 'center',
       zIndex: 1000,
-      pointerEvents: 'none' // Allow clicking through empty space
     }}>
       <Paper
         elevation={4}
         sx={{
-          borderRadius: '24px',
+          borderRadius: '0px',
           overflow: 'hidden',
           pointerEvents: 'auto', // Re-enable clicks
-          backgroundColor: theme.palette.mode === 'dark' ? 'rgba(30, 41, 59, 0.85)' : 'rgba(255, 255, 255, 0.85)',
-          backdropFilter: 'blur(16px)',
-          border: '1px solid',
-          borderColor: theme.palette.mode === 'dark' ? 'rgba(96, 165, 250, 0.06)' : 'rgba(37, 99, 235, 0.06)',
+          backgroundColor: 'background.paper',
+          borderTop: '1px solid',
+          borderColor: 'divider',
           display: 'flex',
           alignItems: 'center',
           padding: '0 8px'
@@ -102,7 +102,16 @@ function ArfBottomBar() {
             backgroundColor: 'transparent',
             height: 52,
             minWidth: 300,
-            '& .MuiBottomNavigationAction-root': { minWidth: 'auto', padding: '4px 0' },
+            '& .MuiBottomNavigationAction-root': { 
+              minWidth: 'auto', 
+              padding: '4px 0',
+              color: 'text.primary',
+              opacity: 0.5,
+            },
+            '& .Mui-selected': {
+              color: 'text.primary !important',
+              opacity: 1,
+            },
             '& .MuiBottomNavigationAction-label': { fontSize: '0.65rem' },
           }}
         >
@@ -125,11 +134,12 @@ function ArfBottomBar() {
               sx={{
                 width: 44,
                 height: 44,
-                boxShadow: '0 0 20px rgba(37, 99, 235, 0.4)',
-                background: 'linear-gradient(135deg, #2563eb 0%, #1e40af 100%)',
+                boxShadow: 'none',
+                // Removed transparent background to let the vibrant primary color shine through
+                color: 'primary.contrastText',
                 '&:hover': {
                   transform: 'scale(1.05)',
-                  boxShadow: '0 0 30px rgba(37, 99, 235, 0.6)',
+                  boxShadow: 'none',
                 },
               }}>
               <Send sx={{ fontSize: 22 }} />
@@ -142,9 +152,9 @@ function ArfBottomBar() {
             onClick={() => navigate('history')}
           />
           <BottomNavigationAction
-            label="Graph"
+            label="Agent"
             icon={<Hub sx={{ fontSize: 22 }} />}
-            onClick={() => navigate('GraphExplorer')}
+            onClick={() => navigate('agent')}
           />
         </BottomNavigation>
       </Paper>

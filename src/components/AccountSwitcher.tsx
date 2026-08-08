@@ -170,10 +170,13 @@ function AccountSwitcher() {
           cursor: "pointer",
           px: 1.5,
           py: 0.75,
-          borderRadius: 3,
-          transition: "all 0.2s ease",
+          borderRadius: "0px",
+          border: "1px solid",
+          borderColor: "divider",
+          bgcolor: "transparent",
+          transition: "none",
           "&:hover": {
-            bgcolor: "rgba(37, 99, 235, 0.06)",
+            borderColor: "text.primary",
           },
           userSelect: "none",
         }}
@@ -183,12 +186,14 @@ function AccountSwitcher() {
           sx={{
             width: 28,
             height: 28,
-            background: addressToGradient(address),
+            background: "transparent",
             fontSize: "0.75rem",
+            fontFamily: "var(--font-mono)",
             fontWeight: 800,
-            color: "#fff",
-            border: "2px solid",
+            color: "text.primary",
+            border: "1px solid",
             borderColor: "divider",
+            borderRadius: "0px",
           }}
         >
           {accountName.charAt(0).toUpperCase()}
@@ -245,14 +250,15 @@ function AccountSwitcher() {
         slotProps={{
           paper: {
             sx: {
-              borderRadius: 3,
+              borderRadius: "0px",
               mt: 1,
               minWidth: 260,
               maxWidth: 320,
               maxHeight: 400,
-              boxShadow: "0 12px 40px rgba(0,0,0,0.15)",
+              boxShadow: "none",
               border: "1px solid",
               borderColor: "divider",
+              bgcolor: "background.paper",
             },
           },
         }}
@@ -282,8 +288,10 @@ function AccountSwitcher() {
                 px: 2,
                 borderRadius: 0,
                 "&.Mui-selected": {
-                  bgcolor: "rgba(37, 99, 235, 0.06)",
-                  "&:hover": { bgcolor: "rgba(37, 99, 235, 0.1)" },
+                  bgcolor: "transparent",
+                  borderLeft: "2px solid",
+                  borderLeftColor: "text.primary",
+                  "&:hover": { bgcolor: "action.hover" },
                 },
               }}
             >
@@ -292,12 +300,14 @@ function AccountSwitcher() {
                   sx={{
                     width: 32,
                     height: 32,
-                    background: addressToGradient(accAddr),
+                    background: "transparent",
                     fontSize: "0.8rem",
+                    fontFamily: "var(--font-mono)",
                     fontWeight: 800,
-                    color: "#fff",
-                    border: isSelected ? "2px solid" : "none",
-                    borderColor: "primary.main",
+                  color: "text.primary",
+                  border: "1px solid",
+                  borderColor: isSelected ? "text.primary" : "divider",
+                  borderRadius: "0px",
                   }}
                 >
                   {acc.GetName().charAt(0).toUpperCase()}

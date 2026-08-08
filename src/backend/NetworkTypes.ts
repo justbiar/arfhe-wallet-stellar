@@ -17,6 +17,7 @@ export enum NetworkId {
     Avalanche = 43114,
     Avalanche_Fuji = 43113,
     Linea = 59144,
+    Fhenix_Helium = 8008135,
 }
 
 export type TokenBalance = {
@@ -73,6 +74,7 @@ export const FHE_NETWORK_IDS = new Set<NetworkId>([
     NetworkId.Ethereum_Sepolia,
     NetworkId.Arbitrum_Sepolia,
     NetworkId.Base_Sepolia,
+    NetworkId.Fhenix_Helium,
 ]);
 
 /** Check whether a given network supports FHE operations */
@@ -87,6 +89,7 @@ export const TESTNET_IDS = new Set<NetworkId>([
     NetworkId.Base_Sepolia,
     NetworkId.Monad_Testnet,
     NetworkId.Avalanche_Fuji,
+    NetworkId.Fhenix_Helium,
 ]);
 
 /** Check whether a given network is a testnet */

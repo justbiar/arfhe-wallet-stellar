@@ -15,7 +15,7 @@ const Explore = React.lazy(() => import("./pages/Explore"));
 const History = React.lazy(() => import("./pages/History"));
 const Privacy = React.lazy(() => import("./pages/Privacy"));
 const Revoke = React.lazy(() => import("./pages/Revoke"));
-const GraphExplorer = React.lazy(() => import("./pages/GraphExplorer"));
+const Agent = React.lazy(() => import("./pages/Agent"));
 const Settings = React.lazy(() => import("./pages/Settings"));
 const SettingsSecurity = React.lazy(() => import("./pages/SettingsSecurity"));
 const TokenDetail = React.lazy(() => import("./pages/TokenDetail"));
@@ -44,7 +44,7 @@ function AppRoutes() {
           <Route path="history" element={<FadePage><History /></FadePage>} />
           <Route path="privacy" element={<FadePage><Privacy /></FadePage>} />
           <Route path="revoke" element={<FadePage><Revoke /></FadePage>} />
-          <Route path="graphexplorer" element={<FadePage><GraphExplorer /></FadePage>} />
+          <Route path="agent" element={<FadePage><Agent /></FadePage>} />
           <Route path="settings" element={<FadePage><Settings /></FadePage>} />
           <Route path="settings/security" element={<FadePage><SettingsSecurity /></FadePage>} />
           <Route path="token/:address" element={<FadePage><TokenDetail /></FadePage>} />

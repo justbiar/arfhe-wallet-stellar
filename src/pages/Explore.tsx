@@ -19,15 +19,14 @@ import {
 } from '@mui/material';
 import {
     Search, OpenInNew, Explore as ExploreIcon, Shield,
-    Star, TrendingUp, SwapHoriz, Image, CompareArrows,
-    Build, People, AccountBalance, Close, QrCode2,
-    Link as LinkIcon, WifiTethering, ContentCopy, Verified, SportsEsports
+    Star, Close,
+    Link as LinkIcon, WifiTethering, Verified, Groups,
 } from '@mui/icons-material';
 import { useTranslation } from 'react-i18next';
 import { WalletContext } from '../AppContext';
 import {
     DAPP_REGISTRY, DAPP_CATEGORIES, DApp, DAppCategory,
-    getFeaturedDApps, searchDApps, getDAppsByCategory, getDAppsForChain
+    getFeaturedDApps, searchDApps, getDAppsByCategory, letterAvatarIcon,
 } from '../backend/DAppRegistry';
 import { openDApp } from '../backend/DAppConnectionService';
 import type { WCSessionInfo, ImageErrorEvent } from '../types/index';
@@ -35,14 +34,8 @@ import type { WCSessionInfo, ImageErrorEvent } from '../types/index';
 // ─── Category Icon Map ──────────────────────────────────────────────
 
 const CATEGORY_ICONS: Record<DAppCategory, React.ReactNode> = {
-    defi: <AccountBalance />,
-    dex: <SwapHoriz />,
+    arfdao: <Groups />,
     fhe: <Shield />,
-    nft: <Image />,
-    bridge: <CompareArrows />,
-    tools: <Build />,
-    social: <People />,
-    game: <SportsEsports />,
 };
 
 // ─── Main Component ─────────────────────────────────────────────────
@@ -94,8 +87,11 @@ const Explore = () => {
     // Handlers
     const handleDAppClick = (dApp: DApp) => {
         openDApp(dApp);
-        // Automatically open WalletConnect dialog to make connection easier
-        setWcDialogOpen(true);
+        // Informational project pages (e.g. ArfDAO showcase links) don't need a wallet
+        // connection — only prompt WalletConnect for dApps meant to be connected to.
+        if (!dApp.infoOnly) {
+            setWcDialogOpen(true);
+        }
     };
 
     const handleWcConnect = async () => {
@@ -130,32 +126,26 @@ const Explore = () => {
             <Container maxWidth="lg" sx={{ py: 2 }}>
 
                 {/* ── Hero Header ── */}
-                <Box sx={{ textAlign: 'center', mb: 3 }}>
+                <Box sx={{ mb: 4, borderBottom: '1px solid', borderColor: 'divider', pb: 2 }}>
                     <Typography
                         variant="h3"
-                        fontWeight={900}
                         sx={{
-                            mb: 1,
-                            background: `linear-gradient(135deg, ${theme.palette.primary.main}, ${theme.palette.text.secondary}, ${theme.palette.primary.light})`,
-                            backgroundSize: '200% auto',
-                            WebkitBackgroundClip: 'text',
-                            WebkitTextFillColor: 'transparent',
-                            animation: 'shimmer 3s linear infinite',
-                            '@keyframes shimmer': {
-                                '0%': { backgroundPosition: '0% center' },
-                                '100%': { backgroundPosition: '200% center' },
-                            },
+                            fontFamily: 'var(--font-mono)',
+                            color: 'text.primary',
+                            textTransform: 'uppercase',
+                            letterSpacing: 2,
+                            mb: 1
                         }}
                     >
                         {t('explore.title')}
                     </Typography>
-                    <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 500, mx: 'auto' }}>
+                    <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                         {t('explore.subtitle')}
                     </Typography>
                 </Box>
 
                 {/* ── Search + WalletConnect Button ── */}
-                <Box sx={{ display: 'flex', gap: 1.5, mb: 2.5, maxWidth: 700, mx: 'auto' }}>
+                <Box sx={{ display: 'flex', gap: 1, mb: 3 }}>
                     <TextField
                         fullWidth
                         placeholder={t('explore.searchPlaceholder')}
@@ -164,16 +154,21 @@ const Explore = () => {
                         InputProps={{
                             startAdornment: (
                                 <InputAdornment position="start">
-                                    <Search color="action" />
+                                    <Search sx={{ color: 'text.secondary' }} />
                                 </InputAdornment>
                             ),
                         }}
                         sx={{
                             '& .MuiOutlinedInput-root': {
-                                borderRadius: 4,
-                                bgcolor: alpha(theme.palette.background.paper, 0.8),
-                                backdropFilter: 'blur(10px)',
-                                '&:hover': { bgcolor: alpha(theme.palette.background.paper, 0.95) },
+                                borderRadius: '0px',
+                                bgcolor: 'transparent',
+                                color: 'text.primary',
+                                '& fieldset': {
+                                    borderColor: 'divider',
+                                },
+                                '&:hover fieldset': {
+                                    borderColor: 'text.primary',
+                                },
                             }
                         }}
                     />
@@ -184,16 +179,15 @@ const Explore = () => {
                                 aria-label={t('explore.walletConnect')}
                                 sx={{
                                     width: 56, height: 56,
-                                    borderRadius: 4,
-                                    bgcolor: alpha(theme.palette.primary.main, 0.1),
-                                    border: '1px solid',
-                                    borderColor: alpha(theme.palette.primary.main, 0.2),
+                                    borderRadius: '0px',
+                                    border: '1px solid', borderColor: 'divider',
+                                    color: 'text.primary',
                                     '&:hover': {
-                                        bgcolor: alpha(theme.palette.primary.main, 0.2),
+                                        borderColor: 'text.primary',
                                     }
                                 }}
                             >
-                                <WifiTethering color="primary" />
+                                <WifiTethering />
                             </IconButton>
                         </Badge>
                     </Tooltip>
@@ -203,33 +197,37 @@ const Explore = () => {
                 <Box sx={{
                     display: 'flex',
                     gap: 1,
-                    mb: 2.5,
+                    mb: 3,
                     overflowX: 'auto',
                     pb: 1,
-                    justifyContent: 'center',
-                    flexWrap: 'wrap',
                     '&::-webkit-scrollbar': { display: 'none' },
                 }}>
                     <Chip
                         label={t('explore.all')}
                         variant={activeCategory === 'all' ? 'filled' : 'outlined'}
-                        color={activeCategory === 'all' ? 'primary' : 'default'}
                         onClick={() => { setActiveCategory('all'); setSearchQuery(''); }}
-                        sx={{ fontWeight: 700, borderRadius: 3, px: 1 }}
+                        sx={{
+                            borderRadius: '0px', px: 1,
+                            fontFamily: 'var(--font-mono)', textTransform: 'uppercase',
+                            bgcolor: activeCategory === 'all' ? 'text.primary' : 'transparent',
+                            color: activeCategory === 'all' ? 'background.paper' : 'text.secondary',
+                            borderColor: 'divider',
+                        }}
                     />
                     {DAPP_CATEGORIES.map(cat => (
                         <Chip
                             key={cat.id}
-                            icon={CATEGORY_ICONS[cat.id] as React.ReactElement}
+                            icon={React.cloneElement(CATEGORY_ICONS[cat.id] as React.ReactElement<{ sx?: object }>, { sx: { color: 'inherit !important' } })}
                             label={t(cat.labelKey)}
                             variant={activeCategory === cat.id ? 'filled' : 'outlined'}
-                            color={activeCategory === cat.id ? 'primary' : 'default'}
                             onClick={() => { setActiveCategory(cat.id); setSearchQuery(''); }}
                             sx={{
-                                fontWeight: 600,
-                                borderRadius: 3,
-                                px: 0.5,
-                                '& .MuiChip-icon': { fontSize: 18 },
+                                borderRadius: '0px', px: 0.5,
+                                fontFamily: 'var(--font-mono)', textTransform: 'uppercase',
+                                bgcolor: activeCategory === cat.id ? 'text.primary' : 'transparent',
+                                color: activeCategory === cat.id ? 'background.paper' : 'text.secondary',
+                                borderColor: 'divider',
+                                '& .MuiChip-icon': { fontSize: 16 },
                             }}
                         />
                     ))}
@@ -422,7 +420,6 @@ const Explore = () => {
 // ─── Featured Card ──────────────────────────────────────────────────
 
 function FeaturedCard({ dApp, onClick }: { dApp: DApp; onClick: (d: DApp) => void }) {
-    const theme = useTheme();
     const { t } = useTranslation();
     const catInfo = DAPP_CATEGORIES.find(c => c.id === dApp.category);
 
@@ -433,19 +430,14 @@ function FeaturedCard({ dApp, onClick }: { dApp: DApp; onClick: (d: DApp) => voi
             sx={{
                 minWidth: 260,
                 maxWidth: 300,
-                p: 3,
-                borderRadius: 4,
+                p: 2,
+                borderRadius: '0px',
                 cursor: 'pointer',
-                bgcolor: alpha(theme.palette.background.paper, 0.8),
-                backdropFilter: 'blur(20px)',
-                border: '1px solid',
-                borderColor: alpha(catInfo?.color || theme.palette.primary.main, 0.2),
-                background: `linear-gradient(135deg, ${alpha(catInfo?.color || '#2563eb', 0.05)} 0%, ${alpha(theme.palette.background.paper, 0.9)} 100%)`,
-                transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                bgcolor: 'transparent',
+                border: '1px solid', borderColor: 'divider',
+                transition: 'none',
                 '&:hover': {
-                    transform: 'translateY(-4px)',
-                    boxShadow: `0 12px 24px -8px ${alpha(catInfo?.color || '#2563eb', 0.25)}`,
-                    borderColor: alpha(catInfo?.color || theme.palette.primary.main, 0.4),
+                    borderColor: 'text.primary',
                 },
                 flexShrink: 0,
             }}
@@ -455,42 +447,39 @@ function FeaturedCard({ dApp, onClick }: { dApp: DApp; onClick: (d: DApp) => voi
                     component="img"
                     src={dApp.icon}
                     alt={dApp.name}
-                    onError={(e: ImageErrorEvent) => { (e.target as HTMLImageElement).src = 'https://via.placeholder.com/48?text=' + dApp.name[0]; }}
+                    onError={(e: ImageErrorEvent) => { (e.target as HTMLImageElement).src = letterAvatarIcon(dApp.name[0]); }}
                     sx={{
                         width: 48, height: 48,
-                        borderRadius: 3,
-                        boxShadow: `0 4px 12px ${alpha(catInfo?.color || '#000', 0.2)}`,
+                        borderRadius: '0px',
+                        objectFit: 'cover',
+                        border: '1px solid',
+                        borderColor: 'divider',
                     }}
                 />
                 <Box>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        <Typography fontWeight={800} fontSize={16}>
+                        <Typography sx={{ fontFamily: 'var(--font-mono)', color: 'text.primary', textTransform: 'uppercase' }}>
                             {dApp.name}
                         </Typography>
-                        <Verified sx={{ fontSize: 14, color: 'primary.main' }} />
+                        <Verified sx={{ fontSize: 14, color: 'text.secondary' }} />
                     </Box>
                     <Chip
                         label={t(catInfo?.labelKey || 'explore.catTools')}
                         size="small"
                         sx={{
-                            height: 20, fontSize: 10, fontWeight: 700,
-                            bgcolor: alpha(catInfo?.color || '#666', 0.1),
-                            color: catInfo?.color,
+                            height: 20, fontSize: 10, fontFamily: 'var(--font-mono)', textTransform: 'uppercase',
+                            bgcolor: 'transparent', color: 'text.secondary', border: '1px solid', borderColor: 'divider', borderRadius: '0px'
                         }}
                     />
                 </Box>
             </Box>
-            <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.5 }}>
+            <Typography variant="body2" sx={{ color: 'text.secondary', mb: 2, minHeight: 40 }}>
                 {dApp.description}
             </Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', mt: 2 }}>
-                <Chip
-                    icon={<OpenInNew sx={{ fontSize: '14px !important' }} />}
-                    label={t('explore.open')}
-                    size="small"
-                    variant="outlined"
-                    sx={{ fontWeight: 600, borderRadius: 2, fontSize: 11 }}
-                />
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                <Typography variant="caption" sx={{ fontFamily: 'var(--font-mono)', color: 'text.primary', textTransform: 'uppercase' }}>
+                    [ {t('explore.open')} ]
+                </Typography>
             </Box>
         </Paper>
     );
@@ -499,7 +488,6 @@ function FeaturedCard({ dApp, onClick }: { dApp: DApp; onClick: (d: DApp) => voi
 // ─── Standard dApp Card ─────────────────────────────────────────────
 
 function DAppCard({ dApp, onClick }: { dApp: DApp; onClick: (d: DApp) => void }) {
-    const theme = useTheme();
     const { t } = useTranslation();
     const catInfo = DAPP_CATEGORIES.find(c => c.id === dApp.category);
 
@@ -508,19 +496,14 @@ function DAppCard({ dApp, onClick }: { dApp: DApp; onClick: (d: DApp) => void })
             elevation={0}
             onClick={() => onClick(dApp)}
             sx={{
-                p: 2.5,
-                borderRadius: 3,
+                p: 2,
+                borderRadius: '0px',
                 cursor: 'pointer',
-                bgcolor: alpha(theme.palette.background.paper, 0.7),
-                backdropFilter: 'blur(12px)',
-                border: '1px solid',
-                borderColor: alpha(theme.palette.divider, 0.5),
-                transition: 'all 0.2s ease',
+                bgcolor: 'transparent',
+                border: '1px solid', borderColor: 'divider',
+                transition: 'none',
                 '&:hover': {
-                    transform: 'translateY(-2px)',
-                    boxShadow: `0 8px 20px -4px ${alpha(theme.palette.common.black, 0.1)}`,
-                    borderColor: alpha(catInfo?.color || theme.palette.primary.main, 0.3),
-                    bgcolor: alpha(theme.palette.background.paper, 0.9),
+                    borderColor: 'text.primary',
                 },
             }}
         >
@@ -529,22 +512,24 @@ function DAppCard({ dApp, onClick }: { dApp: DApp; onClick: (d: DApp) => void })
                     component="img"
                     src={dApp.icon}
                     alt={dApp.name}
-                    onError={(e: ImageErrorEvent) => { (e.target as HTMLImageElement).src = 'https://via.placeholder.com/40?text=' + dApp.name[0]; }}
+                    onError={(e: ImageErrorEvent) => { (e.target as HTMLImageElement).src = letterAvatarIcon(dApp.name[0]); }}
                     sx={{
                         width: 44, height: 44,
-                        borderRadius: 2.5,
+                        borderRadius: '0px',
                         flexShrink: 0,
-                        boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                        objectFit: 'cover',
+                        border: '1px solid',
+                        borderColor: 'divider',
                     }}
                 />
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        <Typography fontWeight={700} fontSize={14} noWrap>
+                        <Typography sx={{ fontFamily: 'var(--font-mono)', color: 'text.primary', textTransform: 'uppercase', fontSize: 14 }} noWrap>
                             {dApp.name}
                         </Typography>
-                        {dApp.featured && <Star sx={{ fontSize: 13, color: '#f59e0b' }} />}
+                        {dApp.featured && <Star sx={{ fontSize: 13, color: 'text.primary' }} />}
                     </Box>
-                    <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
+                    <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }} noWrap>
                         {dApp.description}
                     </Typography>
                     <Box sx={{ display: 'flex', gap: 0.5, mt: 0.5 }}>
@@ -552,22 +537,20 @@ function DAppCard({ dApp, onClick }: { dApp: DApp; onClick: (d: DApp) => void })
                             label={t(catInfo?.labelKey || dApp.category)}
                             size="small"
                             sx={{
-                                height: 18, fontSize: 9, fontWeight: 700,
-                                bgcolor: alpha(catInfo?.color || '#666', 0.1),
-                                color: catInfo?.color,
+                                height: 18, fontSize: 9, fontFamily: 'var(--font-mono)', textTransform: 'uppercase',
+                                bgcolor: 'transparent', color: 'text.secondary', border: '1px solid', borderColor: 'divider', borderRadius: '0px'
                             }}
                         />
                         {dApp.chains.length > 0 && dApp.chains.length <= 3 && (
                             <Chip
                                 label={dApp.chains.map(c => getChainLabel(c)).join(', ')}
                                 size="small"
-                                variant="outlined"
-                                sx={{ height: 18, fontSize: 9, fontWeight: 600 }}
+                                sx={{ height: 18, fontSize: 9, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', bgcolor: 'transparent', color: 'text.secondary', border: '1px solid', borderColor: 'divider', borderRadius: '0px' }}
                             />
                         )}
                     </Box>
                 </Box>
-                <OpenInNew sx={{ fontSize: 16, color: 'text.disabled', flexShrink: 0 }} />
+                <OpenInNew sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
             </Box>
         </Paper>
     );

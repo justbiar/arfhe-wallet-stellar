@@ -138,17 +138,14 @@ function MatrixBalance({ value, isHidden, variant = "h3" }: {
       fontWeight="800"
       sx={{
         letterSpacing: -1,
-        background: isDark
-          ? 'linear-gradient(135deg, #eff6ff 0%, #bfdbfe 50%, #3b82f6 100%)'
-          : 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 50%, #1e3a8a 100%)',
-        WebkitBackgroundClip: 'text',
-        WebkitTextFillColor: 'transparent',
+        background: 'none',
+        WebkitBackgroundClip: 'unset',
+        WebkitTextFillColor: 'currentColor',
+        color: 'text.primary',
         fontFamily: isHidden ? 'monospace' : 'inherit',
         transition: 'all 0.3s ease',
         userSelect: 'none',
-        filter: isDark
-          ? 'drop-shadow(0 2px 8px rgba(37, 99, 235, 0.3))'
-          : 'drop-shadow(0 1px 4px rgba(37, 99, 235, 0.15))',
+        filter: 'none',
       }}
     >
       {displayed}
@@ -735,40 +732,6 @@ function Home() {
           onClose={() => handleNetworkClose(null)}
           PaperProps={{ sx: { borderRadius: 3, mt: 1, minWidth: 200, maxHeight: 400 } }}
         >
-          {/* ── Mainnets ── */}
-          <MenuItem disabled sx={{ opacity: 0.6, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, py: 0.5, minHeight: 0 }}>
-            Mainnets
-          </MenuItem>
-          <MenuItem onClick={() => handleNetworkClose(NetworkId.Ethereum_Mainnet)}>
-            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#10b981', mr: 1 }} /> Ethereum
-          </MenuItem>
-          <MenuItem onClick={() => handleNetworkClose(NetworkId.Arbitrum_One)}>
-            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#2563eb', mr: 1 }} /> Arbitrum One
-          </MenuItem>
-          <MenuItem onClick={() => handleNetworkClose(NetworkId.Base_Mainnet)}>
-            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#0052ff', mr: 1 }} /> Base
-          </MenuItem>
-          <MenuItem onClick={() => handleNetworkClose(NetworkId.Polygon)}>
-            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#8247e5', mr: 1 }} /> Polygon
-          </MenuItem>
-          <MenuItem onClick={() => handleNetworkClose(NetworkId.Optimism)}>
-            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#ff0420', mr: 1 }} /> Optimism
-          </MenuItem>
-          <MenuItem onClick={() => handleNetworkClose(NetworkId.Avalanche)}>
-            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#e84142', mr: 1 }} /> Avalanche
-          </MenuItem>
-          <MenuItem onClick={() => handleNetworkClose(NetworkId.BNB_Chain)}>
-            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#f0b90b', mr: 1 }} /> BNB Chain
-          </MenuItem>
-          <MenuItem onClick={() => handleNetworkClose(NetworkId.Linea)}>
-            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#61dfff', mr: 1 }} /> Linea
-          </MenuItem>
-          <MenuItem onClick={() => handleNetworkClose(NetworkId.Sei)}>
-            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#9b1c1c', mr: 1 }} /> Sei
-          </MenuItem>
-
-          <Divider sx={{ my: 0.5 }} />
-
           {/* ── Testnets ── */}
           <MenuItem disabled sx={{ opacity: 0.6, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, py: 0.5, minHeight: 0 }}>
             Testnets
@@ -776,17 +739,8 @@ function Home() {
           <MenuItem onClick={() => handleNetworkClose(NetworkId.Ethereum_Sepolia)}>
             <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#f59e0b', mr: 1 }} /> Eth Sepolia
           </MenuItem>
-          <MenuItem onClick={() => handleNetworkClose(NetworkId.Arbitrum_Sepolia)}>
-            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#60a5fa', mr: 1 }} /> Arb Sepolia
-          </MenuItem>
-          <MenuItem onClick={() => handleNetworkClose(NetworkId.Base_Sepolia)}>
-            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#93c5fd', mr: 1 }} /> Base Sepolia
-          </MenuItem>
-          <MenuItem onClick={() => handleNetworkClose(NetworkId.Avalanche_Fuji)}>
-            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#e84142', mr: 1 }} /> Avax Fuji
-          </MenuItem>
-          <MenuItem onClick={() => handleNetworkClose(NetworkId.Monad_Testnet)}>
-            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#836ef9', mr: 1 }} /> Monad Testnet
+          <MenuItem onClick={() => handleNetworkClose(NetworkId.Fhenix_Helium)}>
+            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#2563eb', mr: 1 }} /> Fhenix Helium
           </MenuItem>
 
           {/* Custom Networks */}
@@ -825,72 +779,19 @@ function Home() {
       <Box sx={{ p: 2, pt: 1 }}>
         <Paper elevation={0} sx={{
           p: 0,
-          borderRadius: 5,
-          background: theme.palette.mode === 'dark'
-            ? 'linear-gradient(145deg, #0b1120 0%, #2563eb 35%, #172554 65%, #1d4ed8 100%)'
-            : 'linear-gradient(145deg, #dbeafe 0%, #bfdbfe 35%, #93c5fd 65%, #60a5fa 100%)',
-          color: theme.palette.mode === 'dark' ? '#eff6ff' : '#2563eb',
-          boxShadow: theme.palette.mode === 'dark'
-            ? '0 20px 60px -15px rgba(11, 17, 32, 0.7), 0 0 0 1px rgba(96, 165, 250, 0.06), inset 0 1px 0 rgba(239, 246, 255, 0.04)'
-            : '0 16px 48px -12px rgba(37, 99, 235, 0.2), 0 0 0 1px rgba(37, 99, 235, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.4)',
+          borderRadius: '0px',
+          background: 'transparent',
+          color: 'text.primary',
+          boxShadow: 'none',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
           position: 'relative',
           overflow: 'hidden',
           mb: 1,
-          border: 'none',
+          border: '1px solid',
+          borderColor: 'divider',
         }}>
-          {/* ── Animated mesh gradient overlay ────────────────── */}
-          <Box sx={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: theme.palette.mode === 'dark'
-              ? `
-                radial-gradient(ellipse 120% 80% at 20% 10%, rgba(72, 101, 129, 0.25) 0%, transparent 50%),
-                radial-gradient(ellipse 80% 120% at 80% 90%, rgba(51, 78, 104, 0.2) 0%, transparent 50%),
-                radial-gradient(circle at 60% 40%, rgba(59, 130, 246, 0.1) 0%, transparent 40%)
-              `
-              : `
-                radial-gradient(ellipse 120% 80% at 20% 10%, rgba(255, 255, 255, 0.35) 0%, transparent 50%),
-                radial-gradient(ellipse 80% 120% at 80% 90%, rgba(239, 246, 255, 0.3) 0%, transparent 50%),
-                radial-gradient(circle at 60% 40%, rgba(255, 255, 255, 0.15) 0%, transparent 40%)
-              `,
-            pointerEvents: 'none',
-            animation: 'meshShift 8s ease-in-out infinite alternate',
-            '@keyframes meshShift': {
-              '0%': { opacity: 0.6 },
-              '50%': { opacity: 1 },
-              '100%': { opacity: 0.7 },
-            },
-          }} />
-
-          {/* ── Subtle noise texture ─────────────────────────── */}
-          <Box sx={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            opacity: 0.03,
-            backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E")`,
-            pointerEvents: 'none',
-          }} />
-
-          {/* ── Top accent line ──────────────────────────────── */}
-          <Box sx={{
-            position: 'absolute',
-            top: 0,
-            left: '15%',
-            right: '15%',
-            height: '1px',
-            background: theme.palette.mode === 'dark'
-              ? 'linear-gradient(90deg, transparent, rgba(96, 165, 250, 0.3), transparent)'
-              : 'linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent)',
-          }} />
 
           {/* ── Card content ─────────────────────────────────── */}
           <Box sx={{ position: 'relative', zIndex: 2, p: 2, pt: 1.5, pb: 1.5, width: '100%', textAlign: 'center' }}>
@@ -899,23 +800,17 @@ function Home() {
               <Box sx={{
                 width: 6,
                 height: 6,
-                borderRadius: '50%',
-                bgcolor: theme.palette.mode === 'dark' ? '#3b82f6' : '#1e3a8a',
-                boxShadow: theme.palette.mode === 'dark'
-                  ? '0 0 8px rgba(59, 130, 246, 0.5)'
-                  : '0 0 8px rgba(72, 101, 129, 0.4)',
-                animation: 'pulse 3s ease-in-out infinite',
-                '@keyframes pulse': {
-                  '0%, 100%': { opacity: 0.5, transform: 'scale(1)' },
-                  '50%': { opacity: 1, transform: 'scale(1.3)' },
-                },
+                borderRadius: '0px',
+                bgcolor: 'text.primary',
+                boxShadow: 'none',
               }} />
               <Typography variant="body2" sx={{
-                color: theme.palette.mode === 'dark' ? '#93c5fd' : '#1e40af',
+                color: 'text.primary',
                 fontWeight: 600,
                 letterSpacing: '0.08em',
                 textTransform: 'uppercase',
                 fontSize: '0.7rem',
+                opacity: 0.8,
               }}>
                 Total Balance
               </Typography>
@@ -934,11 +829,13 @@ function Home() {
                   onClick={() => setIsBalanceHidden(!isBalanceHidden)}
                   aria-label={isBalanceHidden ? t('home.showBalance') : t('home.hideBalance')}
                   sx={{
-                    color: theme.palette.mode === 'dark' ? '#3b82f6' : '#1e3a8a',
-                    transition: 'all 0.25s ease',
+                    color: 'text.primary',
+                    opacity: 0.8,
+                    transition: 'none',
+                    borderRadius: '0px',
                     '&:hover': {
-                      color: theme.palette.mode === 'dark' ? '#93c5fd' : '#1d4ed8',
-                      bgcolor: theme.palette.mode === 'dark' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(37, 99, 235, 0.08)',
+                      opacity: 1,
+                      bgcolor: 'action.hover',
                     },
                   }}
                 >
@@ -947,42 +844,29 @@ function Home() {
               </Tooltip>
             </Box>
 
-            {/* ── Separator line ─────────────────────────────── */}
-            <Box sx={{
-              mt: 1.5,
-              mb: 1.5,
-              mx: 'auto',
-              width: '60%',
-              height: '1px',
-              background: theme.palette.mode === 'dark'
-                ? 'linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.25), transparent)'
-                : 'linear-gradient(90deg, transparent, rgba(37, 99, 235, 0.12), transparent)',
-            }} />
-
             {/* Action Buttons */}
-            <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1, mt: 2 }}>
               <Button
                 variant="contained"
                 onClick={() => navigate('/portfolio')}
                 startIcon={<TrendingUp sx={{ fontSize: 14 }} />}
                 sx={{
-                  bgcolor: 'rgba(255, 255, 255, 0.12)',
-                  color: '#eff6ff',
-                  backdropFilter: 'blur(8px)',
+                  bgcolor: 'transparent',
+                  color: 'text.primary',
                   boxShadow: 'none',
-                  border: '1px solid rgba(255, 255, 255, 0.15)',
-                  borderRadius: 3,
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  borderRadius: '0px',
                   textTransform: 'none',
                   fontWeight: 600,
                   fontSize: '0.75rem',
                   px: 2,
                   py: 0.5,
-                  transition: 'all 0.25s ease',
+                  transition: 'none',
                   '&:hover': {
-                    bgcolor: 'rgba(255, 255, 255, 0.2)',
-                    borderColor: 'rgba(255, 255, 255, 0.25)',
-                    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.15)',
-                    transform: 'translateY(-1px)',
+                    bgcolor: 'action.hover',
+                    borderColor: 'text.primary',
+                    boxShadow: 'none',
                   },
                 }}
               >
@@ -993,23 +877,22 @@ function Home() {
                 onClick={() => navigate('/revoke')}
                 startIcon={<Shield sx={{ fontSize: 14 }} />}
                 sx={{
-                  bgcolor: 'rgba(255, 255, 255, 0.12)',
-                  color: '#eff6ff',
-                  backdropFilter: 'blur(8px)',
+                  bgcolor: 'transparent',
+                  color: 'text.primary',
                   boxShadow: 'none',
-                  border: '1px solid rgba(255, 255, 255, 0.15)',
-                  borderRadius: 3,
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  borderRadius: '0px',
                   textTransform: 'none',
                   fontWeight: 600,
                   fontSize: '0.75rem',
                   px: 2,
                   py: 0.5,
-                  transition: 'all 0.25s ease',
+                  transition: 'none',
                   '&:hover': {
-                    bgcolor: 'rgba(255, 255, 255, 0.2)',
-                    borderColor: 'rgba(255, 255, 255, 0.25)',
-                    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.15)',
-                    transform: 'translateY(-1px)',
+                    bgcolor: 'action.hover',
+                    borderColor: 'text.primary',
+                    boxShadow: 'none',
                   },
                 }}
               >
@@ -1017,18 +900,6 @@ function Home() {
               </Button>
             </Box>
           </Box>
-
-          {/* ── Bottom accent line ───────────────────────────── */}
-          <Box sx={{
-            position: 'absolute',
-            bottom: 0,
-            left: '25%',
-            right: '25%',
-            height: '1px',
-            background: theme.palette.mode === 'dark'
-              ? 'linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.15), transparent)'
-              : 'linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent)',
-          }} />
         </Paper>
       </Box>
 
@@ -1097,8 +968,8 @@ function Home() {
               mb: 1,
               minHeight: 32,
               flex: 1,
-              '& .MuiTabs-indicator': { backgroundColor: 'primary.main', height: 3, borderRadius: '3px 3px 0 0' },
-              '& .MuiTab-root': { minHeight: 32, textTransform: 'none', fontWeight: 700, fontSize: '0.85rem', color: 'text.secondary', '&.Mui-selected': { color: 'text.primary' } }
+              '& .MuiTabs-indicator': { backgroundColor: 'text.primary', height: 2, borderRadius: '0px' },
+              '& .MuiTab-root': { minHeight: 32, textTransform: 'none', fontWeight: 700, fontSize: '0.85rem', color: 'text.primary', opacity: 0.5, '&.Mui-selected': { color: 'text.primary', opacity: 1 } }
             }}
           >
             <Tab
@@ -1109,7 +980,7 @@ function Home() {
                     <Chip
                       label={tokens.filter((t) => !t.isSpam && !t.isHidden).length}
                       size="small"
-                      sx={{ height: 18, fontSize: '0.65rem', fontWeight: 800, bgcolor: 'action.hover', color: 'text.secondary' }}
+                      sx={{ height: 18, fontSize: '0.65rem', fontWeight: 800, bgcolor: 'transparent', border: '1px solid', borderColor: 'divider', color: 'text.primary', borderRadius: '0px' }}
                     />
                   )}
                 </Stack>
@@ -1219,15 +1090,17 @@ function Home() {
                   fontWeight: 600,
                   px: 2.5,
                   py: 0.5,
-                  borderRadius: 3,
+                  borderRadius: '0px',
                   fontSize: '0.75rem',
                   textTransform: 'none',
                   borderColor: 'divider',
-                  color: 'text.secondary',
+                  color: 'text.primary',
+                  opacity: 0.8,
                   '&:hover': {
-                    borderColor: 'primary.main',
-                    color: 'primary.main',
-                    bgcolor: theme.palette.mode === 'dark' ? 'rgba(96,165,250,0.04)' : 'rgba(37,99,235,0.03)',
+                    borderColor: 'text.primary',
+                    color: 'text.primary',
+                    opacity: 1,
+                    bgcolor: 'action.hover',
                   },
                 }}
               >

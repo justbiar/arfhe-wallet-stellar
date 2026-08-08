@@ -62,12 +62,13 @@ interface LoginProps {
 
 function CreateWallet({ accountManager, onDone }: WalletStepProps) {
   const { t } = useTranslation();
+  const [username, setUsername] = React.useState('');
   const [words, setWords] = React.useState<string[]>([]);
   const [isGenerated, setIsGenerated] = React.useState(false);
 
   const handleGenerate = () => {
-    if (!accountManager) return;
-    const index = accountManager.CreateAccount();
+    if (!accountManager || !username.trim()) return;
+    const index = accountManager.CreateAccount(username.trim());
     if (index < 0) return;
 
     const mnemonicWords = accountManager.accounts[index]?.GetWords();
@@ -87,13 +88,13 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
             {t('auth.writeDownWords')}
           </Typography>
 
-          <Paper elevation={0} variant="outlined" sx={{ p: 1.5, borderRadius: 3, bgcolor: 'background.default' }}>
+          <Paper elevation={0} variant="outlined" sx={{ p: 1.5, borderRadius: 0, bgcolor: 'background.default' }}>
             <Grid container spacing={1}>
               {words.map((word, index) => (
                 <Grid size={{ xs: 6, sm: 4 }} key={index}>
                   <Box sx={{
                     display: 'flex',
-                    borderRadius: 2,
+                    borderRadius: 0,
                     overflow: 'hidden',
                     bgcolor: 'background.paper',
                     boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
@@ -124,7 +125,7 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
             fullWidth
             onClick={onDone}
             size="large"
-            sx={{ mt: 3, borderRadius: 3, height: 44, fontSize: 15 }}
+            sx={{ mt: 3, borderRadius: 0, height: 44, fontSize: 15 }}
           >
             {t('auth.iSavedMyPhrase')}
           </Button>
@@ -134,13 +135,23 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
           <Typography variant="body1" sx={{ mb: 3, color: 'text.secondary' }}>
             {t('auth.generateDescription')}
           </Typography>
+          <TextField
+            fullWidth
+            label={t('auth.usernameLabel')}
+            placeholder={t('auth.usernamePlaceholder')}
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && username.trim() && handleGenerate()}
+            autoFocus
+            sx={{ mb: 2, textAlign: 'left' }}
+          />
           <Button
             variant="contained"
             fullWidth
             onClick={handleGenerate}
-            disabled={!accountManager}
+            disabled={!accountManager || !username.trim()}
             size="large"
-            sx={{ borderRadius: 3, height: 44 }}
+            sx={{ borderRadius: 0, height: 44 }}
           >
             {t('auth.generatePhrase')}
           </Button>
@@ -198,7 +209,7 @@ function ImportWallet({ accountManager, onDone }: WalletStepProps) {
         {t('auth.importDescription')}
       </Typography>
 
-      {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>{error}</Alert>}
+      {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 0 }}>{error}</Alert>}
 
       <TextField
         placeholder="apple banana cat dog..."
@@ -212,7 +223,7 @@ function ImportWallet({ accountManager, onDone }: WalletStepProps) {
         }}
         sx={{
           '& .MuiOutlinedInput-root': {
-            borderRadius: 3,
+            borderRadius: 0,
             bgcolor: 'background.default',
             fontFamily: 'monospace'
           }
@@ -225,7 +236,7 @@ function ImportWallet({ accountManager, onDone }: WalletStepProps) {
         onClick={handleImport}
         disabled={!accountManager || isScanning}
         size="large"
-        sx={{ mt: 3, borderRadius: 3, height: 44 }}
+        sx={{ mt: 3, borderRadius: 0, height: 44 }}
       >
         {isScanning ? t('auth.scanningAccounts') : t('auth.importWallet')}
       </Button>
@@ -297,7 +308,7 @@ function SetPasswordScreen({ storageManager, accountManager, onDone }: PasswordS
         </Typography>
       </Box>
 
-      {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>{error}</Alert>}
+      {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 0 }}>{error}</Alert>}
 
       <Stack spacing={2}>
         <TextField
@@ -315,7 +326,7 @@ function SetPasswordScreen({ storageManager, accountManager, onDone }: PasswordS
               </InputAdornment>
             ),
           }}
-          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3, bgcolor: 'background.paper' } }}
+          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0, bgcolor: 'background.paper' } }}
         />
 
         {/* Password Strength Meter */}
@@ -326,11 +337,11 @@ function SetPasswordScreen({ storageManager, accountManager, onDone }: PasswordS
               value={strength.score}
               sx={{
                 height: 6,
-                borderRadius: 3,
+                borderRadius: 0,
                 bgcolor: 'action.disabledBackground',
                 '& .MuiLinearProgress-bar': {
                   bgcolor: strength.color,
-                  borderRadius: 3,
+                  borderRadius: 0,
                   transition: 'transform 0.3s ease, background-color 0.3s ease',
                 },
               }}
@@ -348,7 +359,7 @@ function SetPasswordScreen({ storageManager, accountManager, onDone }: PasswordS
           value={confirmPassword}
           onChange={(e) => { setConfirmPassword(e.target.value); setError(null); }}
           onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
-          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3, bgcolor: 'background.paper' } }}
+          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 0, bgcolor: 'background.paper' } }}
         />
       </Stack>
 
@@ -358,7 +369,7 @@ function SetPasswordScreen({ storageManager, accountManager, onDone }: PasswordS
         onClick={handleSubmit}
         disabled={isLoading}
         size="large"
-        sx={{ mt: 3, borderRadius: 3, height: 44 }}
+        sx={{ mt: 3, borderRadius: 0, height: 44 }}
       >
         {isLoading ? <CircularProgress size={24} color="inherit" /> : t('auth.encryptAndContinue')}
       </Button>
@@ -455,7 +466,7 @@ function LoginIntoWallet({ storageManager, accountManager }: LoginProps) {
         {t('auth.welcomeBackDesc')}
       </Typography>
 
-      {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>{error}</Alert>}
+      {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 0 }}>{error}</Alert>}
 
       <TextField
         label={t('auth.password')}
@@ -478,7 +489,7 @@ function LoginIntoWallet({ storageManager, accountManager }: LoginProps) {
         }}
         sx={{
           '& .MuiOutlinedInput-root': {
-            borderRadius: 3,
+            borderRadius: 0,
             bgcolor: 'background.paper'
           }
         }}
@@ -490,7 +501,7 @@ function LoginIntoWallet({ storageManager, accountManager }: LoginProps) {
         onClick={handleSubmit}
         disabled={isLoading}
         size="large"
-        sx={{ mt: 3, borderRadius: 3, height: 44 }}
+        sx={{ mt: 3, borderRadius: 0, height: 44 }}
       >
         {isLoading ? <CircularProgress size={24} color="inherit" /> : t('auth.unlock')}
       </Button>
@@ -506,7 +517,7 @@ function LoginIntoWallet({ storageManager, accountManager }: LoginProps) {
           startIcon={<Fingerprint />}
           sx={{
             mt: 2,
-            borderRadius: 3,
+            borderRadius: 0,
             height: 44,
             borderColor: 'rgba(37, 99, 235, 0.25)',
             color: 'primary.main',
@@ -592,28 +603,33 @@ export default function Auth() {
       alignItems: 'center',
       justifyContent: 'center',
       bgcolor: 'background.default',
-      background: (theme) => theme.palette.mode === 'dark'
-        ? 'radial-gradient(circle at 50% 10%, #1e1e1e 0%, #121212 100%)'
-        : 'radial-gradient(circle at 50% 10%, #fff 0%, #f7f7f8 100%)',
       p: 2
     }}>
       <Container maxWidth="xs">
         <Paper elevation={0} sx={{
           p: 3,
-          borderRadius: 4,
-          bgcolor: (theme) => theme.palette.mode === 'dark' ? 'rgba(30, 30, 30, 0.9)' : 'rgba(255, 255, 255, 0.9)',
-          backdropFilter: 'blur(20px)',
+          borderRadius: 0,
+          bgcolor: 'background.default',
           border: 1, borderColor: 'divider',
-          boxShadow: (theme) => theme.palette.mode === 'dark' ? '0 20px 25px -5px rgba(0, 0, 0, 0.5)' : '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)'
+          boxShadow: 'none',
         }}>
           {/* Logo Area */}
           <Box sx={{ textAlign: 'center', mb: 3 }}>
-            <Typography variant="h5" fontWeight={800} letterSpacing={1} sx={{
-              background: 'linear-gradient(90deg, #dbeafe, #2563eb, #dbeafe)',
-              backgroundSize: '200% auto',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              animation: 'shine 3s linear infinite'
+            <Box
+              component="img"
+              src="/Arfhe-logo.png"
+              alt="Arfhe"
+              sx={{
+                width: 44,
+                height: 44,
+                mb: 1,
+                filter: (theme) => theme.palette.mode === 'dark' ? 'invert(1) brightness(1.05)' : 'none',
+              }}
+            />
+            <Typography variant="h5" fontWeight={800} letterSpacing={2} sx={{
+              fontFamily: 'var(--font-mono)',
+              color: 'text.primary',
+              textTransform: 'uppercase',
             }}>
               ARFHE WALLET
             </Typography>
@@ -702,7 +718,7 @@ export default function Auth() {
                 }}
                 startIcon={<Google />}
                 sx={{
-                  borderRadius: 3,
+                  borderRadius: 0,
                   height: 44,
                   bgcolor: '#2563eb',
                   color: 'white',
@@ -722,7 +738,7 @@ export default function Auth() {
                 variant="outlined"
                 size="large"
                 onClick={() => setStep(AuthStep.CREATE)}
-                sx={{ borderRadius: 3, height: 44, borderColor: 'divider', color: 'text.primary' }}
+                sx={{ borderRadius: 0, height: 44, borderColor: 'divider', color: 'text.primary' }}
               >
                 {t('auth.createWallet')}
               </Button>
@@ -730,7 +746,7 @@ export default function Auth() {
                 variant="outlined"
                 size="large"
                 onClick={() => setStep(AuthStep.IMPORT)}
-                sx={{ borderRadius: 3, height: 44, borderColor: 'divider', color: 'text.primary' }}
+                sx={{ borderRadius: 0, height: 44, borderColor: 'divider', color: 'text.primary' }}
               >
                 {t('auth.iHaveAWallet')}
               </Button>

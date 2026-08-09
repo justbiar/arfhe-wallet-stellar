@@ -1119,3 +1119,4 @@ Yeni bir FHE deploy'ından sonra kontrol et:
 > **Son Güncelleme**: 8 Şubat 2026
 > **Durum**: ✅ Tüm FHE sistemi çalışıyor, gerçek gizli transfer doğrulandı
 > **Test TX**: `0xfe88feb22de3da49061709f560c2b151893c25317d2a46a765b6fd590d924333`
+> Mustafa

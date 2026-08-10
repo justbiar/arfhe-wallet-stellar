@@ -37,7 +37,7 @@ export interface SimResult {
     warnings: string[];
     riskLevel: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
     /** Detected operation type for UI labeling */
-    operationType?: "transfer" | "transferFrom" | "approve" | "wrap" | "wrapETH" | "unwrap" | "transferEncrypted" | "unknown";
+    operationType?: "transfer" | "transferFrom" | "approve" | "wrap" | "wrapETH" | "unwrap" | "transferEncrypted" | "claimUnshielded" | "setOperator" | "unknown";
     /** True if destination is a smart contract (not EOA) */
     isContractInteraction?: boolean;
     /** True if destination address has never been interacted with before */
@@ -82,16 +82,23 @@ const TRUSTED_CONTRACTS: Set<string> = new Set([
     "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238",
 ]);
 
-// FHE function selectors — detect without decoding encrypted params
+// FHE function selectors — detect without decoding encrypted params.
+// These match the FHERC20 wrappers (fhenix-confidential-contracts) the wallet deploys.
 const FHE_SELECTORS: Record<string, { name: string; op: SimResult["operationType"] }> = {
-    // transferEncrypted(address,InEuint64) — keccak256 first 4 bytes
-    "0x7c231884": { name: "transferEncrypted", op: "transferEncrypted" },
-    // wrap(uint256)
-    "0xea598cb0": { name: "wrap", op: "wrap" },
-    // wrapETH()
-    "0xa3211896": { name: "wrapETH", op: "wrapETH" },
-    // unwrap(uint256)
-    "0xde0e9a3e": { name: "unwrap", op: "unwrap" },
+    // confidentialTransfer(address,(uint256,uint8,uint8,bytes))
+    "0xa794ee95": { name: "confidentialTransfer", op: "transferEncrypted" },
+    // shield(address,uint256) — ERC20 wrapper
+    "0x8f214a33": { name: "shield", op: "wrap" },
+    // shieldNative(address) — native wrapper
+    "0x759ded8c": { name: "shieldNative", op: "wrapETH" },
+    // shieldWrappedNative(address,uint256)
+    "0x49ea576e": { name: "shieldWrappedNative", op: "wrap" },
+    // unshield(address,address,uint64) — burns and opens a claim
+    "0x4ccac778": { name: "unshield", op: "unwrap" },
+    // claimUnshielded(bytes32,uint64,bytes) — settles the claim
+    "0xcdc75a80": { name: "claimUnshielded", op: "claimUnshielded" },
+    // setOperator(address,uint48) — delegates the whole confidential balance
+    "0xd4febb96": { name: "setOperator", op: "setOperator" },
 };
 
 // ERC20 standard function interface
@@ -397,15 +404,29 @@ export class TransactionSimulator {
                 break;
 
             case "wrap":
-                result.warnings.push("🛡️ Token Koruma (Wrap): Açık tokenlar şifreli tokanlara dönüştürülecek.");
+                result.warnings.push("🛡️ Kalkanlama (Shield): Açık tokenlar şifreli bakiyeye dönüştürülecek.");
                 break;
 
             case "wrapETH":
-                result.warnings.push("🛡️ ETH Koruma (WrapETH): Native ETH şifreli cETH'e dönüştürülecek.");
+                result.warnings.push("🛡️ ETH Kalkanlama: Native ETH şifreli bakiyeye dönüştürülecek.");
                 break;
 
             case "unwrap":
-                result.warnings.push("🔓 Token Çözme (Unwrap): Şifreli tokenlar açık tokanlara geri dönüştürülecek.");
+                result.warnings.push(
+                    "🔓 Kalkan Kaldırma (Unshield): Şifreli bakiye yakılacak ve bir talep (claim) açılacak. " +
+                    "Tokenları almak için ardından 'Claim' işlemini yapmanız gerekir."
+                );
+                break;
+
+            case "claimUnshielded":
+                result.warnings.push("✅ Talep Tahsili: Çözülen miktar kanıtla doğrulanıp tokenlar serbest bırakılacak.");
+                break;
+
+            case "setOperator":
+                result.warnings.push(
+                    "⚠️ Operatör Yetkisi: Bu adres, süre dolana kadar şifreli bakiyenizin TAMAMINI harcayabilir. " +
+                    "Yalnızca güvendiğiniz sözleşmelere ve kısa süreli verin."
+                );
                 break;
         }
     }

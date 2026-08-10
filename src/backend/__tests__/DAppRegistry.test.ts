@@ -163,9 +163,10 @@ describe('DAppRegistry', () => {
 
   // ─── getDAppsForChain ──────────────────────────────────────────
   describe('getDAppsForChain', () => {
-    it('Fhenix Helium (chainId=8008135) dApp\'larını getirir', () => {
-      const results = getDAppsForChain(8008135);
+    it('Sepolia (chainId=11155111) dApp\'larını getirir', () => {
+      const results = getDAppsForChain(11155111);
       expect(results.length).toBeGreaterThan(0);
+      expect(results.some(d => d.id === 'fhenix')).toBe(true);
     });
 
     it('chains boş olan dApp\'lar her zincirde görünür', () => {

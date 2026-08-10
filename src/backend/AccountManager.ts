@@ -353,7 +353,19 @@ export default class AccountManager {
     if (index < 0 || index >= this.accounts.length) {
       return false;
     }
+    const changed = this.active !== index;
     this.active = index;
+
+    // FHE permits, encrypted inputs and the SDK connection are all bound to one account.
+    // Correctness is already guarded (isReadyForAccount forces a reconnect), but leaving
+    // the previous account's client and permit alive in memory after a switch is exactly
+    // the state the wallet's lock policy exists to avoid — so tear it down here too.
+    if (changed) {
+      void import("./FheCofheService.js")
+        .then(({ default: FheCofheService }) => FheCofheService.getInstance().reset())
+        .catch(() => { /* FHE is optional; a switch must never fail because of it */ });
+    }
+
     this.notifyListeners();
     this.updateActive();
     return true;

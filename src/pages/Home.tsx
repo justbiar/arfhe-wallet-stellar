@@ -46,7 +46,7 @@ import { AppContext, WalletContext } from "../AppContext.js";
 import { ActiveAccountContext } from "../ActiveAccountProvider.js";
 import { useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
-import { NetworkId } from "../backend/NetworkTypes.js";
+import { NetworkId, isFheNetwork as isFheCapableNetwork } from "../backend/NetworkTypes.js";
 import { getAddress } from "ethers";
 import type { TypographyProps } from "@mui/material";
 import type { DisplayToken, BalanceMap, WrappedBalance, NFTDisplayItem } from "../types/index.js";
@@ -55,13 +55,14 @@ import { useToast } from "../components/ToastProvider.js";
 import { classifyError, NetworkError, NetworkErrorType, getErrorFallbackMessage } from "../backend/NetworkErrorHandler.js";
 import { getCoinGeckoBase } from "../backend/Network.js";
 import { usePersistedState } from "../hooks/usePersistedState.js";
+import { getHiddenTokenAddresses } from "../components/panels/shared.js";
 
 const KNOWN_LOGOS: Record<string, string> = {
   "ETH": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png",
   "WETH": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2/logo.png",
-  "cETH": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png",
+  "aeETH": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png",
   "USDC": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
-  "cUSDC": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
+  "aeUSDC": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png",
   "USDT": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png",
   "LINK": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0x514910771AF9Ca656af840dff83E8264EcF986CA/logo.png",
   "EURC": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0x1aBaEA1f7C830bD89Acc67eC4af516284b1bC33c/logo.png",
@@ -198,6 +199,14 @@ function Home() {
   const activeNetworkId = wallet_context?.networkProvider.getActiveNetworkId() ?? NetworkId.Ethereum_Mainnet;
   const activeNetwork = wallet_context?.networkProvider.getActiveNetwork();
 
+  /** Tokens actually rendered: the native unit plus anything with a balance. */
+  const visibleTokenCount = tokens.filter((tk) => {
+    if (tk.isSpam || tk.isHidden) return false;
+    if (tk.contractAddress === "ETH") return true;
+    const bal = balances[tk.contractAddress];
+    return !!bal && parseFloat(bal.tokenBalance) > 0;
+  }).length;
+
   const handleNetworkClick = (event: React.MouseEvent<HTMLElement>) => {
     setAnchorEl(event.currentTarget);
   };
@@ -246,7 +255,9 @@ function Home() {
 
     try {
 
-      // Initialize cofhejs (TRUE FHE) if on a FHE-enabled network
+      // Connect the CoFHE SDK if this network has a coprocessor behind it.
+      // Connecting is cheap and prompts for nothing — permits and FHE key loading are
+      // both deferred until the user actually decrypts or encrypts something.
       const isFheNetwork = activeNetworkId === NetworkId.Ethereum_Sepolia || activeNetworkId === NetworkId.Arbitrum_Sepolia || activeNetworkId === NetworkId.Base_Sepolia;
       if (isFheNetwork && active_context.activeAccount) {
         try {
@@ -260,7 +271,9 @@ function Home() {
             if (!privateKey) throw new Error("No private key available");
             const signer = new ethers.Wallet(privateKey, provider);
 
-            await instance.init(provider, signer);
+            // networkId must be passed, or isReadyForAccount above never matches and
+            // every render reconnects.
+            await instance.init(provider, signer, activeNetworkId);
           }
         } catch (e) {
         }
@@ -273,114 +286,68 @@ function Home() {
 
       // 2. Fetch Wrapped Token Balances (Only on Sepolia)
       const wrappedBalances: WrappedBalance[] = [];
-      const WRAPPED_USDC_ADDRESS = activeNetworkId === NetworkId.Arbitrum_Sepolia
-        ? (import.meta.env.VITE_ARB_WRAPPED_USDC_ADDRESS || "").toLowerCase()
-        : activeNetworkId === NetworkId.Base_Sepolia
-          ? (import.meta.env.VITE_BASE_WRAPPED_USDC_ADDRESS || "").toLowerCase()
-          : (import.meta.env.VITE_WRAPPED_USDC_ADDRESS || "").toLowerCase();
-      const WRAPPED_ETH_ADDRESS = activeNetworkId === NetworkId.Arbitrum_Sepolia
-        ? (import.meta.env.VITE_ARB_WRAPPED_ETH_ADDRESS || "").toLowerCase()
-        : activeNetworkId === NetworkId.Base_Sepolia
-          ? (import.meta.env.VITE_BASE_WRAPPED_ETH_ADDRESS || "").toLowerCase()
-          : (import.meta.env.VITE_WRAPPED_ETH_ADDRESS || "").toLowerCase();
-      const IGNORED_CONTRACTS = [
-        "0xbde0a2e375b67c802d4651fecf3b678b1886d15b", // SimpleWrappedUSDC (old)
-        "0x3e0722a877e52fe755e8bf02372342c63930fd57", // MockFHEWrappedUSDC (old)
-        "0x6ab305c679002c0938c2be3f824fcb8b81be5b70", // CoFHEWrappedUSDC v1 (old - no ERC20)
-        "0x5c3f1fe2c451ccc73443865fec914a595c3d1a7c", // CoFHEWrappedUSDC v2 (old - FHE not on Sepolia)
-        "0x730bb4ee9ea1cdb0b45c1db01ca67a616d2d3c88", // Old WrappedUSDC (no FHE)
-        "0x23bad885b76c95ec9e2b47663022d552d780200f", // Old WrappedETH (no FHE)
-        "0x503e16b7920420277ce1548444dbb30e97f87d40", // WrappedUSDC v2 (no ERC20 sync)
-        "0x3696a9a8ecd0dbd7111dd15f7837d7f38d83a0c0", // WrappedETH v3 (no ERC20 sync)
-        "0x7890673c207a728ef7d9378c7206030749351dad", // WrappedETH v3 (no ERC20 sync on transfer)
-        "0x4b3dd819cfbf1364cabd5c8f9c5c05917d09168c", // WrappedUSDC v2 (no ERC20 sync on transfer)
-        "0x421583e66b21de780b4f94fcecce858c07f3d2d9", // WrappedETH v3 (no ERC20 sync on transfer v2)
-        "0x0125c55244724c1bf1d16b91e046fe7e8a5719e2", // WrappedUSDC v2 (no ERC20 sync on transfer v2)
-        "0x8d0419e8a259366516fc4fbabebdc013cad8770f", // WrappedETH_V3 (plaintext leak in transfer)
-        "0x2210264a3775d5fbc51b1b73667f5590230ac2bd"  // WrappedUSDC_V2 (plaintext leak in transfer)
-      ];
+      /** Underlying address per confidential wrapper, for pricing shielded rows. */
+      const shieldedUnderlying = new Map<string, string>();
+      const IGNORED_CONTRACTS = getHiddenTokenAddresses(activeNetworkId);
+
+      // FHERC20 wrappers report `balanceOfIsIndicator() == true`; their ERC-20 balance is
+      // a ~7984 activity counter, not a holding. Ask the contracts directly so wrappers
+      // from earlier deployments are excluded too — an address list cannot know about them.
+      try {
+        const erc20Addresses = tokenBalances
+          .filter((tb) => !tb.isNative && tb.contractAddress !== "ETH")
+          .map((tb) => tb.contractAddress);
+        const confidential = await net.filterConfidentialTokens(erc20Addresses);
+        confidential.forEach((addr) => IGNORED_CONTRACTS.add(addr));
+      } catch {
+        // Detection unavailable — fall back to the static list alone.
+      }
 
       if (isFheNetwork) {
-        // Fetch Wrapped USDC - Always show, even if balance is 0
-        if (WRAPPED_USDC_ADDRESS) {
+        // Every confidential wrapper this account holds, resolved from the on-chain
+        // registry rather than a fixed pair of addresses. Shielding an ERC-20 through the
+        // factory used to produce a balance no screen could see, because only aeETH and
+        // aeUSDC were ever queried.
+        try {
+          if (!active_context.activeAccount) throw new Error("No active account");
+          const holdings = await net.getShieldedPortfolio(active_context.activeAccount);
 
-          try {
-            // Get encrypted (shielded) balance via FHE unseal - V4 contracts have NO ERC20 balance
-            let wrappedUsdcBalance = "0";
-            try {
-              const shieldedBal = await net.getShieldedBalance(WRAPPED_USDC_ADDRESS, address, active_context.activeAccount);
-              if (shieldedBal && parseFloat(shieldedBal) > 0) {
-                wrappedUsdcBalance = shieldedBal;
-              } else {
-              }
-            } catch (e) {
-            }
+          for (const h of holdings) {
+            const addr = h.wrapper.toLowerCase();
 
-            // Always add to list, even if balance is 0
+            // The wrapper's own ERC-20 balance is the ~7984 activity counter, so it must
+            // never be listed twice — the confidential row below is the real one.
+            IGNORED_CONTRACTS.add(addr);
+            if (h.underlying) shieldedUnderlying.set(addr, h.underlying.toLowerCase());
+
             wrappedBalances.push({
-              contractAddress: WRAPPED_USDC_ADDRESS,
-              tokenBalance: wrappedUsdcBalance,
+              contractAddress: addr,
+              tokenBalance: h.balance,
               isNative: false,
-              isShielded: true
+              isShielded: true,
             });
 
-            // Cache metadata
             wallet_context.tokenCache.setToken(activeNetworkId, {
-              name: "Confidential USDC",
-              symbol: "cUSDC",
-              decimals: 6,
+              name: `Shielded ${h.symbol.replace(/^ae/, "")}`,
+              symbol: h.symbol,
+              decimals: h.confidentialDecimals,
               logoSrc: "",
-              contractAddress: WRAPPED_USDC_ADDRESS
+              contractAddress: addr,
             });
-          } catch (e) {
           }
-        }
-
-        // Fetch Wrapped ETH - Always show, even if balance is 0
-        if (WRAPPED_ETH_ADDRESS) {
-
-          try {
-            // Get encrypted (shielded) balance via FHE unseal - V4 contracts have NO ERC20 balance
-            let wrappedEthBalance = "0";
-            try {
-              const shieldedBal = await net.getShieldedBalance(WRAPPED_ETH_ADDRESS, address, active_context.activeAccount);
-              if (shieldedBal && parseFloat(shieldedBal) > 0) {
-                wrappedEthBalance = shieldedBal;
-              } else {
-              }
-            } catch (e) {
-            }
-
-            // Always add to list, even if balance is 0
-            wrappedBalances.push({
-              contractAddress: WRAPPED_ETH_ADDRESS,
-              tokenBalance: wrappedEthBalance,
-              isNative: false,
-              isShielded: true
-            });
-
-            // Cache metadata
-            wallet_context.tokenCache.setToken(activeNetworkId, {
-              name: "Confidential ETH",
-              symbol: "cETH",
-              decimals: 18,
-              logoSrc: "",
-              contractAddress: WRAPPED_ETH_ADDRESS
-            });
-          } catch (e) {
-          }
+        } catch (e) {
+          // Registry unreachable — public balances still render.
         }
       }
 
       // Merge public + wrapped balances
       const allBalances = [...tokenBalances, ...wrappedBalances];
 
-      // 3. Extract Contracts for price fetching - EXCLUDE wrapped token addresses
-      const wrappedTokenAddresses = [WRAPPED_USDC_ADDRESS, WRAPPED_ETH_ADDRESS].filter(Boolean);
-
+      // 3. Extract Contracts for price fetching — wrappers have no market of their own,
+      // they are priced through the underlying token they hold.
       const contractAddresses = tokenBalances
         .map(t => t.contractAddress)
-        .filter(addr => !wrappedTokenAddresses.includes(addr.toLowerCase()));
+        .filter(addr => !IGNORED_CONTRACTS.has(addr.toLowerCase()));
 
       // --- IMMEDIATE RENDER ---
       // We render the tokens immediately with 0 price, then update later.
@@ -410,22 +377,32 @@ function Home() {
         currentPrices = await net.getTokenPrices(contractAddresses);
       } catch (e) { /* silenced */ }
 
+      // Symbol → USD, shared with the shielded rows below: a wrapper whose underlying the
+      // user no longer holds publicly (because they shielded all of it) has no address to
+      // price against, so its symbol is the only handle left.
+      const symbolPriceMap: Record<string, number> = {};
+
       // Testnet & custom network price fallback: fetch mainnet prices and map known tokens by symbol
       if (activeNetworkId !== NetworkId.Ethereum_Mainnet) {
         try {
-          // Collect all token symbols we need to price
+          // Collect all token symbols we need to price. A confidential wrapper is worth
+          // what it holds, so "aeUSDC" is priced as "USDC".
           const allSymbols = new Set<string>();
           allBalances.forEach((tb) => {
             const meta = wallet_context.tokenCache.getToken(activeNetworkId, tb.contractAddress);
             const sym = meta?.symbol ?? (tb.isNative ? nativeSym : "");
-            if (sym) allSymbols.add(sym.toUpperCase());
+            if (!sym) return;
+            allSymbols.add(sym.toUpperCase());
+            if (/^ae/.test(sym)) allSymbols.add(sym.slice(2).toUpperCase());
           });
 
           // Map of symbol → CoinGecko ID for well-known tokens
           const symbolToCoinGeckoId: Record<string, string> = {
-            "ETH": "ethereum", "WETH": "ethereum", "cETH": "ethereum",
-            "BTC": "bitcoin", "WBTC": "wrapped-bitcoin", "tBTC": "bitcoin",
-            "USDC": "usd-coin", "cUSDC": "usd-coin", "wUSDC": "usd-coin",
+            // Keys are matched uppercased; shielded symbols are normalised to their
+            // underlying before lookup, so no "ae*" entries are needed here.
+            "ETH": "ethereum", "WETH": "ethereum",
+            "BTC": "bitcoin", "WBTC": "wrapped-bitcoin", "TBTC": "bitcoin",
+            "USDC": "usd-coin", "WUSDC": "usd-coin",
             "USDT": "tether",
             "DAI": "dai",
             "LINK": "chainlink",
@@ -471,7 +448,6 @@ function Home() {
             const ethJson = await ethRes.json();
 
             // Build symbol → price map from CoinGecko response
-            const symbolPriceMap: Record<string, number> = {};
             for (const [sym, cgId] of Object.entries(symbolToCoinGeckoId)) {
               if (ethJson[cgId]?.usd !== undefined) {
                 symbolPriceMap[sym] = ethJson[cgId].usd;
@@ -515,6 +491,11 @@ function Home() {
       // For native token, use currency symbol as price key; for custom networks prices may not exist
       const nativePriceKey = nativeSym;  // e.g. "ETH", "MON", "MATIC" etc.
       tokenBalances.forEach((tb) => {
+        // Confidential wrappers are handled by `wrappedBalances` below, which carries the
+        // decrypted balance. Their ERC-20 balanceOf is an activity indicator (~7984.0001),
+        // so letting it through here would both show a fake row and inflate the USD total.
+        if (IGNORED_CONTRACTS.has(tb.contractAddress.toLowerCase())) return;
+
         let p = 0;
         if (tb.isNative) {
           if (net.isCustom) {
@@ -536,14 +517,22 @@ function Home() {
         };
       });
 
-      // Process wrapped token balances with price mapping
+      // Process wrapped token balances with price mapping.
+      // A wrapper is worth exactly what it holds, so it is priced through its underlying:
+      // the native wrapper tracks ETH, an ERC-20 wrapper tracks the token it wraps.
       wrappedBalances.forEach((wb) => {
+        const addr = wb.contractAddress.toLowerCase();
+        const underlying = shieldedUnderlying.get(addr);
         const meta = wallet_context.tokenCache.getToken(activeNetworkId, wb.contractAddress);
         const symbol = meta?.symbol ?? "";
-        // cETH uses ETH price, cUSDC uses USDC price
-        let p = 0;
-        if (symbol === "cETH") p = currentPrices["ETH"] ?? 0;
-        else if (symbol === "cUSDC") p = currentPrices[wb.contractAddress.toLowerCase()] ?? 1;
+
+        // Prefer the underlying's own price; fall back to its symbol, which is all that is
+        // left once the user has shielded their entire public balance of that token.
+        const underlyingSymbol = symbol.replace(/^ae/, "").toUpperCase();
+        const p = underlying
+          ? (currentPrices[underlying] ?? symbolPriceMap[underlyingSymbol] ?? 0)
+          : (currentPrices["ETH"] ?? symbolPriceMap["ETH"] ?? 0);
+
         const valUsd = parseFloat(wb.tokenBalance) * p;
         totalUsd += valUsd;
 
@@ -563,8 +552,9 @@ function Home() {
 
       Object.values(balanceMap).forEach((b) => {
         const lowerAddr = b.contractAddress.toLowerCase();
-        // Only apply IGNORED filter on Ethereum Sepolia (these are old broken contracts on Sepolia only)
-        if (activeNetworkId === NetworkId.Ethereum_Sepolia && IGNORED_CONTRACTS.includes(lowerAddr)) return;
+        // Hide superseded wrappers and indicator rows — but never the shielded entries,
+        // which carry the decrypted confidential balance and are the whole point.
+        if (!b.isShielded && IGNORED_CONTRACTS.has(lowerAddr)) return;
 
         const meta = wallet_context.tokenCache.getToken(activeNetworkId, lowerAddr) ||
           wallet_context.tokenCache.getToken(activeNetworkId, b.contractAddress);
@@ -736,11 +726,16 @@ function Home() {
           <MenuItem disabled sx={{ opacity: 0.6, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, py: 0.5, minHeight: 0 }}>
             Testnets
           </MenuItem>
+          {/* The three chains CoFHE runs on. Confidential features light up on each once
+              its wrappers are deployed; everything else works regardless. */}
           <MenuItem onClick={() => handleNetworkClose(NetworkId.Ethereum_Sepolia)}>
             <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#f59e0b', mr: 1 }} /> Eth Sepolia
           </MenuItem>
-          <MenuItem onClick={() => handleNetworkClose(NetworkId.Fhenix_Helium)}>
-            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#2563eb', mr: 1 }} /> Fhenix Helium
+          <MenuItem onClick={() => handleNetworkClose(NetworkId.Arbitrum_Sepolia)}>
+            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#60a5fa', mr: 1 }} /> Arbitrum Sepolia
+          </MenuItem>
+          <MenuItem onClick={() => handleNetworkClose(NetworkId.Base_Sepolia)}>
+            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#93c5fd', mr: 1 }} /> Base Sepolia
           </MenuItem>
 
           {/* Custom Networks */}
@@ -976,9 +971,9 @@ function Home() {
               label={
                 <Stack direction="row" spacing={1} alignItems="center">
                   <span>{t('home.tokens')}</span>
-                  {tokens.filter((t) => !t.isSpam && !t.isHidden).length > 0 && (
+                  {visibleTokenCount > 0 && (
                     <Chip
-                      label={tokens.filter((t) => !t.isSpam && !t.isHidden).length}
+                      label={visibleTokenCount}
                       size="small"
                       sx={{ height: 18, fontSize: '0.65rem', fontWeight: 800, bgcolor: 'transparent', border: '1px solid', borderColor: 'divider', color: 'text.primary', borderRadius: '0px' }}
                     />
@@ -993,9 +988,19 @@ function Home() {
         {tabIndex === 0 && (
           <Box>
             {(() => {
-              const visibleTokens = tokens.filter((t) => !t.isSpam && !t.isHidden);
-              const hiddenTokens = tokens.filter((t) => t.isSpam || t.isHidden);
-              const displayList = showHiddenTokens ? tokens : visibleTokens;
+              // The balance provider returns every token it has ever seen for this
+              // address, which buries the few that matter. Keep the native token (it is
+              // the network's unit of account even at zero) and anything with a balance.
+              const hasBalance = (tk: DisplayToken) => {
+                if (tk.contractAddress === "ETH") return true;
+                const bal = balances[tk.contractAddress];
+                return !!bal && parseFloat(bal.tokenBalance) > 0;
+              };
+
+              const held = tokens.filter(hasBalance);
+              const visibleTokens = held.filter((t) => !t.isSpam && !t.isHidden);
+              const hiddenTokens = held.filter((t) => t.isSpam || t.isHidden);
+              const displayList = showHiddenTokens ? held : visibleTokens;
 
               return (
                 <>
@@ -1023,22 +1028,6 @@ function Home() {
                         onClick={() => navigate(`/token/${encodeURIComponent(token.contractAddress)}`, {
                           state: { logoSrc: getTokenLogoUrl(token.contractAddress, token.logoSrc, token.symbol, token.name) }
                         })}
-                        onToggleHide={() => {
-                          if (!wallet_context) return;
-                          const sf = wallet_context.spamFilter;
-                          const addr = token.contractAddress.toLowerCase();
-                          if (sf.isTokenHidden(activeNetworkId, addr)) {
-                            sf.unhideToken(activeNetworkId, addr);
-                          } else {
-                            sf.hideToken(activeNetworkId, addr);
-                          }
-                          // Update token in state
-                          setTokens((prev) => prev.map(t =>
-                            t.contractAddress === token.contractAddress
-                              ? { ...t, isHidden: !t.isHidden, isSpam: false }
-                              : t
-                          ));
-                        }}
                       />
                     );
                   })}

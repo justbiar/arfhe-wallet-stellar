@@ -8,6 +8,7 @@ import PortfolioChart from "../components/PortfolioChart";
 import AssetAllocationChart from "../components/AssetAllocationChart";
 import { NetworkId, TokenBalance, isFheNetwork } from "../backend/NetworkTypes";
 import { PortfolioSkeleton } from "../components/SkeletonLoaders";
+import { getHiddenTokenAddresses } from "../components/panels/shared.js";
 
 interface DetailedAsset {
     contractAddress: string;
@@ -53,19 +54,15 @@ export default function Portfolio() {
 
             const cached = dataCache.get(address, net.network_id);
             if (!cached) {
-                // Cache is missing or stale. Safe to redirect to home to let it handle complex multi-fetch
-                navigate('/home', { replace: true });
+                // No cache yet — this happens on a cold open or right after the TTL lapses.
+                // Bouncing to /home here is what made the page feel like it "opens on the
+                // second try": the first click silently redirected, and only once Home had
+                // populated the cache did a second click stick. Wait for it instead.
                 return;
             }
 
             // Sync rendering with the verified cached data from Home.tsx
-            const IGNORED_CONTRACTS = [
-                "0xbde0a2e375b67c802d4651fecf3b678b1886d15b", "0x3e0722a877e52fe755e8bf02372342c63930fd57", "0x6ab305c679002c0938c2be3f824fcb8b81be5b70",
-                "0x5c3f1fe2c451ccc73443865fec914a595c3d1a7c", "0x730bb4ee9ea1cdb0b45c1db01ca67a616d2d3c88", "0x23bad885b76c95ec9e2b47663022d552d780200f",
-                "0x503e16b7920420277ce1548444dbb30e97f87d40", "0x3696a9a8ecd0dbd7111dd15f7837d7f38d83a0c0", "0x7890673c207a728ef7d9378c7206030749351dad",
-                "0x4b3dd819cfbf1364cabd5c8f9c5c05917d09168c", "0x421583e66b21de780b4f94fcecce858c07f3d2d9", "0x0125c55244724c1bf1d16b91e046fe7e8a5719e2",
-                "0x8d0419e8a259366516fc4fbabebdc013cad8770f", "0x2210264a3775d5fbc51b1b73667f5590230ac2bd"
-            ];
+            const IGNORED_CONTRACTS = getHiddenTokenAddresses(net.network_id);
 
             let shieldedUsd = 0;
             let totalUsd = 0;
@@ -74,7 +71,9 @@ export default function Portfolio() {
             Object.values(cached.balances).forEach((b, index: number) => {
                 const bal = parseFloat(b.tokenBalance);
 
-                if (IGNORED_CONTRACTS.includes(b.contractAddress.toLowerCase())) return;
+                // Shielded entries carry the decrypted balance and must survive the filter —
+                // they are what `shieldedUsd` below is measuring.
+                if (!b.isShielded && IGNORED_CONTRACTS.has(b.contractAddress.toLowerCase())) return;
 
                 const meta = wallet_context.tokenCache.getToken(net.network_id, b.contractAddress.toLowerCase()) ||
                     wallet_context.tokenCache.getToken(net.network_id, b.contractAddress);
@@ -114,7 +113,24 @@ export default function Portfolio() {
         };
 
         loadCacheData();
-        return () => { isMounted = false; };
+
+        // Home fills the cache asynchronously; poll briefly so the page renders as soon as
+        // the data lands. Gives up after a bounded window rather than spinning forever.
+        const started = Date.now();
+        const poll = setInterval(() => {
+            if (!isMounted) return;
+            if (Date.now() - started > 15_000) {
+                clearInterval(poll);
+                setLoading(false);   // Render the empty state instead of an endless skeleton.
+                return;
+            }
+            loadCacheData();
+        }, 500);
+
+        return () => {
+            isMounted = false;
+            clearInterval(poll);
+        };
     }, [wallet_context, active_context, navigate]);
 
     // Derived Data

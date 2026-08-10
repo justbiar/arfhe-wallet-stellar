@@ -42,7 +42,7 @@ import { isAddress, parseUnits, Interface, formatEther, toUtf8Bytes, hexlify } f
 import { isDomainName, resolveDomain } from "../../backend/DomainResolver.js";
 import { NetworkId, isFheNetwork } from "../../backend/NetworkTypes.js";
 import { TransactionSimulator, SimResult } from "../../backend/TransactionSimulator.js";
-import { getContractsForNetwork, getExplorerBaseForNetwork, inputCardSx, ctaButtonSx } from "./shared.js";
+import { getContractsForNetwork, getExplorerBaseForNetwork, getHiddenTokenAddresses, inputCardSx, ctaButtonSx } from "./shared.js";
 
 // --- Send Panel ---
 export default function SendPanel() {
@@ -101,9 +101,18 @@ export default function SendPanel() {
   const [status, setStatus] = useState<"idle" | "validating" | "signing" | "broadcasting" | "pending" | "success" | "fail">("idle");
   const [feedbackMsg, setFeedbackMsg] = useState("");
   const [txHash, setTxHash] = useState("");
+  /** Overlay dismissed by the user; the confidential send keeps running. */
+  const [overlayHidden, setOverlayHidden] = useState(false);
 
   const [ownedTokens, setOwnedTokens] = useState<{ contractAddress: string; symbol: string; balance: string }[]>([]);
-  const [ownedShieldedTokens, setOwnedShieldedTokens] = useState<{ contractAddress: string; symbol: string; balance: string }[]>([]);
+  const [ownedShieldedTokens, setOwnedShieldedTokens] = useState<{
+    contractAddress: string;
+    symbol: string;
+    balance: string;
+    /** Underlying ERC-20; empty for the native wrapper. */
+    underlying: string;
+    isNative: boolean;
+  }[]>([]);
   const [tokensLoading, setTokensLoading] = useState(true);
 
   // ── Domain resolution with 500ms debounce ──────────────────────────
@@ -222,47 +231,31 @@ export default function SendPanel() {
         if (!address) { setTokensLoading(false); return; }
         const networkId = network.network_id;
 
-        const IGNORED_CONTRACTS = [
-          "0xbde0a2e375b67c802d4651fecf3b678b1886d15b",
-          "0x3e0722a877e52fe755e8bf02372342c63930fd57",
-          "0x6ab305c679002c0938c2be3f824fcb8b81be5b70",
-          "0x5c3f1fe2c451ccc73443865fec914a595c3d1a7c",
-          "0x730bb4ee9ea1cdb0b45c1db01ca67a616d2d3c88",
-          "0x23bad885b76c95ec9e2b47663022d552d780200f",
-          "0x503e16b7920420277ce1548444dbb30e97f87d40",
-          "0x3696a9a8ecd0dbd7111dd15f7837d7f38d83a0c0",
-          "0x7890673c207a728ef7d9378c7206030749351dad",
-          "0x4b3dd819cfbf1364cabd5c8f9c5c05917d09168c",
-          "0x421583e66b21de780b4f94fcecce858c07f3d2d9",
-          "0x0125c55244724c1bf1d16b91e046fe7e8a5719e2",
-          "0x8d0419e8a259366516fc4fbabebdc013cad8770f",
-          "0x2210264a3775d5fbc51b1b73667f5590230ac2bd"
-        ];
+        const IGNORED_CONTRACTS = getHiddenTokenAddresses(networkId);
 
         const isFheNetwork = networkId === NetworkId.Ethereum_Sepolia || networkId === NetworkId.Arbitrum_Sepolia || networkId === NetworkId.Base_Sepolia;
         const activeContracts = getContractsForNetwork(networkId);
 
-        const WRAPPED_USDC = networkId === NetworkId.Arbitrum_Sepolia
-          ? (import.meta.env.VITE_ARB_WRAPPED_USDC_ADDRESS || "").toLowerCase()
-          : networkId === NetworkId.Base_Sepolia
-            ? (import.meta.env.VITE_BASE_WRAPPED_USDC_ADDRESS || "").toLowerCase()
-            : (import.meta.env.VITE_WRAPPED_USDC_ADDRESS || "").toLowerCase();
-        const WRAPPED_ETH = networkId === NetworkId.Arbitrum_Sepolia
-          ? (import.meta.env.VITE_ARB_WRAPPED_ETH_ADDRESS || "").toLowerCase()
-          : networkId === NetworkId.Base_Sepolia
-            ? (import.meta.env.VITE_BASE_WRAPPED_ETH_ADDRESS || "").toLowerCase()
-            : (import.meta.env.VITE_WRAPPED_ETH_ADDRESS || "").toLowerCase();
-        const shieldedAddresses = [WRAPPED_USDC, WRAPPED_ETH].filter(Boolean);
         const REAL_WETH = activeContracts["ETH"]?.public?.toLowerCase() || "";
 
         const tokenBalances = await network.getTokenBalances(context?.tokenCache, address);
+
+        // Confidential wrappers must never appear as public tokens — their ERC-20 balance
+        // is an activity counter, not a holding. Asking the registry covers every wrapper,
+        // including ones from superseded deployments.
+        try {
+          const confidential = await network.filterConfidentialTokens(
+            tokenBalances.filter((tb) => !tb.isNative).map((tb) => tb.contractAddress)
+          );
+          confidential.forEach((addr) => IGNORED_CONTRACTS.add(addr));
+        } catch { /* fall back to the static list */ }
+
         const seenSymbols = new Set<string>();
         const publicTokensWithBalance = tokenBalances
           .filter(tb => {
             if (parseFloat(tb.tokenBalance) <= 0) return false;
             const addr = tb.contractAddress.toLowerCase();
-            if (IGNORED_CONTRACTS.includes(addr)) return false;
-            if (shieldedAddresses.includes(addr)) return false;
+            if (IGNORED_CONTRACTS.has(addr)) return false;
 
             // Allow native ETH immediately
             if (tb.isNative) return true;
@@ -305,27 +298,24 @@ export default function SendPanel() {
           });
         setOwnedTokens(publicTokensWithBalance);
 
-        // Fetch shielded token balances (on FHE-enabled networks)
-        if (isFheNetwork && (WRAPPED_USDC || WRAPPED_ETH)) {
-          const shielded: { contractAddress: string; symbol: string; balance: string }[] = [];
-
-          if (WRAPPED_ETH) {
-            try {
-              const bal = await network.getShieldedBalance(WRAPPED_ETH, address, activeAccount);
-              if (bal && parseFloat(bal) > 0) {
-                shielded.push({ contractAddress: WRAPPED_ETH, symbol: "cETH", balance: bal });
-              }
-            } catch (e) { /* silenced */ }
-          }
-          if (WRAPPED_USDC) {
-            try {
-              const bal = await network.getShieldedBalance(WRAPPED_USDC, address, activeAccount);
-              if (bal && parseFloat(bal) > 0) {
-                shielded.push({ contractAddress: WRAPPED_USDC, symbol: "cUSDC", balance: bal });
-              }
-            } catch (e) { /* silenced */ }
-          }
-          setOwnedShieldedTokens(shielded);
+        // Every confidential wrapper this account holds, from the on-chain registry.
+        // Reading a fixed aeETH/aeUSDC pair meant an ERC-20 shielded through the factory
+        // had a balance but no way to spend it — it simply never appeared here.
+        if (isFheNetwork) {
+          try {
+            const holdings = await network.getShieldedPortfolio(activeAccount);
+            setOwnedShieldedTokens(
+              holdings
+                .filter((h) => parseFloat(h.balance) > 0)
+                .map((h) => ({
+                  contractAddress: h.wrapper,
+                  symbol: h.symbol,
+                  balance: h.balance,
+                  underlying: h.underlying,
+                  isNative: h.isNative,
+                }))
+            );
+          } catch (e) { /* silenced — public sending still works */ }
         }
       } catch (e) {
       } finally {
@@ -348,6 +338,7 @@ export default function SendPanel() {
       if (!isAddress(resolvedAddress)) throw new Error(isDomainInput ? t("send.domainNotResolved") : t("send.invalidRecipient"));
       if (!sendAmount || parseFloat(sendAmount) <= 0) throw new Error(t("send.invalidAmount"));
 
+      setOverlayHidden(false);
       setStatus("signing");
       setFeedbackMsg(t("send.signPrompt"));
 
@@ -359,32 +350,21 @@ export default function SendPanel() {
       if (advancedGas.preset === "slow") gasMultiplier = 0.9;
 
       if (isConfidential) {
-        const activeContracts = getContractsForNetwork(network.network_id);
-        let tokenAddress = "";
-        let decimals = 18;
+        // Resolve the selection onto a wrapper. Confidential rows already are the wrapper;
+        // picking the public side maps through the holding that wraps it. Decimals are
+        // deliberately not decided here — the confidential layer uses its own precision,
+        // which `transferConfidential` reads from the contract itself.
+        const selected = sendTokenAddress.toLowerCase();
+        const holding =
+          ownedShieldedTokens.find((s) => s.contractAddress.toLowerCase() === selected) ??
+          (sendTokenAddress === "ETH"
+            ? ownedShieldedTokens.find((s) => s.isNative)
+            : ownedShieldedTokens.find((s) => s.underlying.toLowerCase() === selected));
 
-        if (sendTokenAddress.toLowerCase() === activeContracts["USDC"]?.shielded.toLowerCase()) {
-          tokenAddress = sendTokenAddress;
-          decimals = 6;
-        } else if (sendTokenAddress.toLowerCase() === activeContracts["USDC"]?.public.toLowerCase()) {
-          tokenAddress = activeContracts["USDC"]?.shielded;
-          decimals = 6;
-        } else if (sendTokenAddress.toLowerCase() === activeContracts["ETH"]?.shielded.toLowerCase()) {
-          tokenAddress = sendTokenAddress;
-          decimals = 18;
-        } else if (sendTokenAddress.toLowerCase() === activeContracts["ETH"]?.public.toLowerCase()) {
-          tokenAddress = activeContracts["ETH"]?.shielded;
-          decimals = 18;
-        } else if (sendTokenAddress === "ETH") {
-          tokenAddress = activeContracts["ETH"]?.shielded;
-          decimals = 18;
-        } else {
-          throw new Error("Confidential transfer only supports cUSDC and cETH");
+        if (!holding) {
+          throw new Error(t("errors.noShieldedBalance"));
         }
-
-        if (tokenAddress === "0x0000000000000000000000000000000000000000") {
-          throw new Error("Token wrapper not deployed yet");
-        }
+        const tokenAddress = holding.contractAddress;
 
         setFeedbackMsg(t("send.encryptingFhe"));
         hash = await network.transferConfidential(activeAccount, tokenAddress, resolvedAddress, sendAmount);
@@ -513,6 +493,7 @@ export default function SendPanel() {
       setStatus("pending");
       setFeedbackMsg(t("send.broadcasted"));
       await network.waitForTransaction(hash);
+
       setStatus("success");
       setFeedbackMsg(t("common.success"));
 
@@ -530,11 +511,34 @@ export default function SendPanel() {
   const isLoading = ["validating", "signing", "broadcasting", "pending"].includes(status);
   const displayTokens = isConfidential ? ownedShieldedTokens : ownedTokens;
 
+  // The two lists are keyed differently — public tokens by their own address, confidential
+  // ones by their wrapper — so a selection valid in one mode is out of range in the other
+  // and the dropdown renders blank. Snap to the equivalent token, or the first available.
+  React.useEffect(() => {
+    if (tokensLoading || displayTokens.length === 0) return;
+    if (displayTokens.some((tk) => tk.contractAddress === sendTokenAddress)) return;
+
+    const selected = sendTokenAddress.toLowerCase();
+    const equivalent = isConfidential
+      ? ownedShieldedTokens.find((s) =>
+          sendTokenAddress === "ETH" ? s.isNative : s.underlying.toLowerCase() === selected)
+      : ownedTokens.find((p) => {
+          const shieldedMatch = ownedShieldedTokens.find((s) => s.contractAddress === sendTokenAddress);
+          if (!shieldedMatch) return false;
+          return shieldedMatch.isNative
+            ? p.contractAddress === "ETH"
+            : p.contractAddress.toLowerCase() === shieldedMatch.underlying.toLowerCase();
+        });
+
+    setSendTokenAddress((equivalent ?? displayTokens[0]).contractAddress);
+  }, [isConfidential, displayTokens, tokensLoading, sendTokenAddress, ownedShieldedTokens, ownedTokens]);
+
   return (
     <Box sx={{ position: 'relative' }}>
       {/* FHE Encryption Overlay — shown during signing/encrypting */}
       <FheEncryptingOverlay
-        visible={isConfidential && ["signing", "broadcasting", "pending"].includes(status)}
+        visible={isConfidential && !overlayHidden && ["signing", "broadcasting", "pending"].includes(status)}
+        onDismiss={() => setOverlayHidden(true)}
         message={status === "signing"
           ? t("send.encryptingFhe")
           : status === "broadcasting"

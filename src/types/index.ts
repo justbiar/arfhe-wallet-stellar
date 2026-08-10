@@ -18,4 +18,4 @@ export type {
   ImageErrorEvent,
   MuiTheme,
 } from "./components.js";
-export type { AbstractProvider, AbstractSigner } from "./fhe.js";
+export type { ShieldedTokenMeta, UnshieldClaim, ShieldedHolding } from "./fhe.js";

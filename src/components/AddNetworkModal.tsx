@@ -26,7 +26,8 @@ import {
   CurrencyExchange,
   DriveFileRenameOutline,
 } from "@mui/icons-material";
-import { CustomNetworkConfig } from "../backend/NetworkTypes";
+import { CustomNetworkConfig, NetworkId, isFheNetwork } from "../backend/NetworkTypes";
+import { useTranslation } from "react-i18next";
 
 interface AddNetworkModalProps {
   open: boolean;
@@ -37,6 +38,7 @@ interface AddNetworkModalProps {
 type RpcTestStatus = "idle" | "testing" | "success" | "error";
 
 export default function AddNetworkModal({ open, onClose, onAdd }: AddNetworkModalProps) {
+  const { t } = useTranslation();
   const theme = useTheme();
 
   const [networkName, setNetworkName] = useState("");
@@ -203,6 +205,17 @@ export default function AddNetworkModal({ open, onClose, onAdd }: AddNetworkModa
   };
 
   const isFormValid = networkName.trim() && rpcUrl.trim() && chainId.trim() && currencySymbol.trim() && rpcTestStatus !== "idle";
+
+  // Shielding needs a CoFHE coprocessor, which exists on three chains only. A custom
+  // network is almost never one of them, so say so at add time rather than letting the
+  // user discover it when Shield is greyed out later.
+  const willSupportFhe = !!chainId && isFheNetwork(Number(chainId) as NetworkId);
+
+  const fheNotice = chainId.trim() && !willSupportFhe ? (
+    <Alert severity="info" sx={{ mt: 2, borderRadius: 2, fontSize: "0.8rem" }}>
+      {t("network.customNoFhe")}
+    </Alert>
+  ) : null;
 
   return (
     <Dialog
@@ -420,6 +433,7 @@ export default function AddNetworkModal({ open, onClose, onAdd }: AddNetworkModa
               {formError}
             </Alert>
           )}
+            {fheNotice}
 
           {/* Submit Button */}
           <Button

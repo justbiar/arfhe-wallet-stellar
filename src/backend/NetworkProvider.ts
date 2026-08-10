@@ -12,7 +12,6 @@ import BNBChainNetwork from "./BNBChain.js";
 import LineaNetwork from "./Linea.js";
 import SeiNetwork from "./Sei.js";
 import MonadTestnetNetwork from "./MonadTestnet.js";
-import FhenixHeliumNetwork from "./FhenixHelium.js";
 import { Network } from "./Network.js";
 import { NetworkId, CustomNetworkConfig } from "./NetworkTypes.js";
 
@@ -36,7 +35,6 @@ class NetworkProvider {
   private lineaNetwork?: LineaNetwork;
   private seiNetwork?: SeiNetwork;
   private monadTestnetNetwork?: MonadTestnetNetwork;
-  private fhenixHeliumNetwork?: FhenixHeliumNetwork;
 
   /** User-added custom networks keyed by chainId */
   private customNetworks: Map<number, Network> = new Map();
@@ -65,7 +63,6 @@ class NetworkProvider {
     if (!this.lineaNetwork) this.lineaNetwork = new LineaNetwork();
     if (!this.seiNetwork) this.seiNetwork = new SeiNetwork();
     if (!this.monadTestnetNetwork) this.monadTestnetNetwork = new MonadTestnetNetwork();
-    if (!this.fhenixHeliumNetwork) this.fhenixHeliumNetwork = new FhenixHeliumNetwork();
   }
 
   getSepoliaNetwork(): SepoliaNetwork {
@@ -133,10 +130,6 @@ class NetworkProvider {
     return this.monadTestnetNetwork;
   }
 
-  getFhenixHeliumNetwork(): FhenixHeliumNetwork {
-    if (!this.fhenixHeliumNetwork) this.fhenixHeliumNetwork = new FhenixHeliumNetwork();
-    return this.fhenixHeliumNetwork;
-  }
 
   getAvalancheFujiNetwork(): AvalancheFujiNetwork {
     if (!this.avalancheFujiNetwork) this.avalancheFujiNetwork = new AvalancheFujiNetwork();
@@ -171,8 +164,6 @@ class NetworkProvider {
         return this.getSeiNetwork();
       case NetworkId.Monad_Testnet:
         return this.getMonadTestnetNetwork();
-      case NetworkId.Fhenix_Helium:
-        return this.getFhenixHeliumNetwork();
       case NetworkId.Avalanche_Fuji:
         return this.getAvalancheFujiNetwork();
       default: {

@@ -77,7 +77,6 @@ const CHAIN_NAMES: Record<string, { name: string; color: string }> = {
     "eip155:130": { name: "Unichain", color: "#FF007A" },
     "eip155:1868": { name: "Soneium", color: "#3B82F6" },
     "eip155:143": { name: "Unichain Sepolia", color: "#FF007A" },
-    "eip155:8008135": { name: "Fhenix", color: "#6366F1" },
 };
 
 const METHOD_INFO: Record<string, { label: string; icon: React.ReactNode; risk: "safe" | "warning" | "danger" }> = {

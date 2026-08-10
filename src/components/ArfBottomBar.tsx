@@ -45,13 +45,18 @@ function ArfBottomBar() {
       setShieldDrawerOpen(false);
       setTimeout(() => setDrawerOpen(true), 200);
     };
+    // Dismiss without reopening the send menu — used when navigating away to /privacy.
+    const handleShieldClose = () => setShieldDrawerOpen(false);
+
     window.addEventListener('open-arf-menu', handleOpen);
     window.addEventListener('open-shield-panel', handleShieldOpen);
     window.addEventListener('return-to-send-menu', handleReturnToSend);
+    window.addEventListener('close-shield-panel', handleShieldClose);
     return () => {
       window.removeEventListener('open-arf-menu', handleOpen);
       window.removeEventListener('open-shield-panel', handleShieldOpen);
       window.removeEventListener('return-to-send-menu', handleReturnToSend);
+      window.removeEventListener('close-shield-panel', handleShieldClose);
     };
   }, []);
 

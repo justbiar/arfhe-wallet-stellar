@@ -1,76 +1,94 @@
 /**
- * FheCofheService - TRUE FHE with cofhejs on Sepolia
- * 
- * Uses cofhejs library for real Fully Homomorphic Encryption.
- * Sepolia is a supported CoFHE network (confirmed in docs).
- * 
- * Flow:
- * 1. cofhejs.initialize() → loads TFHE keys from CoFHE
- * 2. cofhejs.encrypt([Encryptable.uint64(val)]) → encrypted input
- * 3. Send encrypted input to FHE contract on-chain
- * 4. cofhejs.unseal(ctHash, FheTypes.Uint64) → decrypt sealed output
- * 
- * @see https://cofhe-docs.fhenix.zone/cofhejs/introduction/installation
+ * FheCofheService — TRUE FHE via @cofhe/sdk (successor to cofhejs)
+ *
+ * The wallet holds ethers v6 wallets, while @cofhe/sdk speaks viem. `Ethers6Adapter`
+ * bridges the two, so account handling stays exactly where it already lives.
+ *
+ * Lifecycle:
+ *   1. createCofheConfig({ supportedChains }) — declares the CoFHE-backed chains
+ *   2. createCofheClient(config)              — no network work happens yet
+ *   3. client.connect(publicClient, wallet)   — binds account + chain
+ *   4. first encryptInputs() lazily boots TFHE WASM and fetches FHE keys
+ *
+ * Decryption is split by intent, and the two are not interchangeable:
+ *   - decryptForView → plaintext for the UI only. Always needs a permit.
+ *   - decryptForTx   → plaintext + Threshold Network signature that a contract can
+ *                      verify. Used to settle unshield claims.
+ *
+ * @see https://cofhe-docs.fhenix.zone/client-sdk/introduction/overview
  */
 
 import { JsonRpcProvider, Wallet } from "ethers";
-import { cofhejs, FheTypes, Encryptable, initialize, type CoFheInUint64 } from "cofhejs/web";
+import { createCofheConfig, createCofheClient, terminateWorker } from "@cofhe/sdk/web";
+import { Ethers6Adapter } from "@cofhe/sdk/adapters";
+import { chains } from "@cofhe/sdk/chains";
+import {
+  Encryptable,
+  FheTypes,
+  CofheErrorCode,
+  isCofheError,
+  assertCorrectEncryptedItemInput,
+} from "@cofhe/sdk";
+import { ValidationUtils } from "@cofhe/sdk/permits";
+import type { CofheClient, EncryptedUint64Input } from "@cofhe/sdk";
 
-/**
- * Build cofhejs AbstractProvider from ethers JsonRpcProvider
- */
-function buildAbstractProvider(ethersProvider: JsonRpcProvider) {
-  return {
-    getChainId: async (): Promise<string> => {
-      const network = await ethersProvider.getNetwork();
-      return network.chainId.toString();
-    },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- cofhejs AbstractProvider interface
-    call: async (transaction: any): Promise<string> => {
-      const result = await ethersProvider.call(transaction);
-      return result;
-    },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- cofhejs AbstractProvider interface
-    send: async (method: string, params: any[]): Promise<any> => {
-      return await ethersProvider.send(method, params);
-    },
-  };
+/** Result of decrypting a handle for on-chain publication (unshield claims). */
+export interface DecryptForTxResult {
+  ctHash: bigint | string;
+  decryptedValue: bigint;
+  signature: `0x${string}`;
 }
 
 /**
- * Build cofhejs AbstractSigner from ethers Wallet
+ * The only chains CoFHE runs on. Deploying or encrypting anywhere else yields
+ * contracts with no coprocessor behind them, so callers must gate on this.
+ *
+ * @see https://cofhe-docs.fhenix.zone/get-started/introduction/compatibility
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- cofhejs AbstractSigner adapter
-function buildAbstractSigner(ethersWallet: Wallet, abstractProvider: ReturnType<typeof buildAbstractProvider>) {
-  return {
-    getAddress: async (): Promise<string> => {
-      return await ethersWallet.getAddress();
-    },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- cofhejs signTypedData interface
-    signTypedData: async (domain: any, types: any, value: any): Promise<string> => {
-      return await ethersWallet.signTypedData(domain, types, value);
-    },
-    provider: abstractProvider,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- cofhejs sendTransaction interface
-    sendTransaction: async (tx: any): Promise<any> => {
-      return await ethersWallet.sendTransaction(tx);
-    },
-  };
+export const COFHE_CHAIN_IDS = new Set<number>([
+  11155111, // Sepolia
+  421614,   // Arbitrum Sepolia
+  84532,    // Base Sepolia
+]);
+
+/**
+ * How long to keep retrying a decrypt that 404s, in milliseconds.
+ *
+ * A handle exists on-chain the moment its transaction confirms, but the coprocessor
+ * ingests it asynchronously — so a balance read straight after shielding, or a claim read
+ * straight after unshielding, can legitimately 404 for a few seconds. The SDK retries for
+ * 10s by default; claims get longer because giving up there leaves burned balance sitting
+ * unsettled until the next drain, while a view just renders a stale zero.
+ */
+const VIEW_404_RETRY_MS = 10_000;
+const TX_404_RETRY_MS = 20_000;
+
+/** Thrown when a decrypt is attempted against a handle CoFHE has never seen. */
+export class CiphertextNotFoundError extends Error {
+  constructor() {
+    super("Ciphertext not found: no shielded balance");
+    this.name = "CiphertextNotFoundError";
+  }
 }
 
 class FheCofheService {
   private static instance: FheCofheService;
-  private provider: JsonRpcProvider | null = null;
-  private signer: Wallet | null = null;
-  private _isReady: boolean = false;
-  private _hasPermit: boolean = false; // Track whether permit was successfully created
-  private initPromise: Promise<void> | null = null;
-  public initError: string | null = null;
-  private currentAccount: string | null = null; // Track which account cofhejs was initialized with
-  private currentChainId: number = 11155111; // Track which chain cofhejs was initialized with
-  private currentNetworkId?: number; // Track which NetworkId enum cofhejs was initialized with
 
-  private constructor() { }
+  private client: CofheClient | null = null;
+  private _isReady = false;
+  private initPromise: Promise<void> | null = null;
+  /** Identity of the connection currently being established, for de-duping concurrent init. */
+  private pendingKey: string | null = null;
+
+  public initError: string | null = null;
+
+  private currentAccount: string | null = null;
+  private currentChainId: number | null = null;
+  private currentNetworkId?: number;
+  /** `account:chainId:networkId` of the established connection. */
+  private currentKey: string | null = null;
+
+  private constructor() {}
 
   static getInstance(): FheCofheService {
     if (!FheCofheService.instance) {
@@ -84,315 +102,292 @@ class FheCofheService {
   }
 
   /**
-   * Check if cofhejs is initialized for the given account.
-   * If initialized with a different account, returns false so it gets re-initialized.
-   * This prevents InvalidSigner errors caused by cofhejs using the wrong account address
-   * when computing the verification hash.
+   * Whether a usable permit exists right now for the connected account.
+   *
+   * Derived from the stored permit rather than cached: permits expire (7 days by default),
+   * so a boolean set once at creation time silently goes stale and every later decrypt
+   * fails with a permit error the wallet could have prevented.
+   */
+  hasPermit(): boolean {
+    const permit = this.getActivePermit();
+    return !!permit && ValidationUtils.isValid(permit).valid;
+  }
+
+  /**
+   * Whether the SDK is connected as `accountAddress` on `networkId`.
+   *
+   * Permits and encrypted inputs are both scoped to `chainId + account`; reusing a
+   * connection across either boundary produces inputs the contract will reject, so a
+   * mismatch must force a reconnect rather than being tolerated.
    */
   isReadyForAccount(accountAddress: string, networkId?: number): boolean {
-    if (!this._isReady) return false;
-    if (!this.currentAccount) return false;
+    if (!this._isReady || !this.currentAccount) return false;
     if (this.currentAccount.toLowerCase() !== accountAddress.toLowerCase()) return false;
     if (networkId !== undefined && this.currentNetworkId !== networkId) return false;
     return true;
   }
 
   /**
-   * Initialize cofhejs with ethers provider and signer.
-   * Uses low-level initialize() to avoid viemProviderSignerTransformer bug.
-   * 
-   * IMPORTANT: cofhejs uses signer.getAddress() as the account for encryption.
-   * The verifier signs the hash with this account address.
-   * TaskManager verifies using msg.sender (the tx sender).
-   * These MUST match, or InvalidSigner error occurs.
+   * Connect the SDK to a provider/signer pair.
+   *
+   * Re-entrant: concurrent callers share one in-flight connect, and a call for a
+   * different account or chain tears down the previous connection first.
    */
   async init(provider: JsonRpcProvider, signer: Wallet, networkId?: number): Promise<void> {
     const signerAddress = await signer.getAddress();
-    const network = await provider.getNetwork();
-    const chainId = Number(network.chainId);
+    const chainId = Number((await provider.getNetwork()).chainId);
 
-    // If already initialized with the SAME account AND chain AND networkId, skip
-    if (this._isReady && this.currentAccount?.toLowerCase() === signerAddress.toLowerCase() && this.currentChainId === chainId && this.currentNetworkId === networkId) {
-      return;
+    if (!COFHE_CHAIN_IDS.has(chainId)) {
+      throw new Error(
+        `CoFHE is not available on chain ${chainId}. Supported: Sepolia, Arbitrum Sepolia, Base Sepolia.`
+      );
     }
 
-    // If initialized with a DIFFERENT account or chain or networkId, reset first
-    if (this._isReady && (this.currentAccount?.toLowerCase() !== signerAddress.toLowerCase() || this.currentChainId !== chainId || this.currentNetworkId !== networkId)) {
-      this.reset();
-    }
+    const key = `${signerAddress.toLowerCase()}:${chainId}:${networkId ?? ""}`;
 
+    if (this._isReady && this.currentKey === key) return;
+
+    // Concurrent init for the *same* target can share one connect. For a different target
+    // it must not: returning the in-flight promise would leave the caller believing it is
+    // connected as its own account while the client is bound to another, and every input
+    // it then encrypts would be rejected on-chain as belonging to the wrong signer.
     if (this.initPromise) {
-      return this.initPromise;
+      if (this.pendingKey === key) return this.initPromise;
+      await this.initPromise.catch(() => { /* superseded; its failure is not ours */ });
     }
 
+    // A different account/chain invalidates the connection and cached state.
+    if (this._isReady) this.reset();
+
+    this.pendingKey = key;
     this.initPromise = (async () => {
       try {
         this.initError = null;
-        this.provider = provider;
-        this.signer = signer;
 
-
-        // Build abstract provider/signer for cofhejs
-        const abstractProvider = buildAbstractProvider(provider);
-        const abstractSigner = buildAbstractSigner(signer, abstractProvider);
-
-        // Use low-level initialize() directly - bypasses viemProviderSignerTransformer
-        // that causes "An internal error occurred" when given ethers objects
-        // NOTE: ignoreErrors MUST be false (or omitted) so WASM (tfhe) initializes properly.
-        // If WASM init is skipped, TfheCompactPublicKey.deserialize() will crash later.
-        const permit = await initialize({
-          provider: abstractProvider,
-          signer: abstractSigner,
-          environment: "TESTNET",
-          generatePermit: false,
+        const config = createCofheConfig({
+          supportedChains: [chains.sepolia, chains.arbSepolia, chains.baseSepolia],
         });
+        const client = createCofheClient(config);
 
+        // ethers v6 -> viem clients. The signer must be provider-connected already.
+        const { publicClient, walletClient } = await Ethers6Adapter(provider, signer);
+        await client.connect(publicClient, walletClient);
 
-        // Create permit - REQUIRED for unseal/sealoutput operations
-        // Without a valid permit, unseal will get 403 from sealoutput endpoint
-        await this.ensurePermit();
-
+        this.client = client;
         this._isReady = true;
         this.currentAccount = signerAddress;
         this.currentChainId = chainId;
         this.currentNetworkId = networkId;
-        this.currentNetworkId = networkId;
-
+        this.currentKey = key;
       } catch (error) {
         this.initError = error instanceof Error ? error.message : String(error);
         this._isReady = false;
-        this.initPromise = null;
+        this.client = null;
         throw error;
+      } finally {
+        this.initPromise = null;
+        this.pendingKey = null;
       }
     })();
 
     return this.initPromise;
   }
 
+  private requireClient(): CofheClient {
+    if (!this.client || !this._isReady) {
+      throw new Error("CoFHE client not initialized — call init() first");
+    }
+    return this.client;
+  }
+
+  // ============ PERMITS ============
+
+  /**
+   * Ensure an active self-permit exists for the connected account.
+   *
+   * Prompts the signer for an EIP-712 signature the first time. Permits default to a
+   * 7-day expiry and are persisted by the SDK, so this is cheap on repeat calls.
+   *
+   * @see https://cofhe-docs.fhenix.zone/client-sdk/guides/permits
+   */
+  async ensurePermit(): Promise<void> {
+    const client = this.requireClient();
+
+    const active = client.permits.getActivePermit();
+    if (active) {
+      const check = ValidationUtils.isValid(active);
+      if (check.valid) return;
+
+      // A malformed stored permit is never recoverable by re-signing; drop it so
+      // getOrCreateSelfPermit starts clean instead of failing on the same payload.
+      if (check.error === "invalid-schema") client.permits.removeActivePermit();
+    }
+
+    await client.permits.getOrCreateSelfPermit();
+  }
+
+  /** Expose the active permit so the UI can surface its expiry. */
+  getActivePermit() {
+    if (!this.client || !this._isReady) return undefined;
+    return this.client.permits.getActivePermit();
+  }
+
+  /**
+   * Check a decryption result against the on-chain verifier before spending gas on it.
+   *
+   * `claimUnshielded` reverts on a bad proof, so pre-flighting turns a failed transaction
+   * into a plain error. Returns false rather than throwing when the check itself cannot
+   * run, so a verifier outage never blocks an otherwise valid claim.
+   */
+  async verifyDecryptResult(ctHash: bigint, cleartext: bigint, signature: `0x${string}`): Promise<boolean> {
+    const client = this.requireClient();
+    return client.verifyDecryptResult(ctHash, cleartext, signature);
+  }
+
+  /** Unix seconds at which the active permit expires, if any. */
+  getPermitExpiry(): number | undefined {
+    const permit = this.getActivePermit();
+    return permit ? Number(permit.expiration) : undefined;
+  }
+
   // ============ ENCRYPTION ============
 
   /**
-   * Encrypt a uint64 value using cofhejs.
-   * Returns CoFheInUint64 (ctHash + signature) to send to contract.
-   * Contract expects InEuint64 (utype=5), so we MUST use Encryptable.uint64().
-   * 
-   * @see https://cofhe-docs.fhenix.zone/cofhejs/guides/encryption
+   * Encrypt a uint64 for a contract parameter of type `InEuint64`.
+   *
+   * The returned object carries the verifier signature that authorizes this ciphertext
+   * for *this* account on *this* chain — it cannot be reused elsewhere.
+   *
+   * @param value Amount in confidential units (6 decimals), not underlying token units.
+   * @see https://cofhe-docs.fhenix.zone/client-sdk/guides/encrypting-inputs
    */
-  async encrypt(value: bigint): Promise<CoFheInUint64> {
-    if (!this._isReady) throw new Error("cofhejs not initialized");
+  async encryptUint64(
+    value: bigint,
+    onStep?: (step: string) => void
+  ): Promise<EncryptedUint64Input> {
+    const client = this.requireClient();
 
-
-    const result = await cofhejs.encrypt([Encryptable.uint64(value)]);
-
-    if (!result.success) {
-      throw new Error(`Encryption failed: ${result.error}`);
+    let builder = client.encryptInputs([Encryptable.uint64(value)]);
+    if (onStep) {
+      builder = builder.onStep((step, ctx) => {
+        if (ctx?.isStart) onStep(String(step));
+      });
     }
 
-    const encrypted = result.data[0] as unknown as CoFheInUint64;
+    const [encrypted] = await builder.execute();
+
+    // Catches a malformed/mistyped input here rather than as an opaque on-chain revert.
+    assertCorrectEncryptedItemInput(encrypted);
+
     return encrypted;
   }
 
-  // ============ DECRYPTION (UNSEALING) ============
+  // ============ DECRYPTION ============
 
   /**
-   * Unseal a sealed ciphertext hash returned from contract.
-   * Requires a valid permit (created during init or manually).
-   * 
-   * @see https://cofhe-docs.fhenix.zone/cofhejs/guides/sealing-unsealing
+   * Decrypt a handle for UI display. Requires a permit; never publishable on-chain.
+   *
+   * @see https://cofhe-docs.fhenix.zone/client-sdk/guides/decrypt-to-view
    */
-  async unseal(ctHash: bigint, maxRetries = 10, retryDelayMs = 10000): Promise<bigint> {
-    if (!this._isReady) throw new Error("cofhejs not initialized");
+  async decryptForView(ctHash: bigint): Promise<bigint> {
+    const client = this.requireClient();
+    await this.ensurePermit();
 
-    // Ensure permit exists before attempting unseal
-    if (!this._hasPermit) {
-      const permitOk = await this.ensurePermit();
-      if (!permitOk) {
-        throw new Error("Cannot unseal: permit creation failed. Permit is required for sealoutput endpoint.");
+    try {
+      return await client
+        .decryptForView(ctHash, FheTypes.Uint64)
+        .set404RetryTimeout(VIEW_404_RETRY_MS)
+        .execute();
+    } catch (err) {
+      // The Threshold Network can reject a permit the local schema check accepted (for
+      // example after an ACL change). Drop it so the next call re-signs instead of
+      // replaying a permit the network has already refused.
+      if (isCofheError(err) && err.code === CofheErrorCode.PermitNotFound) {
+        try { client.permits.removeActivePermit(); } catch { /* nothing to remove */ }
       }
+      throw this.normalizeDecryptError(err);
     }
-
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        // Try cofhejs.unseal first
-        const result = await cofhejs.unseal(ctHash, FheTypes.Uint64);
-
-        if (!result.success) {
-          const errorMsg = result.error instanceof Error ? result.error.message : String(result.error);
-
-          // If permit-related error, mark permit as invalid for retry next time
-          if (errorMsg.includes("403") || errorMsg.includes("Permit") || errorMsg.includes("permit") || errorMsg.includes("IssuerSignature")) {
-            this._hasPermit = false;
-          }
-
-          // Fallback to manual unseal (which throws if it fails)
-
-          const value = await this.manualUnseal(ctHash);
-          return value;
-        }
-
-        const value = BigInt(result.data as bigint | number | string);
-        return value;
-
-      } catch (err) {
-        const errorMsg = (err instanceof Error ? err.message : String(err)).toLowerCase();
-
-        // "Ciphertext not found" from the CoFHE service means the data genuinely doesn't exist
-        // (account has never shielded, or testnet was reset). Stop retrying immediately — no point
-        // waiting 100 seconds for data that will never appear.
-        const isMissing =
-          errorMsg.includes("ciphertext not found") ||
-          errorMsg.includes("failed to fetch full ciphertext");
-
-        if (isMissing) {
-          throw new Error("Ciphertext not found: no shielded balance");
-        }
-
-        // CoFHE is still processing (428 or manual unseal 'CT source is not ready')
-        const isPending =
-          errorMsg.includes("sealed data not found") ||
-          errorMsg.includes("428") ||
-          errorMsg.includes("precondition") ||
-          errorMsg.includes("ct source is not ready");
-
-        if (isPending && attempt < maxRetries) {
-          await new Promise(resolve => setTimeout(resolve, retryDelayMs));
-          continue; // Move to next loop iteration
-        }
-
-        // If it's a completely different error, or we reached max retries
-        if (attempt >= maxRetries) {
-          throw err;
-        }
-      }
-    }
-
-    throw new Error("Unseal failed after retries");
-  }
-
-
-  /**
-   * Manual unseal: Directly call sealoutput endpoint bypassing cofhejs
-   */
-  private async manualUnseal(ctHash: bigint): Promise<bigint> {
-    // Get permit from cofhejs
-    const permitResult = cofhejs.getPermission();
-    if (!permitResult.success) {
-      throw new Error(`No permission available: ${permitResult.error}`);
-    }
-    const permission = permitResult.data;
-
-    const thresholdNetworkUrl = "https://testnet-cofhe-tn.fhenix.zone";
-    const body = {
-      ct_tempkey: ctHash.toString(16).padStart(64, "0"),
-      host_chain_id: this.currentChainId,
-      permit: permission,
-    };
-
-    const response = await fetch(`${thresholdNetworkUrl}/sealoutput`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    const responseData = await response.json();
-
-    if (responseData.error_message) {
-      throw new Error(`sealoutput error: ${responseData.error_message}`);
-    }
-
-    if (!responseData.sealed) {
-      throw new Error("sealoutput returned null sealed data");
-    }
-
-    // Unseal using permit's sealing key
-    const allPermits = cofhejs.getAllPermits();
-    if (!allPermits.success) throw new Error("Cannot get permits for unsealing");
-
-    const activePermit = Object.values(allPermits.data)[0];
-    if (!activePermit) throw new Error("No active permit found");
-
-    const unsealed = activePermit.unseal(responseData.sealed);
-    return unsealed;
-  }
-
-  // ============ PERMIT MANAGEMENT ============
-
-  /**
-   * Ensure a valid permit exists for the current account.
-   * Called during init and before unseal operations.
-   * Retries once if permit creation fails.
-   */
-  private async ensurePermit(): Promise<boolean> {
-    if (this._hasPermit) {
-      return true;
-    }
-
-
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        const permitResult = await cofhejs.createPermit();
-        if (permitResult.success) {
-          this._hasPermit = true;
-
-          // Log permit details for debugging
-          try {
-            const permissionResult = cofhejs.getPermission();
-            if (permissionResult.success) {
-              const perm = permissionResult.data;
-            }
-          } catch (logErr) {
-          }
-
-          return true;
-        } else {
-          const errorMsg = permitResult.error instanceof Error ? permitResult.error.message : String(permitResult.error);
-        }
-      } catch (permitErr) {
-      }
-
-      if (attempt < 2) {
-        await new Promise(r => setTimeout(r, 1000));
-      }
-    }
-
-    return false;
   }
 
   /**
-   * Create a permit for accessing encrypted data.
-   * Public method for manual permit creation.
-   * 
-   * @see https://cofhe-docs.fhenix.zone/cofhejs/guides/permits-management
+   * Decrypt a handle together with a Threshold Network signature a contract can verify.
+   *
+   * Used to settle unshield claims: `unshield` calls `FHE.allowPublic` on the burned
+   * handle, so no permit is needed — the ACL already permits anyone to decrypt it.
+   *
+   * @see https://cofhe-docs.fhenix.zone/client-sdk/guides/decrypt-to-tx
    */
-  async createPermit() {
-    if (!this._isReady) throw new Error("cofhejs not initialized");
+  async decryptForTx(ctHash: bigint): Promise<DecryptForTxResult> {
+    const client = this.requireClient();
 
-
-    const result = await cofhejs.createPermit();
-
-    if (!result.success) {
-      throw new Error(`Permit creation failed: ${result.error}`);
+    try {
+      const result = await client
+        .decryptForTx(ctHash)
+        .set404RetryTimeout(TX_404_RETRY_MS)
+        .withoutPermit()
+        .execute();
+      return result as DecryptForTxResult;
+    } catch (err) {
+      throw this.normalizeDecryptError(err);
     }
-
-    return result.data;
   }
 
   /**
-   * Reset service state — clears signer, provider, and permit from memory.
-   * Called during wallet lock to ensure no sensitive cryptographic material remains.
-   * Next FHE operation will require full re-initialization.
+   * Distinguish "this ciphertext will never exist" from a genuine failure.
+   *
+   * A missing ciphertext is the normal state for an account that has never shielded, and
+   * callers render it as a zero balance rather than an error. The SDK reports it as a
+   * decrypt failure, so the specific cause is only available in the message — the error
+   * code alone cannot separate it from a real outage.
+   */
+  private normalizeDecryptError(err: unknown): Error {
+    const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+
+    if (msg.includes("ciphertext not found") || msg.includes("failed to fetch full ciphertext")) {
+      return new CiphertextNotFoundError();
+    }
+
+    if (isCofheError(err)) {
+      return new Error(`${err.code}: ${err.message}`);
+    }
+    return err instanceof Error ? err : new Error(String(err));
+  }
+
+  // ============ LIFECYCLE ============
+
+  /**
+   * Drop all connection state. Called on wallet lock so no signer, viem client or
+   * permit reference survives in the JS heap.
+   *
+   * Note: `disconnect()` deliberately leaves persisted permits in storage — they are
+   * scoped to an account the user still owns and re-signing on every unlock would be
+   * hostile. Clearing them is `StorageManager`'s job on wallet removal.
    */
   reset(): void {
+    try {
+      this.client?.disconnect();
+    } catch {
+      // Disconnect is best-effort; a failure here must not block the lock path.
+    }
+
+    try {
+      // The ZK-proving worker holds TFHE state and fetched FHE keys. Leaving it alive
+      // across a lock would contradict the wallet's "wipe sensitive memory on lock"
+      // guarantee. It is recreated lazily on the next encryption.
+      terminateWorker();
+    } catch {
+      // No worker running (or none supported) — nothing to tear down.
+    }
+
+    this.client = null;
     this._isReady = false;
-    this._hasPermit = false;
-    this.provider = null;
-    this.signer = null;
     this.initPromise = null;
+    this.pendingKey = null;
     this.initError = null;
     this.currentAccount = null;
-    this.currentChainId = 11155111;
+    this.currentChainId = null;
     this.currentNetworkId = undefined;
+    this.currentKey = null;
   }
 }
 

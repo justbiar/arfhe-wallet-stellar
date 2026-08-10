@@ -10,6 +10,7 @@ import FheCofheService from "./backend/FheCofheService.js";
 
 import { WalletConnectService } from "./backend/WalletConnectService";
 import SpamFilter from "./backend/SpamFilter.js";
+import PendingClaimQueue from "./backend/PendingClaimQueue.js";
 
 export const WalletContext = createContext<AppContext | undefined>(undefined);
 
@@ -31,6 +32,8 @@ export class AppContext {
   walletConnectService: WalletConnectService;
   // spam filter
   spamFilter: SpamFilter;
+  /** Unsettled unshields, so a closed popup never strands burned balance. */
+  pendingClaimQueue: PendingClaimQueue;
 
   constructor() {
     this.storageManager = new StorageManager();
@@ -42,6 +45,7 @@ export class AppContext {
     this.contactManager = new ContactManager(this.storageManager);
     this.walletConnectService = new WalletConnectService(this.accountManager);
     this.spamFilter = new SpamFilter(this.storageManager);
+    this.pendingClaimQueue = new PendingClaimQueue(this.storageManager);
 
     // ── Register lock cleanup callbacks ──
     // When wallet locks, wipe all sensitive data from memory

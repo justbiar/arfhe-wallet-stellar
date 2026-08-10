@@ -12,9 +12,14 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "verify:fhe": "node scripts/verify-fhe.mjs",
+    "verify:fhe:erc20": "node scripts/verify-fhe-erc20.mjs",
+    "verify:discovery": "node scripts/verify-discovery.mjs",
+    "audit:privacy": "node scripts/audit-privacy.mjs"
   },
   "dependencies": {
+    "@cofhe/sdk": "^0.5.2",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
     "@fhenixprotocol/contracts": "^0.3.1",
@@ -32,7 +37,6 @@
     "@web3auth/modal": "^9.7.0",
     "alchemy-sdk": "^3.6.5",
     "buffer": "^6.0.3",
-    "cofhejs": "^0.3.1",
     "cross-env": "^10.0.0",
     "cytoscape": "^3.33.1",
     "cytoscape-fcose": "^2.2.0",
@@ -46,6 +50,7 @@
     "react-toastify": "^11.0.5",
     "recharts": "^3.1.2",
     "tweetnacl": "^1.0.3",
+    "viem": "^2.47.0",
     "vite-plugin-top-level-await": "^1.6.0",
     "vite-plugin-wasm": "^3.5.0",
     "web-bip39": "git+https://github.com/hujiulong/web-bip39.git"

@@ -7,13 +7,22 @@
  */
 
 import React, { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
-import { Box, Typography, Fade } from "@mui/material";
+import { Box, Typography, Fade, Button } from "@mui/material";
 import { Lock } from "@mui/icons-material";
 
 interface FheEncryptingOverlayProps {
     visible: boolean;
     message?: string;
+    /**
+     * Dismiss the overlay without touching the operation.
+     *
+     * FHE work takes tens of seconds (ZK proving, threshold-network round-trips). Holding
+     * the whole UI hostage for it is the wrong default, so callers pass this to let the
+     * user carry on while the transaction finishes in the background.
+     */
+    onDismiss?: () => void;
 }
 
 // Cool blue-steel wallet theme
@@ -81,7 +90,7 @@ function MatrixRainCanvas() {
     );
 }
 
-function OverlayContent({ message }: { message: string }) {
+function OverlayContent({ message, onDismiss, dismissLabel }: { message: string; onDismiss?: () => void; dismissLabel: string }) {
     return (
         <Fade in timeout={400}>
             <Box
@@ -168,6 +177,23 @@ function OverlayContent({ message }: { message: string }) {
                         {message}
                     </Typography>
 
+                    {/* Let the user leave — the transaction keeps running without the UI. */}
+                    {onDismiss && (
+                        <Button
+                            size="small"
+                            onClick={onDismiss}
+                            sx={{
+                                mt: 0.5,
+                                color: THEME_SECONDARY,
+                                fontSize: "0.7rem",
+                                fontWeight: 700,
+                                textTransform: "none",
+                            }}
+                        >
+                            {dismissLabel}
+                        </Button>
+                    )}
+
                     {/* Animated dots */}
                     <Box sx={{ display: "flex", gap: 1 }}>
                         {[0, 1, 2].map((i) => (
@@ -196,12 +222,18 @@ function OverlayContent({ message }: { message: string }) {
 
 export default function FheEncryptingOverlay({
     visible,
-    message = "Encrypting with FHE...",
+    message,
+    onDismiss,
 }: FheEncryptingOverlayProps) {
+    const { t } = useTranslation();
     if (!visible) return null;
     // Render into document.body so it covers the full viewport
     return createPortal(
-        <OverlayContent message={message} />,
+        <OverlayContent
+            message={message ?? t("privacy.encryptingAmount")}
+            onDismiss={onDismiss}
+            dismissLabel={t("privacy.runInBackground")}
+        />,
         document.body
     );
 }

@@ -27,6 +27,44 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     };
   }, [appContext.accountManager, appContext.networkProvider]);
 
+  // --- Resume interrupted unshields ---
+  // The second half of an unshield (decrypt + claim) can be cut short by the popup
+  // closing, leaving burned balance behind an unsettled claim. Retry whenever the wallet
+  // is open and unlocked so it completes without the user having to do anything.
+  //
+  // A locked wallet cannot participate: settling needs a signature, and the signing key
+  // only exists in memory while unlocked. Resuming here is the safe equivalent of a
+  // background worker, without handing that key to one.
+  React.useEffect(() => {
+    let cancelled = false;
+
+    const resume = async () => {
+      if (cancelled) return;
+      if (!appContext.storageManager.isUnlocked()) return;
+      if (location.pathname === '/auth' || location.pathname === '/') return;
+
+      const account = appContext.accountManager.GetActive();
+      if (!account?.ethers_wallet) return;
+
+      const network = appContext.networkProvider.getActiveNetwork();
+      try {
+        const settled = await network.drainPendingClaims(account, appContext.pendingClaimQueue);
+        if (settled > 0 && !cancelled) setRefresh(f => f + 1);
+      } catch {
+        // Best-effort background work; failures stay queued for the next attempt.
+      }
+    };
+
+    void resume();
+    // Also retry periodically: the threshold network may simply have been slow.
+    const interval = setInterval(() => void resume(), 60_000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [appContext, location.pathname]);
+
   // --- Auto-Lock Feature ---
   React.useEffect(() => {
     let timeoutId: NodeJS.Timeout;

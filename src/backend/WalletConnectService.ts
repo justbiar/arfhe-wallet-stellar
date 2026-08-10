@@ -32,10 +32,22 @@ const SUPPORTED_CHAINS = [
     "eip155:1329",    // Sei
 ];
 
+/**
+ * Methods advertised to dApps during session negotiation.
+ *
+ * Only what the approval flow actually implements belongs here. Advertising a method the
+ * wallet then refuses pushes dApps into choosing it and failing at signing time, when the
+ * user has already committed to the flow.
+ *
+ * Deliberately absent:
+ *  - `eth_sign` — signs opaque bytes that may be a transaction hash the user never sees.
+ *    The blind-signing attack; disabled by every major wallet.
+ *  - `eth_signTransaction` — returns a signed transaction for the site to broadcast
+ *    whenever it likes. The wallet has no implementation for it, and offering it would
+ *    hand out a signature with no control over when it lands.
+ */
 const SUPPORTED_METHODS = [
     "eth_sendTransaction",
-    "eth_signTransaction",
-    "eth_sign",
     "personal_sign",
     "eth_signTypedData",
     "eth_signTypedData_v4",

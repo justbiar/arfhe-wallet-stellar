@@ -425,40 +425,86 @@ async function getUnreadNotificationCount() {
 
 // ─── Message Handler (popup ↔ SW & content script ↔ SW) ────────────────
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // 1. Content Script'ten gelen mesajları yönet (DApp etkileşimi için)
-  if (sender.tab && message.method) {
-    if (message.method === "eth_requestAccounts") {
-      // TODO: Gerçek bir bağlantı onay penceresi aç
-      // Şimdilik, kullanıcının siteye bağlanma isteğini aldığımızı bildirelim.
-      // Bu, siteye "bağlandım" cevabı dönmez, ancak en azından iletişim kurulduğunu gösterir.
-      console.log(`Connection request from ${sender.tab.title} (${sender.tab.url})`);
-      
-      // Basit bir notification göster
-      chrome.notifications.create({
-        type: 'basic',
-        iconUrl: 'icon128.png',
-        title: 'Connection Request',
-        message: `${sender.tab.title} wants to connect to your wallet.`,
-        requireInteraction: true
-      });
+/**
+ * EIP-1193 error codes used when answering a web page.
+ * @see https://eips.ethereum.org/EIPS/eip-1193#provider-errors
+ */
+const RPC_ERR_REJECTED = 4001;
+const RPC_ERR_UNSUPPORTED_METHOD = 4200;
 
-      // Şimdilik connection UI olmadığı için bu isteği reddet (veya beklemeye al)
-      // Ancak "connected" olmadığı sürece dApp çalışmayacaktır.
-      // Basit bir mock cevap dönelim (test amaçlı):
-      // sendResponse({ result: ["0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"] });
-      // return true;
-    }
-    // Diğer RPC çağrıları için...
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Everything in `handleMessage` is privileged: it can fetch arbitrary URLs with the
+  // extension's host permissions, repoint RPC endpoints, raise wallet-branded
+  // notifications and read the pending-transaction list.
+  //
+  // A content script runs on every page and forwards what the page gives it, so anything
+  // reachable from `sender.tab` is reachable by any website. Previously the split was
+  // `sender.tab && message.method` — a page message with no `method` field fell straight
+  // through to the privileged handler, which let any site use the wallet as an HTTP proxy
+  // and read the user's pending transactions.
+  //
+  // The origin of a message is the only thing that can be trusted here, so that is what
+  // gates it: extension pages (no `tab`, our own id) get the privileged surface, and
+  // everything else is handled as an untrusted dApp request.
+  const isExtensionPage = !sender.tab && sender.id === chrome.runtime.id;
+
+  if (!isExtensionPage) {
+    handleDappRequest(message, sender).then(sendResponse).catch((e) => {
+      sendResponse({ error: { code: RPC_ERR_REJECTED, message: e?.message ?? "Request failed" } });
+    });
     return true;
   }
 
-  // 2. Popup'tan gelen internal mesajları yönet
   handleMessage(message).then(sendResponse).catch((e) => {
     sendResponse({ success: false, error: e.message });
   });
   return true; // Keep channel open for async response
 });
+
+/**
+ * Answer an EIP-1193 request that originated from a web page.
+ *
+ * Deliberately minimal. Injected-provider connections are not implemented yet — there is
+ * no approval UI behind them — and a wallet must not guess at consent, so connection
+ * methods are declined rather than left to hang. Sites reach the wallet through
+ * WalletConnect, which has a real approval flow.
+ *
+ * Read-only chain calls are not proxied either: doing so would make the wallet an open
+ * relay for any page, and a site that wants chain data can query an RPC itself.
+ */
+async function handleDappRequest(message, sender) {
+  const method = typeof message?.method === "string" ? message.method : "";
+  if (!method) {
+    return { error: { code: RPC_ERR_UNSUPPORTED_METHOD, message: "Missing method" } };
+  }
+
+  const origin = sender?.origin || (sender?.url ? new URL(sender.url).origin : "unknown site");
+
+  switch (method) {
+    case "eth_requestAccounts":
+    case "eth_accounts":
+      // No approval UI exists for the injected provider, so there is no consent to report.
+      // Returning an empty account list (the EIP-1193 answer for "not connected") would be
+      // the lie that a connection was attempted and refused by the user.
+      return {
+        error: {
+          code: RPC_ERR_UNSUPPORTED_METHOD,
+          message:
+            "Arfhe Wallet does not support direct site connections yet. " +
+            "Connect through WalletConnect instead.",
+        },
+      };
+
+    default:
+      console.debug(`[arfhe] unsupported dApp method ${method} from ${origin}`);
+      return {
+        error: {
+          code: RPC_ERR_UNSUPPORTED_METHOD,
+          message: `Arfhe Wallet does not support ${method} from a site. Use WalletConnect.`,
+        },
+      };
+  }
+}
 
 async function handleMessage(message) {
   switch (message.type) {

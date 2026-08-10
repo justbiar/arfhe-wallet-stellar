@@ -206,3 +206,57 @@ export function addRecentConnection(conn: Omit<ActiveDAppConnection, 'connectedA
 export function clearRecentConnections(): void {
     localStorage.removeItem('arfhe_recent_dapps');
 }
+
+// ─── Request / wallet agreement ────────────────────────────────────
+
+/**
+ * Check that an incoming WalletConnect request refers to the chain and account the wallet
+ * is actually about to sign with.
+ *
+ * Both halves guard against silently signing something other than what was displayed:
+ *
+ *  - The **chain** is signed into the transaction. A request naming mainnet, approved while
+ *    the wallet sits on a testnet, previously executed on the testnet's RPC — and the
+ *    reverse sent a transaction the user believed was a test onto mainnet with real funds.
+ *  - The **account** is what the site expects to have signed. Substituting whichever
+ *    account happens to be selected produces a signature attributed to the wrong address,
+ *    and for a transaction moves funds out of an account the request never named.
+ *
+ * Kept here, apart from the dialog, because it decides whether funds move and therefore
+ * has to be verifiable on its own.
+ *
+ * @param requestChainId CAIP-2 chain from the request, e.g. `"eip155:11155111"`.
+ * @param activeChainId  Chain id of the wallet's active network.
+ * @param claimedSigner  Address the request names, if any. Ignored when absent — not every
+ *                       method carries one, and inventing a mismatch would break them.
+ * @param activeAddress  Address the wallet would sign with.
+ * @returns `null` when the request may proceed, otherwise the reason to show the user.
+ */
+export function checkRequestMatchesWallet(
+    requestChainId: string | undefined,
+    activeChainId: number | undefined,
+    claimedSigner: unknown,
+    activeAddress: string | undefined
+): string | null {
+    const requested = Number(requestChainId?.split(':')?.[1]);
+    if (!Number.isFinite(requested)) {
+        return `The site did not say which chain this request is for (${requestChainId ?? 'missing'}).`;
+    }
+    if (activeChainId === undefined || !Number.isFinite(activeChainId)) {
+        return 'No active network. Select a network, then approve again.';
+    }
+    if (requested !== Number(activeChainId)) {
+        return `This request is for chain ${requested}, but the wallet is on chain ${Number(activeChainId)}. ` +
+            `Switch networks in the wallet, then approve again.`;
+    }
+
+    if (typeof claimedSigner === 'string' && claimedSigner.startsWith('0x')) {
+        if (!activeAddress) return 'No active account to sign with.';
+        if (claimedSigner.toLowerCase() !== activeAddress.toLowerCase()) {
+            return `The site asked ${claimedSigner} to sign, but the active account is ${activeAddress}. ` +
+                `Switch accounts, then approve again.`;
+        }
+    }
+
+    return null;
+}

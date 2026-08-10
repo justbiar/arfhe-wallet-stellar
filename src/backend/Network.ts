@@ -338,6 +338,47 @@ class Network {
     return results;
   }
 
+  /** Resolved ERC-20 decimals per token address; immutable after deployment. */
+  private decimalsCache = new Map<string, number>();
+
+  /**
+   * Read an ERC-20's `decimals()` from the contract.
+   *
+   * Decimals scale the amount that actually leaves the wallet, so they must come from the
+   * token rather than from cached metadata supplied by a third-party indexer: treating a
+   * 6-decimal token as 18-decimal sends a million times the intended amount.
+   *
+   * @throws When the token does not answer `decimals()`. Guessing here would mean signing
+   *         a transfer whose size nobody has established.
+   */
+  async getErc20Decimals(tokenAddress: string): Promise<number> {
+    const key = tokenAddress.toLowerCase();
+    const cached = this.decimalsCache.get(key);
+    if (cached !== undefined) return cached;
+
+    const { Interface } = await import("ethers");
+    const iface = new Interface(["function decimals() view returns (uint8)"]);
+
+    const hex = await this.call("eth_call", [
+      { to: tokenAddress, data: iface.encodeFunctionData("decimals", []) },
+      "latest",
+    ]);
+
+    if (!hex || hex === "0x") {
+      throw new Error(
+        "This token does not report its decimals, so the amount to send cannot be determined safely."
+      );
+    }
+
+    const decimals = Number(BigInt(hex));
+    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) {
+      throw new Error(`This token reports an implausible decimals value (${decimals}).`);
+    }
+
+    this.decimalsCache.set(key, decimals);
+    return decimals;
+  }
+
   async getBlockNumber(): Promise<number> {
     const result = await this.call("eth_blockNumber", []);
     return parseInt(result, 16);
@@ -1255,7 +1296,17 @@ class Network {
       gasPrice?: string;
       data?: string;
       gasMultiplier?: number;
-    }
+    },
+    /**
+     * Called with the hash the moment the transaction is broadcast, before it is mined.
+     *
+     * This method only returns once there is a receipt, so without this hook the caller
+     * holds nothing for the entire mining window — the user watches a spinner with no hash
+     * and no explorer link, and a popup closed in that window leaves no record of a
+     * transaction that is already on-chain. The same applies when the transaction reverts:
+     * the error thrown below would otherwise discard the hash of a real transaction.
+     */
+    onBroadcast?: (hash: string) => void
   ): Promise<string> {
     if (!this.rpc_url) throw new Error("RPC URL not set");
     if (!account.ethers_wallet) throw new Error("Account is missing ethers_wallet");
@@ -1304,6 +1355,14 @@ class Network {
 
     try {
       const sentTx = await connectedWallet.sendTransaction(txRequest);
+
+      // Hand the hash over before waiting. Everything after this point can take minutes,
+      // and the transaction is already irreversible on the network.
+      try {
+        onBroadcast?.(sentTx.hash);
+      } catch {
+        // A UI callback throwing must not look like a failed transaction.
+      }
 
       // Track as pending until confirmed
       this.pendingTransactions.set(sentTx.hash, {
@@ -2284,11 +2343,9 @@ class Network {
       );
     }
 
-    const decimalsHex = await this.call("eth_call", [
-      { to: underlyingTokenAddress, data: erc20.encodeFunctionData("decimals", []) },
-      "latest",
-    ]);
-    const decimals = decimalsHex && decimalsHex !== "0x" ? Number(BigInt(decimalsHex)) : 18;
+    // Read from the token, never assume. Defaulting to 18 for a 6-decimal token would
+    // approve and pull a million times the amount the user typed.
+    const decimals = await this.getErc20Decimals(underlyingTokenAddress);
     const amountValue = parseUnitsFn(amount, decimals);
 
     await this.assertAboveConfidentialPrecision(shieldedTokenAddress, amountValue, decimals);

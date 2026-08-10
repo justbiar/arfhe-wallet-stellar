@@ -333,12 +333,27 @@ export default class AccountManager {
     if (account_index < 0 || account_index >= this.accounts.length) {
       return;
     }
+    const removed = this.accounts[account_index].GetAddress();
     this.accounts.splice(account_index, 1);
 
     if (this.active === account_index) this.active = -1;
     this.notifyListeners();
     this.updateStorage();
+
+    // Site grants naming this account have to go with it. Left behind, they would sit in
+    // the connected-sites list pointing at an address the wallet no longer holds — and
+    // come back as live permissions the moment that account is re-imported.
+    if (removed) void this.onAccountRemoved?.(removed);
   }
+
+  /**
+   * Called after an account is removed, so dependent records can be cleaned up.
+   *
+   * A callback rather than a direct import: AccountManager is constructed before the
+   * services that depend on it, and reaching into them from here would make that ordering
+   * load-bearing.
+   */
+  onAccountRemoved?: (address: string) => void | Promise<void>;
 
   GetActiveIndex(): number {
     return this.active;

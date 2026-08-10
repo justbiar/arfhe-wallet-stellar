@@ -11,6 +11,7 @@ import FheCofheService from "./backend/FheCofheService.js";
 import { WalletConnectService } from "./backend/WalletConnectService";
 import SpamFilter from "./backend/SpamFilter.js";
 import PendingClaimQueue from "./backend/PendingClaimQueue.js";
+import SitePermissionService from "./backend/SitePermissionService.js";
 
 export const WalletContext = createContext<AppContext | undefined>(undefined);
 
@@ -34,6 +35,8 @@ export class AppContext {
   spamFilter: SpamFilter;
   /** Unsettled unshields, so a closed popup never strands burned balance. */
   pendingClaimQueue: PendingClaimQueue;
+  /** Which websites may see which accounts, for the injected provider. */
+  sitePermissions: SitePermissionService;
 
   constructor() {
     this.storageManager = new StorageManager();
@@ -46,6 +49,11 @@ export class AppContext {
     this.walletConnectService = new WalletConnectService(this.accountManager);
     this.spamFilter = new SpamFilter(this.storageManager);
     this.pendingClaimQueue = new PendingClaimQueue(this.storageManager);
+    this.sitePermissions = new SitePermissionService();
+
+    // Removing an account must also remove every site's permission to use it.
+    this.accountManager.onAccountRemoved = (address) =>
+      this.sitePermissions.revokeAccountEverywhere(address);
 
     // ── Register lock cleanup callbacks ──
     // When wallet locks, wipe all sensitive data from memory

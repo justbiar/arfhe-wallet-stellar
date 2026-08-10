@@ -34,6 +34,7 @@ import {
 import { WalletContext } from '../AppContext';
 import { formatUnits, Interface, MaxUint256, JsonRpcProvider, Contract, Log } from 'ethers';
 import type { WCSessionInfo, WCNamespace } from '../types/index';
+import type { SitePermission } from '../backend/SitePermissionService.js';
 
 // ERC20 ABI
 const ERC20_ABI = [
@@ -76,6 +77,8 @@ function calculateApprovalRisk(
   isUnlimited: boolean,
   spenderAddress: string,
   tokenDecimals: number,
+  /** False when the token would not report `decimals()`, so the size is unverified. */
+  decimalsKnown: boolean = true,
 ): { score: number; level: 'critical' | 'high' | 'medium' | 'low'; reasons: string[] } {
   let score = 0;
   const reasons: string[] = [];
@@ -84,6 +87,12 @@ function calculateApprovalRisk(
   if (isUnlimited) {
     score += 50;
     reasons.push('Unlimited approval — spender can drain all tokens');
+  } else if (!decimalsKnown) {
+    // Scoring an amount whose scale is unknown would be guessing, and guessing low is the
+    // dangerous direction. An unsized allowance is treated as significant until the token
+    // says otherwise.
+    score += 35;
+    reasons.push('Token does not report its decimals — the allowance size cannot be verified');
   } else {
     // Large but finite approval
     const allowanceFloat = Number(allowanceRaw) / Math.pow(10, tokenDecimals);
@@ -226,11 +235,17 @@ class RevokeService {
         // Token metadata çek (symbol, decimals, name)
         const tokenContract = new Contract(tokenAddress, ERC20_ABI, this.provider);
 
-        const [symbol, decimals, name] = await Promise.all([
+        // A token that will not report its decimals cannot have its allowance sized.
+        // Assuming 18 was the quiet failure mode here: a 6-decimal allowance rendered as
+        // 18-decimal looks a million times smaller, so a dangerous approval scores as a
+        // trivial one. The unknown case is tracked and treated as unsized instead.
+        const [symbol, rawDecimals, name] = await Promise.all([
           tokenContract.symbol().catch(() => 'UNKNOWN'),
-          tokenContract.decimals().catch(() => 18),
+          tokenContract.decimals().catch(() => null),
           tokenContract.name().catch(() => 'Unknown Token')
         ]);
+        const decimalsKnown = rawDecimals !== null && rawDecimals !== undefined;
+        const decimals = decimalsKnown ? Number(rawDecimals) : 18;
 
         // Bu token için tüm approval loglarını filtrele
         const tokenLogs = allLogs.filter((log) => log.address.toLowerCase() === tokenAddress);
@@ -253,7 +268,9 @@ class RevokeService {
             const isUnlimited = currentAllowance >= MaxUint256 / 2n;
             const allowanceFormatted = isUnlimited
               ? '∞ UNLIMITED'
-              : formatUnits(currentAllowance, decimals);
+              : decimalsKnown
+                ? formatUnits(currentAllowance, decimals)
+                : `${currentAllowance.toString()} (raw)`;
 
             // Spender ismini bul (varsa)
             const spenderInfo = COMMON_SPENDERS.find(
@@ -261,7 +278,7 @@ class RevokeService {
             );
             const spenderName = spenderInfo?.name || `Contract ${spenderAddress.slice(0, 6)}...`;
 
-            const risk = calculateApprovalRisk(currentAllowance, isUnlimited, spenderAddress, decimals);
+            const risk = calculateApprovalRisk(currentAllowance, isUnlimited, spenderAddress, decimals, decimalsKnown);
 
             approvals.push({
               tokenAddress,
@@ -340,10 +357,13 @@ const RevokeAlchemyPage = () => {
   const activeAccount = context?.accountManager?.GetActive();
   const network = context?.networkProvider?.getActiveNetwork();
   const wcService = context?.walletConnectService;
+  const sitePermissions = context?.sitePermissions;
   const theme = useTheme();
 
   const [approvals, setApprovals] = useState<TokenApproval[]>([]);
   const [sessions, setSessions] = useState<WCSessionInfo[]>([]);
+  /** Sites connected through the injected provider (`window.ethereum`). */
+  const [sites, setSites] = useState<SitePermission[]>([]);
   const [loading, setLoading] = useState(false);
   const [disconnectingAll, setDisconnectingAll] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
@@ -371,6 +391,55 @@ const RevokeAlchemyPage = () => {
     wcService.setOnSessionUpdate(() => fetchSessions());
     return () => wcService.setOnSessionUpdate(() => { });
   }, [wcService, fetchSessions]);
+
+  // Sites connected through the injected provider. A grant made there is exactly the kind
+  // of standing access this page exists to take back, so it belongs next to the
+  // WalletConnect sessions rather than only in Settings.
+  const fetchSites = useCallback(async () => {
+    if (!sitePermissions) {
+      setSites([]);
+      return;
+    }
+    try {
+      setSites(await sitePermissions.getAll());
+    } catch {
+      setSites([]);
+    }
+  }, [sitePermissions]);
+
+  /** Tell the worker so connected pages get `accountsChanged: []` without a reload. */
+  const notifyPermissionChange = () => {
+    try {
+      const runtime = (window as unknown as { chrome?: { runtime?: { sendMessage?: typeof chrome.runtime.sendMessage } } }).chrome?.runtime;
+      runtime?.sendMessage?.({ type: 'PERMISSIONS_CHANGED' });
+    } catch {
+      // Worker restarting; pages pick it up on their next request.
+    }
+  };
+
+  const handleDisconnectSite = async (origin: string) => {
+    if (!sitePermissions) return;
+    try {
+      await sitePermissions.revoke(origin);
+      notifyPermissionChange();
+      setSuccess(`${origin} disconnected`);
+      await fetchSites();
+    } catch (err) {
+      setError('Failed to disconnect: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
+  const handleDisconnectAllSites = async () => {
+    if (!sitePermissions) return;
+    try {
+      await sitePermissions.revokeAll();
+      notifyPermissionChange();
+      setSuccess('All site connections removed');
+      await fetchSites();
+    } catch (err) {
+      setError('Failed to disconnect all: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  };
 
   // Disconnect single WalletConnect session
   const handleDisconnectSession = async (topic: string) => {
@@ -435,7 +504,27 @@ const RevokeAlchemyPage = () => {
 
       setScanProgress(100);
       setScanMessage('Scan complete');
-      setApprovals(results);
+
+      // Shielding a token approves the confidential wrapper, so those approvals land in
+      // this list looking like an anonymous contract the user never recognises. Naming
+      // them is what stops a user revoking their own shielding — and, in the other
+      // direction, stops an unrelated contract borrowing that trust by looking familiar.
+      let labelled = results;
+      try {
+        const spenders = [...new Set(results.map((a) => a.spenderAddress))];
+        const confidential = await network.filterConfidentialTokens(spenders);
+        if (confidential.size > 0) {
+          labelled = results.map((a) =>
+            confidential.has(a.spenderAddress.toLowerCase())
+              ? { ...a, spenderName: `Arfhe shielded ${a.tokenSymbol}` }
+              : a
+          );
+        }
+      } catch {
+        // Detection unavailable — the raw address is still shown, just unlabelled.
+      }
+
+      setApprovals(labelled);
 
       if (results.length === 0) {
         setSuccess('No active approvals found in last 500 blocks');
@@ -461,15 +550,24 @@ const RevokeAlchemyPage = () => {
       const iface = new Interface(ERC20_ABI);
       const data = iface.encodeFunctionData('approve', [approval.spenderAddress, 0]);
 
-      const txHash = await network.sendTransaction(activeAccount, {
-        to: approval.tokenAddress,
-        value: '0',
-        data,
-        gasLimit: 100000n
-      });
+      const txHash = await network.sendTransaction(
+        activeAccount,
+        {
+          to: approval.tokenAddress,
+          value: '0',
+          data,
+          gasLimit: 100000n
+        },
+        // Show the hash as soon as it is broadcast. `sendTransaction` returns only once
+        // the transaction is mined, so without this the user sees nothing at all for the
+        // whole confirmation window — on a page whose entire purpose is reassurance.
+        (hash) => setSuccess(`Revoking — tx: ${hash.slice(0, 10)}…`)
+      );
 
-      setSuccess(`Revoked — tx: ${txHash.slice(0, 10)}...`);
-      setTimeout(fetchApprovals, 3000);
+      setSuccess(`Revoked — tx: ${txHash.slice(0, 10)}…`);
+      // Re-read from the chain rather than assuming; the allowance is only actually zero
+      // once the transaction is in a block.
+      await fetchApprovals();
 
     } catch (e) {
       setError((e instanceof Error ? e.message : String(e)) || 'Revoke failed');
@@ -480,6 +578,7 @@ const RevokeAlchemyPage = () => {
     if (activeAccount && network) {
       fetchApprovals();
       fetchSessions();
+      void fetchSites();
     }
   }, [activeAccount, network]);
 
@@ -596,6 +695,108 @@ const RevokeAlchemyPage = () => {
               </Box>
             </Stack>
           </Paper>
+        )}
+
+        {/* ─── Connected sites (injected provider) ───
+            A grant made through `window.ethereum` is standing access to the user's address
+            and a standing right to ask for signatures, so it belongs on the page whose
+            whole job is taking such access back — not only buried in Settings. */}
+        {sites.length > 0 && (
+          <Box sx={{ mb: 2.5 }}>
+            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
+              <Typography variant="body2" fontWeight={700} color="text.secondary" letterSpacing="0.03em" sx={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                Connected Sites ({sites.length})
+              </Typography>
+              {sites.length > 1 && (
+                <Button
+                  size="small"
+                  color="error"
+                  startIcon={<LinkOffRounded sx={{ fontSize: 14 }} />}
+                  onClick={handleDisconnectAllSites}
+                  sx={{ borderRadius: 2, fontWeight: 700, textTransform: 'none', fontSize: '0.7rem' }}
+                >
+                  Disconnect All
+                </Button>
+              )}
+            </Stack>
+
+            {sites.map((site) => (
+              <Paper
+                key={site.origin}
+                elevation={0}
+                sx={{
+                  p: 2,
+                  mb: 1,
+                  borderRadius: 3,
+                  border: '1px solid',
+                  borderColor: cardBorder,
+                  bgcolor: cardBg,
+                  backdropFilter: 'blur(16px)',
+                  transition: 'all 0.15s ease',
+                  '&:hover': { borderColor: 'primary.main' },
+                }}
+              >
+                <Stack direction="row" alignItems="center" spacing={1.5}>
+                  <Avatar
+                    sx={{
+                      width: 36, height: 36,
+                      bgcolor: isDark ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.08)',
+                      color: 'secondary.main',
+                      border: '1px solid',
+                      borderColor: cardBorder,
+                    }}
+                  >
+                    <LanguageRounded sx={{ fontSize: 18 }} />
+                  </Avatar>
+
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography variant="body2" fontWeight={700} noWrap>
+                      {site.origin.replace(/^https?:\/\//, '')}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" noWrap sx={{ fontSize: '0.65rem' }}>
+                      {site.accounts.map((a) => `${a.slice(0, 6)}…${a.slice(-4)}`).join(', ')}
+                    </Typography>
+                    <Stack direction="row" gap={0.5} sx={{ mt: 0.5 }} flexWrap="wrap">
+                      <Chip
+                        size="small"
+                        label="Browser"
+                        sx={{
+                          fontSize: '0.6rem', height: 18, fontWeight: 700,
+                          bgcolor: 'action.hover', color: 'text.secondary', border: 'none',
+                        }}
+                      />
+                      {site.lastUsedAt && (
+                        <Tooltip title={`Last used: ${new Date(site.lastUsedAt).toLocaleString()}`} arrow>
+                          <Chip
+                            size="small"
+                            icon={<AccessTimeRounded sx={{ fontSize: 10 }} />}
+                            label={new Date(site.lastUsedAt).toLocaleDateString()}
+                            sx={{
+                              fontSize: '0.6rem', height: 18, fontWeight: 600,
+                              color: 'text.secondary',
+                              '& .MuiChip-icon': { color: 'inherit' },
+                              border: 'none',
+                            }}
+                          />
+                        </Tooltip>
+                      )}
+                    </Stack>
+                  </Box>
+
+                  <Button
+                    size="small"
+                    color="error"
+                    variant="outlined"
+                    startIcon={<LinkOffRounded sx={{ fontSize: 14 }} />}
+                    onClick={() => handleDisconnectSite(site.origin)}
+                    sx={{ borderRadius: 2, fontWeight: 700, textTransform: 'none', fontSize: '0.7rem', flexShrink: 0 }}
+                  >
+                    Disconnect
+                  </Button>
+                </Stack>
+              </Paper>
+            ))}
+          </Box>
         )}
 
         {/* ─── Connected dApps ─── */}
@@ -916,7 +1117,7 @@ const RevokeAlchemyPage = () => {
         )}
 
         {/* ─── Secure State ─── */}
-        {!loading && approvals.length === 0 && sessions.length === 0 && (
+        {!loading && approvals.length === 0 && sessions.length === 0 && sites.length === 0 && (
           <Paper elevation={0} sx={{
             p: 4,
             textAlign: 'center',

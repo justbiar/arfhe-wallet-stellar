@@ -15,6 +15,18 @@
     /** Give up on a silent content script rather than leaking a pending promise per call. */
     const REQUEST_TIMEOUT_MS = 30_000;
 
+    /** Methods whose answer is a person deciding, so no timeout applies. */
+    const APPROVAL_METHODS = new Set([
+        'eth_requestAccounts',
+        'wallet_requestPermissions',
+        'eth_sendTransaction',
+        'personal_sign',
+        'eth_signTypedData',
+        'eth_signTypedData_v4',
+        'wallet_switchEthereumChain',
+        'wallet_addEthereumChain',
+    ]);
+
     /** EIP-1193 error for a provider that is present but cannot service the request. */
     class ProviderRpcError extends Error {
         constructor(code, message, data) {
@@ -32,6 +44,12 @@
         if (event.source !== window) return;
         if (event.data?.target !== CONTENT_TARGET) return;
 
+        // Wallet-pushed EIP-1193 events carry no id.
+        if (event.data.event) {
+            handleWalletEvent(event.data.event, event.data.data);
+            return;
+        }
+
         // Correlate by id. Resolving on any reply — as this did before — meant two
         // in-flight calls could settle with each other's result: `eth_accounts` could
         // return whatever `eth_sendTransaction` answered, and vice versa.
@@ -39,7 +57,7 @@
         if (!entry) return;
 
         pending.delete(event.data.id);
-        clearTimeout(entry.timer);
+        if (entry.timer) clearTimeout(entry.timer);
 
         const payload = event.data.data;
         if (payload?.error) {
@@ -56,15 +74,16 @@
     class ArfheEthereumProvider {
         constructor() {
             this.isArfhe = true;
-            /** No site connection is established until an approval flow exists. */
+            /** Populated from the wallet, and kept current by the events below. */
             this.chainId = null;
             this.selectedAddress = null;
+            this._connected = false;
             this._listeners = new Map();
         }
 
         /** EIP-1193: a method, not a property. dApps call `provider.isConnected()`. */
         isConnected() {
-            return false;
+            return this._connected;
         }
 
         request(args) {
@@ -78,12 +97,31 @@
             return new Promise((resolve, reject) => {
                 const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-                const timer = setTimeout(() => {
+                // Approval methods wait on a person, so they get no deadline; the wallet
+                // answers when the window is closed either way. Everything else must not
+                // hang forever on a wallet that never replies.
+                const waitsForUser = APPROVAL_METHODS.has(method);
+                const timer = waitsForUser ? null : setTimeout(() => {
                     pending.delete(id);
                     reject(new ProviderRpcError(4900, 'Arfhe Wallet did not respond'));
                 }, REQUEST_TIMEOUT_MS);
 
-                pending.set(id, { resolve, reject, timer });
+                pending.set(id, {
+                    // Keep the provider's cached view in step with what it just learned,
+                    // so `provider.chainId` is not stale the moment a dApp reads it.
+                    resolve: (result) => {
+                        if (method === 'eth_chainId' && typeof result === 'string') {
+                            provider.chainId = result;
+                        }
+                        if ((method === 'eth_accounts' || method === 'eth_requestAccounts') && Array.isArray(result)) {
+                            provider.selectedAddress = result[0] ?? null;
+                            provider._connected = result.length > 0;
+                        }
+                        resolve(result);
+                    },
+                    reject,
+                    timer,
+                });
 
                 window.postMessage({
                     target: INPAGE_TARGET,
@@ -154,6 +192,47 @@
 
     const provider = new ArfheEthereumProvider();
 
+    /**
+     * Apply a wallet-pushed event and forward it to the page's listeners.
+     *
+     * The cached `chainId` / `selectedAddress` are updated before emitting, because dApps
+     * commonly read them inside the handler — reading a stale value there is how a site
+     * ends up preparing a transaction for the chain the user just left.
+     */
+    function handleWalletEvent(event, data) {
+        switch (event) {
+            case 'chainChanged':
+                provider.chainId = data;
+                provider._connected = true;
+                provider._emit('chainChanged', data);
+                break;
+
+            case 'accountsChanged': {
+                const accounts = Array.isArray(data) ? data : [];
+                provider.selectedAddress = accounts[0] ?? null;
+
+                // An empty list is EIP-1193's "no longer authorised", which is a
+                // disconnect from the site's point of view.
+                if (accounts.length === 0 && provider._connected) {
+                    provider._connected = false;
+                    provider._emit('accountsChanged', accounts);
+                    provider._emit('disconnect', { code: 4900, message: 'Disconnected from Arfhe Wallet' });
+                    break;
+                }
+
+                if (!provider._connected) {
+                    provider._connected = true;
+                    provider._emit('connect', { chainId: provider.chainId });
+                }
+                provider._emit('accountsChanged', accounts);
+                break;
+            }
+
+            default:
+                provider._emit(event, data);
+        }
+    }
+
     // ── EIP-6963: announce alongside other wallets ─────────────────────
     //
     // Assigning `window.ethereum` is winner-takes-all, which is why the previous code
@@ -188,4 +267,16 @@
         window.ethereum = provider;
     }
     window.arfheWallet = provider;
+
+    // Learn the current chain, and whether this site already has a grant, without asking
+    // the user anything. `eth_accounts` never prompts, so this is silent for a site the
+    // user has not connected — it simply comes back empty.
+    provider.request({ method: 'eth_chainId' }).catch(() => { /* wallet not ready */ });
+    provider.request({ method: 'eth_accounts' })
+        .then((accounts) => {
+            if (Array.isArray(accounts) && accounts.length > 0) {
+                provider._emit('connect', { chainId: provider.chainId });
+            }
+        })
+        .catch(() => { /* not connected */ });
 })();

@@ -27,6 +27,48 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     };
   }, [appContext.accountManager, appContext.networkProvider]);
 
+  // --- Keep connected websites in step with the wallet ---
+  //
+  // The service worker answers sites on the wallet's behalf, so it has to know which chain
+  // and RPC are active. It also cannot see React state, which is why this is pushed rather
+  // than pulled.
+  //
+  // The `chainChanged` event is not optional politeness: EIP-1193 requires it, and a dApp
+  // that never receives it keeps preparing transactions for the chain the user has left.
+  React.useEffect(() => {
+    const runtime = (window as unknown as { chrome?: { runtime?: { id?: string; sendMessage?: typeof chrome.runtime.sendMessage } } }).chrome?.runtime;
+    if (!runtime?.id || !runtime.sendMessage) return;
+
+    const push = () => {
+      try {
+        const net = appContext.networkProvider.getActiveNetwork();
+        runtime.sendMessage?.({
+          type: "SET_WALLET_STATE",
+          chainId: Number(net.network_id),
+          rpcUrl: net.rpc_url ?? null,
+        });
+      } catch {
+        // The worker may be restarting; the next change pushes again.
+      }
+    };
+
+    push();
+    const unsubscribeNetwork = appContext.networkProvider.subscribe(push);
+
+    // An account switch changes what each connected site is allowed to see, and each site
+    // must be told its own list — never the whole wallet's.
+    const unsubscribeAccount = appContext.accountManager.subscribe(() => {
+      try {
+        runtime.sendMessage?.({ type: "PERMISSIONS_CHANGED" });
+      } catch { /* worker restarting */ }
+    });
+
+    return () => {
+      unsubscribeNetwork();
+      unsubscribeAccount();
+    };
+  }, [appContext.networkProvider, appContext.accountManager]);
+
   // --- Resume interrupted unshields ---
   // The second half of an unshield (decrypt + claim) can be cut short by the popup
   // closing, leaving burned balance behind an unsettled claim. Retry whenever the wallet

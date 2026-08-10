@@ -39,6 +39,7 @@ import {
 import { useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { WalletContext } from '../AppContext';
+import ConnectedSites from "../components/ConnectedSites.js";
 import { useToast } from '../components/ToastProvider';
 
 export default function SettingsSecurity() {
@@ -144,6 +145,8 @@ export default function SettingsSecurity() {
                 <Alert severity="warning" sx={{ mb: 4, borderRadius: 3 }}>
                     {t('security.dangerWarning')}
                 </Alert>
+
+                <ConnectedSites />
 
                 <Typography variant="h6" fontWeight={700} gutterBottom sx={{ px: 1 }}>
                     {t('security.yourAccounts')}

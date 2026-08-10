@@ -399,8 +399,9 @@ export default function SendPanel() {
               });
             } else {
               const iface = new Interface(["function transfer(address to, uint256 amount)"]);
-              const tokenMeta = context?.tokenCache?.getToken(network.network_id, sendTokenAddress);
-              const decimals = tokenMeta?.decimals ?? 18;
+              // Same on-chain source as the send itself, so the simulation cannot preview
+              // one amount while a different one is signed.
+              const decimals = await network.getErc20Decimals(sendTokenAddress);
               const amountWei = parseUnits(sendAmount, decimals);
               const data = iface.encodeFunctionData("transfer", [resolvedAddress, amountWei]);
 
@@ -418,10 +419,12 @@ export default function SendPanel() {
                 data: finalData
               });
 
-              // Resolve token symbol for UI preview
-              if (simOutput.balanceChanges.length > 0 && tokenMeta) {
-                simOutput.balanceChanges[0].symbol = tokenMeta.symbol;
-                simOutput.balanceChanges[0].decimals = tokenMeta.decimals;
+              // Resolve token symbol for UI preview. The symbol is cosmetic and may come
+              // from the cache; the decimals are the ones the transfer was encoded with.
+              const tokenMeta = context?.tokenCache?.getToken(network.network_id, sendTokenAddress);
+              if (simOutput.balanceChanges.length > 0) {
+                if (tokenMeta?.symbol) simOutput.balanceChanges[0].symbol = tokenMeta.symbol;
+                simOutput.balanceChanges[0].decimals = decimals;
               }
 
               // Enrich any remaining unresolved balance changes with on-chain metadata
@@ -470,28 +473,42 @@ export default function SendPanel() {
         // --- 2. Actual Send Phase (Only triggered if isPreviewMode is true or skipped) ---
         let memoHex = sendMemo ? hexlify(toUtf8Bytes(sendMemo)) : "0x";
 
+        // Show the hash the instant it exists rather than after it is mined. Until now the
+        // user watched a spinner for the whole mining window with no way to look the
+        // transaction up, and a popup closed in that window left them no record at all.
+        const onBroadcast = (broadcastHash: string) => {
+          setTxHash(broadcastHash);
+          setStatus("pending");
+          setFeedbackMsg(t("send.broadcasted"));
+        };
+
         if (sendTokenAddress === "ETH") {
           // Only send the data field if memo isn't empty (or "0x" logic will pass it as empty data)
           const txOpts: { to: string; value: string; gasMultiplier: number; data?: string } = { to: resolvedAddress, value: sendAmount, gasMultiplier: gasMultiplier };
           if (memoHex !== "0x") txOpts.data = memoHex;
-          hash = await network.sendTransaction(activeAccount, txOpts);
+          hash = await network.sendTransaction(activeAccount, txOpts, onBroadcast);
         } else {
           const iface = new Interface(["function transfer(address to, uint256 amount)"]);
-          const tokenMeta = context?.tokenCache?.getToken(network.network_id, sendTokenAddress);
-          const decimals = tokenMeta?.decimals ?? 18;
+
+          // Decimals decide how much actually leaves the wallet, so they are read from the
+          // token itself. Falling back to 18 for a 6-decimal token sends a million times
+          // the intended amount — and the cache is populated from a third-party API.
+          const decimals = await network.getErc20Decimals(sendTokenAddress);
           const amountWei = parseUnits(sendAmount, decimals);
           let data = iface.encodeFunctionData("transfer", [resolvedAddress, amountWei]);
 
           if (memoHex !== "0x") {
             data = data + memoHex.slice(2);
           }
-          hash = await network.sendTransaction(activeAccount, { to: sendTokenAddress, value: "0", data, gasMultiplier: gasMultiplier });
+          hash = await network.sendTransaction(
+            activeAccount,
+            { to: sendTokenAddress, value: "0", data, gasMultiplier: gasMultiplier },
+            onBroadcast
+          );
         }
       }
 
       setTxHash(hash);
-      setStatus("pending");
-      setFeedbackMsg(t("send.broadcasted"));
       await network.waitForTransaction(hash);
 
       setStatus("success");

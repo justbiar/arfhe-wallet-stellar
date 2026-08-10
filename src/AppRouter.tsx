@@ -19,6 +19,9 @@ const Settings = React.lazy(() => import("./pages/Settings"));
 const SettingsSecurity = React.lazy(() => import("./pages/SettingsSecurity"));
 const TokenDetail = React.lazy(() => import("./pages/TokenDetail"));
 const NotFound = React.lazy(() => import("./pages/NotFound"));
+// Opened by the service worker in its own window for injected-provider requests.
+// Deliberately outside AppLayout: no nav chrome belongs on an approval screen.
+const Approve = React.lazy(() => import("./pages/Approve"));
 
 // Wrap a route element in a smooth Fade transition
 const FadePage = React.memo(function FadePage({ children }: { children: React.ReactNode }) {
@@ -35,6 +38,7 @@ function AppRoutes() {
       <Routes>
         <Route path="/" element={<Splash />} />
         <Route path="auth" element={<Auth />} />
+        <Route path="approve" element={<Approve />} />
 
         <Route element={<AppLayout />}>
           <Route path="home" element={<FadePage><Home /></FadePage>} />

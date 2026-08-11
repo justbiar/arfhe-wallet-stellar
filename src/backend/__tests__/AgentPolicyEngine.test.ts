@@ -73,13 +73,13 @@ describe('AgentPolicyEngine', () => {
   // ─── evaluate: proposal ratio cap ────────────────────────────
   describe('evaluate — maxProposalRatio', () => {
     it('bakiyenin %50sini aşan öneri reddedilir', () => {
-      const decision = engine.evaluate('send_transaction', { amount: 60 }, { balance: 100 });
+      const decision = engine.evaluate('propose_send', { amount: 60 }, { balance: 100 });
       expect(decision.allowed).toBe(false);
       expect(decision.reasonCode).toBe('exceeds_balance_ratio');
     });
 
     it('bakiyenin %50si veya altındaki öneriye izin verilir (onay gerektirir)', () => {
-      const decision = engine.evaluate('send_transaction', { amount: 50 }, { balance: 100 });
+      const decision = engine.evaluate('propose_send', { amount: 50 }, { balance: 100 });
       expect(decision.allowed).toBe(true);
       expect(decision.requiresConfirmation).toBe(true);
       expect(decision.reasonCode).toBe('allowed_proposal');
@@ -87,7 +87,7 @@ describe('AgentPolicyEngine', () => {
 
     it('config ile maxProposalRatio değiştirilebilir', () => {
       const strictEngine = new AgentPolicyEngine({ maxProposalRatio: 0.1 });
-      const decision = strictEngine.evaluate('send_transaction', { amount: 20 }, { balance: 100 });
+      const decision = strictEngine.evaluate('propose_send', { amount: 20 }, { balance: 100 });
       expect(decision.allowed).toBe(false);
       expect(decision.reasonCode).toBe('exceeds_balance_ratio');
     });
@@ -98,25 +98,25 @@ describe('AgentPolicyEngine', () => {
     it('varsayılan limit (10) aşıldığında yeni öneriler reddedilir', () => {
       const limitedEngine = new AgentPolicyEngine({ maxProposalRatio: 1 });
       for (let i = 0; i < 10; i++) {
-        const decision = limitedEngine.evaluate('send_transaction', { amount: 1 }, { balance: 100 });
+        const decision = limitedEngine.evaluate('propose_send', { amount: 1 }, { balance: 100 });
         expect(decision.allowed).toBe(true);
       }
-      const eleventh = limitedEngine.evaluate('send_transaction', { amount: 1 }, { balance: 100 });
+      const eleventh = limitedEngine.evaluate('propose_send', { amount: 1 }, { balance: 100 });
       expect(eleventh.allowed).toBe(false);
       expect(eleventh.reasonCode).toBe('session_proposal_limit_reached');
     });
 
     it('resetSession sayaç sıfırlar', () => {
       const limitedEngine = new AgentPolicyEngine({ maxProposalRatio: 1, maxProposalsPerSession: 1 });
-      expect(limitedEngine.evaluate('send_transaction', { amount: 1 }, { balance: 100 }).allowed).toBe(true);
-      expect(limitedEngine.evaluate('send_transaction', { amount: 1 }, { balance: 100 }).allowed).toBe(false);
+      expect(limitedEngine.evaluate('propose_send', { amount: 1 }, { balance: 100 }).allowed).toBe(true);
+      expect(limitedEngine.evaluate('propose_send', { amount: 1 }, { balance: 100 }).allowed).toBe(false);
       limitedEngine.resetSession();
-      expect(limitedEngine.evaluate('send_transaction', { amount: 1 }, { balance: 100 }).allowed).toBe(true);
+      expect(limitedEngine.evaluate('propose_send', { amount: 1 }, { balance: 100 }).allowed).toBe(true);
     });
 
     it('reddedilen öneriler sayaca dahil edilmez', () => {
       const strictEngine = new AgentPolicyEngine({ maxProposalRatio: 0.1 });
-      strictEngine.evaluate('send_transaction', { amount: 90 }, { balance: 100 }); // reddedilir
+      strictEngine.evaluate('propose_send', { amount: 90 }, { balance: 100 }); // reddedilir
       expect(strictEngine.getProposalCount()).toBe(0);
     });
   });

@@ -2,18 +2,27 @@
  * agentTools.ts — OpenAI-compatible tool (function-calling) definitions for the in-wallet
  * AI Agent, sent as the `tools` array in requests to OpenRouter.
  *
- * Only READ_ONLY_TOOLS from AgentPolicyEngine.ts are defined here. State-changing tools
- * (PROPOSAL_TOOLS) get their own definitions once the proposal/confirmation UI exists —
- * until then, the agent has no way to move funds, only to read wallet state. Every
- * `function.name` below is typed as `ReadOnlyTool`, so a name that drifts from
- * AgentPolicyEngine's READ_ONLY_TOOLS set is a compile-time error, not a runtime surprise.
+ * Covers both tool tiers from AgentPolicyEngine.ts:
+ *  - READ_ONLY_TOOLS  — data reads, executed directly (see AgentToolRunner.ts).
+ *  - PROPOSAL_TOOLS   — the `propose_*` tools below. Calling one only produces a preview
+ *                        for the wallet UI to show the user; the agent has no signing
+ *                        authority and never broadcasts anything itself. Executing the
+ *                        preview (once a confirmation UI exists) is a separate, explicit
+ *                        user action outside this tool-calling loop.
+ * FORBIDDEN_TOOLS are never defined here — they're excluded at the AgentPolicyEngine level
+ * and must never be offered to the model at all.
+ *
+ * Every `function.name` below is typed as `ReadOnlyTool | ProposalTool`, so a name that
+ * drifts from AgentPolicyEngine's sets is a compile-time error, not a runtime surprise.
  *
  * This module runs only inside the extension, same as AgentPolicyEngine — the definitions
  * are shipped to OpenRouter as part of the request body, but no tool *implementation* lives
  * here or on any backend; execution happens locally against Network.ts / FheCofheService.ts.
  */
 
-import type { ReadOnlyTool } from "./AgentPolicyEngine.js";
+import type { ReadOnlyTool, ProposalTool } from "./AgentPolicyEngine.js";
+
+type AllowedToolName = ReadOnlyTool | ProposalTool;
 
 /** A JSON Schema object, restricted to what OpenAI-style tool parameters actually use. */
 interface ToolParameterSchema {
@@ -33,7 +42,7 @@ interface ToolParameterSchema {
 export interface AgentToolDefinition {
   type: "function";
   function: {
-    name: ReadOnlyTool;
+    name: AllowedToolName;
     description: string;
     parameters: ToolParameterSchema;
   };
@@ -125,6 +134,100 @@ export const AGENT_TOOLS: AgentToolDefinition[] = [
           },
         },
         required: [],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "propose_send",
+      description:
+        "Açık (şifrelenmemiş) bir token transferi ÖNERİSİ oluşturur. ÖNEMLİ: Bu tool hiçbir " +
+        "işlemi imzalamaz veya zincire göndermez — yalnızca kullanıcının onaylaması için bir " +
+        "önizleme üretir. Kullanıcı önizlemeyi gördükten sonra işlemi kendisi onaylamalı ve " +
+        "göndermelidir; agent'ın işlem imzalama yetkisi yoktur. tokenSymbol belirtilmezse " +
+        "önerinin native token (ör. ETH) için olduğu varsayılır.",
+      parameters: {
+        type: "object",
+        properties: {
+          to: {
+            type: "string",
+            description: "Alıcının adresi (0x... formatında) veya bilinen bir ENS/UD alan adı.",
+          },
+          amount: {
+            type: "string",
+            description: "Gönderilecek miktar, ondalıklı string olarak (ör. '0.5'). Wei/en küçük birim değil.",
+          },
+          tokenSymbol: {
+            type: "string",
+            description:
+              "Gönderilecek token'ın sembolü, ör. 'USDC'. Belirtilmezse native token (ör. ETH) " +
+              "kullanılır. Bu, şifreli (shielded) bir token değildir — gizli transfer için " +
+              "kullanıcıyı ilgili ekrana yönlendir, bu tool'u kullanma.",
+          },
+        },
+        required: ["to", "amount"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "propose_shield",
+      description:
+        "Açık bir bakiyeyi FHE ile şifrelemek (shield) için bir ÖNERİ oluşturur — gerçek " +
+        "işlemi göndermez, yalnızca kullanıcının onaylayacağı bir önizleme üretir. ÖNEMLİ " +
+        "BAĞLAM: Şifreli katman en fazla 6 ondalık basamak kullanır; miktarın bu birimin tam " +
+        "katı olmayan kısmı KIRPILIR (native ETH wrapper'ında kırpılan kısım kullanıcıya iade " +
+        "edilir). Örneğin 1.5000005 ETH shield edilmek istenirse yalnızca 1.5 ETH " +
+        "kalkanlanır — bunu kullanıcıya önceden belirt, sürpriz olmasın.",
+      parameters: {
+        type: "object",
+        properties: {
+          amount: {
+            type: "string",
+            description: "Şifrelenecek miktar, underlying token'ın kendi ondalık birimiyle, ondalıklı string olarak (ör. '1.5').",
+          },
+          tokenSymbol: {
+            type: "string",
+            description: "Şifrelenecek açık token'ın sembolü, ör. 'ETH' veya 'USDC'.",
+          },
+        },
+        required: ["amount", "tokenSymbol"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "propose_unshield",
+      description:
+        "Şifreli bir bakiyeyi açığa çıkarmak (unshield) için bir ÖNERİ oluşturur — gerçek " +
+        "işlemi göndermez, yalnızca kullanıcının onaylayacağı bir önizleme üretir. ÖNEMLİ " +
+        "BAĞLAM: Unshield İKİ AYRI zincir işlemi gerektirir: (1) önce şifreli bakiye yakılır " +
+        "(burn) ve bir talep (claim) kaydı açılır — tokenlar bu anda HENÜZ kullanıcının eline " +
+        "geçmemiştir; (2) ayrı bir claim işlemiyle çözülen miktar doğrulanıp tokenlar serbest " +
+        "bırakılır. Kullanıcıya bu önerinin yalnızca İLK adımı başlattığını ve ardından ayrıca " +
+        "claim yapması gerektiğini mutlaka belirt — bekleyen talepleri kontrol etmek için " +
+        "get_pending_claims kullanılabilir. Ayrıca bakiyeden fazlası istenirse işlem revert " +
+        "etmez, şifreli sıfır işlenir ve değersiz bir talep açılır — bu yüzden mümkünse önce " +
+        "get_shielded_balance ile bakiyeyi doğrula.",
+      parameters: {
+        type: "object",
+        properties: {
+          amount: {
+            type: "string",
+            description: "Açığa çıkarılacak miktar, gizli (confidential) birimde, ondalıklı string olarak (ör. '1.5').",
+          },
+          tokenSymbol: {
+            type: "string",
+            description: "Unshield edilecek shielded token'ın sembolü, ör. 'aeETH' veya 'aeUSDC'.",
+          },
+        },
+        required: ["amount", "tokenSymbol"],
         additionalProperties: false,
       },
     },

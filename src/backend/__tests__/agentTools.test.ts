@@ -1,6 +1,6 @@
 /// <reference types="vitest/globals" />
 import { AGENT_TOOLS } from '../agentTools';
-import { READ_ONLY_TOOLS } from '../AgentPolicyEngine';
+import { READ_ONLY_TOOLS, PROPOSAL_TOOLS } from '../AgentPolicyEngine';
 
 /**
  * @vitest-environment node
@@ -8,16 +8,16 @@ import { READ_ONLY_TOOLS } from '../AgentPolicyEngine';
  * agentTools testleri
  *
  * Her tool tanımının OpenAI function-calling formatına uygun geçerli bir JSON şeması
- * olduğunu ve AgentPolicyEngine'in READ_ONLY_TOOLS set'iyle birebir eşleştiğini doğrular.
- * Ağ/RPC çağrısı yapılmaz.
+ * olduğunu ve AgentPolicyEngine'in READ_ONLY_TOOLS + PROPOSAL_TOOLS setleriyle birebir
+ * eşleştiğini doğrular. Ağ/RPC çağrısı yapılmaz.
  */
 describe('agentTools', () => {
   it('AGENT_TOOLS boş değildir', () => {
     expect(AGENT_TOOLS.length).toBeGreaterThan(0);
   });
 
-  it('4 read-only tool tanımlıdır', () => {
-    expect(AGENT_TOOLS).toHaveLength(4);
+  it('4 read-only + 3 proposal tool tanımlıdır', () => {
+    expect(AGENT_TOOLS).toHaveLength(7);
   });
 
   describe('her tool geçerli bir OpenAI function-calling şemasına sahiptir', () => {
@@ -26,6 +26,9 @@ describe('agentTools', () => {
       'get_shielded_balance',
       'get_shielded_portfolio',
       'get_pending_claims',
+      'propose_send',
+      'propose_shield',
+      'propose_unshield',
     ] as const) {
       it(`${tool} tanımlıdır ve şeması geçerlidir`, () => {
         const def = AGENT_TOOLS.find((t) => t.function.name === tool);
@@ -63,10 +66,18 @@ describe('agentTools', () => {
   });
 
   // ─── AgentPolicyEngine ile isim tutarlılığı ───────────────────
-  describe('READ_ONLY_TOOLS ile birebir eşleşme', () => {
-    it('her AGENT_TOOLS ismi READ_ONLY_TOOLS içinde bulunur', () => {
+  describe('READ_ONLY_TOOLS / PROPOSAL_TOOLS ile birebir eşleşme', () => {
+    it('her AGENT_TOOLS ismi READ_ONLY_TOOLS veya PROPOSAL_TOOLS içinde bulunur', () => {
+      const allowed = new Set<string>([...READ_ONLY_TOOLS, ...PROPOSAL_TOOLS]);
       for (const tool of AGENT_TOOLS) {
-        expect(READ_ONLY_TOOLS).toContain(tool.function.name);
+        expect(allowed.has(tool.function.name)).toBe(true);
+      }
+    });
+
+    it('PROPOSAL_TOOLS içindeki her isim için bir AGENT_TOOLS tanımı vardır', () => {
+      const names = new Set(AGENT_TOOLS.map((t) => t.function.name));
+      for (const tool of PROPOSAL_TOOLS) {
+        expect(names.has(tool)).toBe(true);
       }
     });
 
@@ -85,6 +96,36 @@ describe('agentTools', () => {
       expect(pendingClaims?.function.parameters.properties.tokenSymbol).toBeDefined();
       // get_pending_claims için tokenSymbol opsiyoneldir: belirtilmezse tüm tokenlar taranır.
       expect(pendingClaims?.function.parameters.required).not.toContain('tokenSymbol');
+    });
+  });
+
+  // ─── propose_* tool'lara özgü davranışlar ─────────────────────
+  describe('proposal tool şemaları', () => {
+    it('propose_send: to ve amount zorunlu, tokenSymbol opsiyoneldir', () => {
+      const def = AGENT_TOOLS.find((t) => t.function.name === 'propose_send');
+      expect(def?.function.parameters.required).toEqual(expect.arrayContaining(['to', 'amount']));
+      expect(def?.function.parameters.required).not.toContain('tokenSymbol');
+      expect(def?.function.parameters.properties.tokenSymbol).toBeDefined();
+    });
+
+    it('propose_shield: amount ve tokenSymbol zorunludur, rate kırpma uyarısını içerir', () => {
+      const def = AGENT_TOOLS.find((t) => t.function.name === 'propose_shield');
+      expect(def?.function.parameters.required).toEqual(expect.arrayContaining(['amount', 'tokenSymbol']));
+      expect(def?.function.description).toMatch(/KIRPILIR/);
+    });
+
+    it('propose_unshield: amount ve tokenSymbol zorunludur, iki aşamalı süreç uyarısını içerir', () => {
+      const def = AGENT_TOOLS.find((t) => t.function.name === 'propose_unshield');
+      expect(def?.function.parameters.required).toEqual(expect.arrayContaining(['amount', 'tokenSymbol']));
+      expect(def?.function.description).toContain('İKİ AYRI zincir işlemi');
+      expect(def?.function.description.toLowerCase()).toContain('claim');
+    });
+
+    it('hiçbir proposal tool açıklaması işlemi kendisinin gönderdiğini iddia etmez', () => {
+      for (const name of ['propose_send', 'propose_shield', 'propose_unshield'] as const) {
+        const def = AGENT_TOOLS.find((t) => t.function.name === name);
+        expect(def?.function.description).toMatch(/önizleme|ÖNERİ/);
+      }
     });
   });
 

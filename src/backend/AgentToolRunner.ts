@@ -12,16 +12,34 @@
  * pattern as FheCofheService's singleton, the caller configures resolvers once via
  * configureAgentToolRunner() before executeToolCall() is used.
  *
- * Every call — including read-only ones — goes through AgentPolicyEngine.evaluate() first.
- * Right now that's a no-op for READ_ONLY_TOOLS (always allowed), but routing all calls
- * through it keeps this module's shape correct for when PROPOSAL_TOOLS get wired in here
- * too: a tool that comes back `requiresConfirmation: true` is refused rather than executed,
- * since there is no confirmation UI hooked up to this runner yet.
+ * Every call — including read-only ones — goes through AgentPolicyEngine.evaluate() first:
+ * it enforces the forbidden list, and for PROPOSAL_TOOLS, the balance-ratio cap and the
+ * per-session proposal count.
+ *
+ * ────────────────────────────────────────────────────────────────────────────────────────
+ * PROPOSAL_TOOLS (propose_send / propose_shield / propose_unshield) are PREVIEW-ONLY.
+ * This module never signs or broadcasts a transaction for them — it builds the exact
+ * calldata Network.ts would send, runs it through TransactionSimulator.simulateTransaction()
+ * (an eth_call, nothing more), and returns the result for the wallet UI to show the user as
+ * a confirmation card. There is no path from here to Account.ethers_wallet or
+ * Network.sendTransaction for a proposal tool, and there must never be one — executing a
+ * confirmed proposal is a separate, explicit user action outside this tool-calling loop.
+ * ────────────────────────────────────────────────────────────────────────────────────────
  */
 
+import type { Provider } from "ethers";
 import type { Network } from "./Network.js";
 import type Account from "./Account.js";
-import { AgentPolicyEngine, type ReadOnlyTool } from "./AgentPolicyEngine.js";
+import { TransactionSimulator, type SimResult } from "./TransactionSimulator.js";
+import { isDomainName, resolveDomain } from "./DomainResolver.js";
+import {
+  AgentPolicyEngine,
+  READ_ONLY_TOOLS,
+  PROPOSAL_TOOLS,
+  type ReadOnlyTool,
+  type ProposalTool,
+  type AgentToolArgs,
+} from "./AgentPolicyEngine.js";
 import type { ShieldedHolding, UnshieldClaim } from "../types/fhe.js";
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -31,6 +49,14 @@ export interface ToolExecutionContext {
   account: string;
   /** Active NetworkId (see NetworkTypes.ts), as its string form. */
   networkId: string;
+}
+
+/** The confirmation-card payload a proposal tool produces. Never executes anything itself. */
+export interface ProposalPreview {
+  requiresConfirmation: true;
+  toolName: string;
+  originalArgs: Record<string, unknown>;
+  simulation: SimResult;
 }
 
 export interface ToolExecutionResult {
@@ -50,7 +76,7 @@ export interface AgentToolRunnerDeps {
   getAccount(address: string): Account | undefined;
 }
 
-/** Raised for a malformed tool_call argument — caught alongside Network.ts errors below. */
+/** Raised for a malformed/unsupported tool_call argument — caught alongside Network.ts errors below. */
 class ToolArgumentError extends Error {}
 
 // ─── Configuration (singleton, same pattern as FheCofheService) ────
@@ -62,12 +88,13 @@ export function configureAgentToolRunner(newDeps: AgentToolRunnerDeps): void {
   deps = newDeps;
 }
 
-/** Test-only escape hatch to reset configuration between test cases. */
+const policyEngine = new AgentPolicyEngine();
+
+/** Test-only escape hatch to reset configuration (and accumulated policy state) between test cases. */
 export function resetAgentToolRunner(): void {
   deps = null;
+  policyEngine.resetSession();
 }
-
-const policyEngine = new AgentPolicyEngine();
 
 // ─── Argument validation ────────────────────────────────────────────
 
@@ -86,6 +113,24 @@ function requireTokenSymbol(args: Record<string, unknown>, required: boolean): s
   }
 
   return raw.trim();
+}
+
+function requireNonEmptyString(args: Record<string, unknown>, key: string): string {
+  const raw = args[key];
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    throw new ToolArgumentError(`"${key}" parametresi zorunludur ve boş olmayan bir string olmalıdır.`);
+  }
+  return raw.trim();
+}
+
+/** Validates `amount` and returns both the original decimal string and its numeric form. */
+function requirePositiveAmount(args: Record<string, unknown>): { amount: string; amountNumber: number } {
+  const amount = requireNonEmptyString(args, "amount");
+  const amountNumber = Number(amount);
+  if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+    throw new ToolArgumentError('"amount" pozitif bir sayısal string olmalıdır.');
+  }
+  return { amount, amountNumber };
 }
 
 function requireAccount(context: ToolExecutionContext): Account {
@@ -121,7 +166,7 @@ function serializeUnshieldClaim(claim: UnshieldClaim) {
   };
 }
 
-// ─── Tool handlers ──────────────────────────────────────────────────
+// ─── Read-only tool handlers ─────────────────────────────────────────
 
 async function handleGetBalance(network: Network, context: ToolExecutionContext): Promise<unknown> {
   // Network.getBalance returns the native balance in wei, not a display-formatted amount —
@@ -183,6 +228,216 @@ async function handleGetPendingClaims(
   return perToken.filter((entry) => entry.claims.length > 0);
 }
 
+// ─── Proposal tool handlers (preview-only — see file header) ────────
+
+async function getEthersProvider(network: Network): Promise<Provider> {
+  if (!network.rpc_url) {
+    throw new ToolArgumentError("Aktif ağ için RPC URL ayarlanmamış.");
+  }
+  const { JsonRpcProvider } = await import("ethers");
+  return new JsonRpcProvider(network.rpc_url);
+}
+
+/**
+ * Runs the simulation and turns a determined-to-fail result (insufficient balance, invalid
+ * recipient, a revert — anything simulateTransaction itself decided rather than threw) into
+ * a thrown ToolArgumentError, so the single catch in executeToolCall reports it as `{error}`
+ * exactly like every other failure mode. A proposal that would fail never becomes a
+ * confirmation card.
+ */
+async function simulateAndEnrich(
+  provider: Provider,
+  tx: { from: string; to: string; value?: string; data?: string }
+): Promise<SimResult> {
+  const simulator = new TransactionSimulator(provider);
+  const simulation = await simulator.simulateTransaction(tx);
+
+  if (!simulation.success) {
+    throw new ToolArgumentError(
+      simulation.error ?? "İşlem simülasyonu başarısız oldu — muhtemelen yetersiz bakiye veya geçersiz adres."
+    );
+  }
+
+  await simulator.enrichBalanceChanges(simulation);
+  return simulation;
+}
+
+/**
+ * What a proposal tool needs resolved before AgentPolicyEngine.evaluate() can run with a
+ * real balance: the ratio cap is meaningless against a placeholder, so the balance (and
+ * whatever Network/Account data the actual preview will need) is fetched up front, then
+ * `buildPreview` reuses it — no re-fetching after the policy check passes.
+ */
+interface PreparedProposal {
+  /** Balance of the asset this proposal would move, in the same unit as `amount`. */
+  balance: number;
+  amountNumber: number;
+  buildPreview: () => Promise<ProposalPreview>;
+}
+
+async function prepareProposeSend(
+  network: Network,
+  context: ToolExecutionContext,
+  args: Record<string, unknown>
+): Promise<PreparedProposal> {
+  const toInput = requireNonEmptyString(args, "to");
+  const { amount, amountNumber } = requirePositiveAmount(args);
+  const tokenSymbolRaw = args.tokenSymbol;
+  const tokenSymbol = typeof tokenSymbolRaw === "string" && tokenSymbolRaw.trim() ? tokenSymbolRaw.trim() : undefined;
+
+  // Only the native token can be previewed: there is no symbol → contract-address registry
+  // available to this bridge (that's TokenCache, owned by the UI layer), so an arbitrary
+  // ERC-20 "USDC" can't be resolved to the right contract here. Refusing explicitly beats
+  // silently simulating against the wrong address.
+  if (tokenSymbol && tokenSymbol.toLowerCase() !== network.currency_symbol.toLowerCase()) {
+    throw new ToolArgumentError(
+      `"${tokenSymbol}" için gönderim önizlemesi şu an desteklenmiyor — bu araç yalnızca native token ` +
+      `(${network.currency_symbol}) gönderimlerini önizleyebilir.`
+    );
+  }
+
+  // The tool schema advertises ENS/UD recipients, so resolution has to actually happen here
+  // — otherwise every domain-addressed proposal would fail simulation for a reason the user
+  // never sees explained.
+  let to = toInput;
+  if (isDomainName(toInput)) {
+    const resolved = await resolveDomain(toInput);
+    if (!resolved.address) {
+      throw new ToolArgumentError(resolved.error ?? `"${toInput}" bir adrese çözümlenemedi.`);
+    }
+    to = resolved.address;
+  }
+
+  const balanceWei = await network.getBalance(context.account);
+  const { formatEther } = await import("ethers");
+  const balance = Number(formatEther(balanceWei));
+
+  return {
+    balance,
+    amountNumber,
+    buildPreview: async () => {
+      const { parseEther } = await import("ethers");
+      const valueWei = parseEther(amount).toString();
+      const provider = await getEthersProvider(network);
+      const simulation = await simulateAndEnrich(provider, { from: context.account, to, value: valueWei });
+      return { requiresConfirmation: true, toolName: "propose_send", originalArgs: args, simulation };
+    },
+  };
+}
+
+async function prepareProposeShield(
+  network: Network,
+  context: ToolExecutionContext,
+  args: Record<string, unknown>
+): Promise<PreparedProposal> {
+  const { amount, amountNumber } = requirePositiveAmount(args);
+  const tokenSymbol = requireTokenSymbol(args, true)!;
+
+  // Same registry gap as propose_send: only the native wrapper's address is resolvable
+  // without TokenCache, so ERC-20 shielding can't be safely previewed here yet.
+  if (tokenSymbol.toLowerCase() !== network.currency_symbol.toLowerCase()) {
+    throw new ToolArgumentError(
+      `"${tokenSymbol}" için shield önizlemesi şu an desteklenmiyor — bu araç yalnızca native token ` +
+      `(${network.currency_symbol}) shield işlemlerini önizleyebilir.`
+    );
+  }
+
+  const account = requireAccount(context);
+  const balanceWei = await network.getBalance(context.account);
+  const { formatEther } = await import("ethers");
+  const balance = Number(formatEther(balanceWei));
+
+  return {
+    balance,
+    amountNumber,
+    buildPreview: async () => {
+      // Resolved here (only once the proposal has passed policy) rather than during
+      // prepare — shieldNative's wrapper address doesn't require decrypting a portfolio,
+      // just its own address, so this avoids a needless decrypt pass when the balance
+      // check alone already rejects the proposal.
+      const portfolio = await network.getShieldedPortfolio(account);
+      const nativeHolding = portfolio.find((h) => h.isNative);
+      if (!nativeHolding) {
+        throw new ToolArgumentError("Bu ağda native shielded wrapper bulunamadı.");
+      }
+
+      const { Interface, parseEther } = await import("ethers");
+      // Mirrors Network.SHIELDED_ABI's shieldNative fragment exactly — must encode
+      // identically to what Network.shieldNative() itself would send.
+      const iface = new Interface(["function shieldNative(address to)"]);
+      const valueWei = parseEther(amount).toString();
+
+      const provider = await getEthersProvider(network);
+      const simulation = await simulateAndEnrich(provider, {
+        from: context.account,
+        to: nativeHolding.wrapper,
+        value: valueWei,
+        data: iface.encodeFunctionData("shieldNative", [context.account]),
+      });
+
+      return { requiresConfirmation: true, toolName: "propose_shield", originalArgs: args, simulation };
+    },
+  };
+}
+
+async function prepareProposeUnshield(
+  network: Network,
+  context: ToolExecutionContext,
+  args: Record<string, unknown>
+): Promise<PreparedProposal> {
+  const { amount, amountNumber } = requirePositiveAmount(args);
+  const tokenSymbol = requireTokenSymbol(args, true)!;
+  const account = requireAccount(context);
+
+  // Unlike send/shield, the confidential symbol space here matches get_shielded_balance's
+  // exactly (both describe the shielded wrapper, e.g. "aeETH") — no registry gap, so this
+  // works for any shielded token, not just the native wrapper.
+  const portfolio = await network.getShieldedPortfolio(account);
+  const holding = portfolio.find((h) => h.symbol.toLowerCase() === tokenSymbol.toLowerCase());
+  if (!holding) {
+    throw new ToolArgumentError(`Shielded token bulunamadı: "${tokenSymbol}".`);
+  }
+
+  return {
+    // Confidential balance, already decrypted and decimal-formatted by getShieldedPortfolio
+    // — exactly the unit `amount` is in, so no conversion needed for the ratio check.
+    balance: Number(holding.balance),
+    amountNumber,
+    buildPreview: async () => {
+      const { Interface, parseUnits } = await import("ethers");
+      // Mirrors Network.SHIELDED_ABI's unshield fragment exactly (see Network.unshield()).
+      const iface = new Interface(["function unshield(address from, address to, uint64 amount)"]);
+      const amountValue = parseUnits(amount, holding.confidentialDecimals);
+
+      const provider = await getEthersProvider(network);
+      const simulation = await simulateAndEnrich(provider, {
+        from: context.account,
+        to: holding.wrapper,
+        value: "0",
+        data: iface.encodeFunctionData("unshield", [context.account, context.account, amountValue]),
+      });
+
+      return { requiresConfirmation: true, toolName: "propose_unshield", originalArgs: args, simulation };
+    },
+  };
+}
+
+async function prepareProposal(
+  toolName: ProposalTool,
+  network: Network,
+  context: ToolExecutionContext,
+  args: Record<string, unknown>
+): Promise<PreparedProposal> {
+  switch (toolName) {
+    case "propose_send":
+      return prepareProposeSend(network, context, args);
+    case "propose_shield":
+      return prepareProposeShield(network, context, args);
+    case "propose_unshield":
+      return prepareProposeUnshield(network, context, args);
+  }
+}
+
 // ─── Entry point ────────────────────────────────────────────────────
 
 function errorMessage(err: unknown): string {
@@ -192,27 +447,16 @@ function errorMessage(err: unknown): string {
 /**
  * Execute one tool_call the model returned.
  *
- * Never throws: policy denials, bad arguments, and any exception Network.ts raises are all
- * caught and reported as `{ error }` so a malformed or hallucinated tool_call can't crash
- * the agent loop — the model gets a normal message back and can retry or explain.
+ * Never throws: policy denials, bad arguments, and any exception Network.ts or
+ * TransactionSimulator raises are all caught and reported as `{ error }` so a malformed or
+ * hallucinated tool_call can't crash the agent loop — the model gets a normal message back
+ * and can retry or explain.
  */
 export async function executeToolCall(
   toolName: string,
   args: Record<string, unknown>,
   context: ToolExecutionContext
 ): Promise<ToolExecutionResult> {
-  // walletContext.balance only matters for PROPOSAL_TOOLS' ratio cap; every tool routed
-  // through this runner today is read-only, so the placeholder is never consulted.
-  const decision = policyEngine.evaluate(toolName, args, { balance: 0 });
-  if (!decision.allowed) {
-    return { error: decision.reason };
-  }
-  if (decision.requiresConfirmation) {
-    return {
-      error: `"${toolName}" kullanıcı onayı gerektiren bir işlemdir ve bu araç sürümü henüz PROPOSAL_TOOLS çalıştırmıyor.`,
-    };
-  }
-
   if (!deps) {
     return { error: "AgentToolRunner yapılandırılmadı: önce configureAgentToolRunner() çağrılmalı." };
   }
@@ -225,28 +469,44 @@ export async function executeToolCall(
   }
 
   try {
-    switch (toolName as ReadOnlyTool) {
-      case "get_balance":
-        return { result: await handleGetBalance(network, context) };
+    // ── Read-only tools: policy is a trivial always-allow, no balance needed. ──
+    if ((READ_ONLY_TOOLS as readonly string[]).includes(toolName)) {
+      const decision = policyEngine.evaluate(toolName, args, { balance: 0 });
+      if (!decision.allowed) return { error: decision.reason };
 
-      case "get_shielded_balance":
-        return { result: await handleGetShieldedBalance(network, requireAccount(context), args) };
-
-      case "get_shielded_portfolio":
-        return { result: await handleGetShieldedPortfolio(network, requireAccount(context)) };
-
-      case "get_pending_claims":
-        return { result: await handleGetPendingClaims(network, requireAccount(context), args, context) };
-
-      default:
-        // Reached only if READ_ONLY_TOOLS grows a name this runner hasn't implemented yet —
-        // evaluate() already rejects anything outside READ_ONLY_TOOLS/PROPOSAL_TOOLS.
-        return { error: `Bilinmeyen tool: "${toolName}".` };
+      switch (toolName as ReadOnlyTool) {
+        case "get_balance":
+          return { result: await handleGetBalance(network, context) };
+        case "get_shielded_balance":
+          return { result: await handleGetShieldedBalance(network, requireAccount(context), args) };
+        case "get_shielded_portfolio":
+          return { result: await handleGetShieldedPortfolio(network, requireAccount(context)) };
+        case "get_pending_claims":
+          return { result: await handleGetPendingClaims(network, requireAccount(context), args, context) };
+      }
     }
+
+    // ── Proposal tools: resolve the real balance/capability BEFORE evaluate(), since the
+    //    ratio cap is meaningless against a placeholder — see prepareProposal. ──
+    if ((PROPOSAL_TOOLS as readonly string[]).includes(toolName)) {
+      const prepared = await prepareProposal(toolName as ProposalTool, network, context, args);
+
+      const policyArgs: AgentToolArgs = { ...args, amount: prepared.amountNumber };
+      const decision = policyEngine.evaluate(toolName, policyArgs, { balance: prepared.balance });
+      if (!decision.allowed) return { error: decision.reason };
+
+      return { result: await prepared.buildPreview() };
+    }
+
+    // Forbidden or genuinely unrecognized — evaluate() supplies the precise reason
+    // (forbidden_tool vs unknown_tool) without needing any Network/Account lookup.
+    const decision = policyEngine.evaluate(toolName, args, { balance: 0 });
+    return { error: decision.reason };
   } catch (err) {
-    // Covers both ToolArgumentError and anything Network.ts throws (e.g. an FHE decrypt
-    // failure other than CiphertextNotFoundError, which Network.ts already normalizes to a
-    // "0.0" balance internally and never throws in the first place).
+    // Covers ToolArgumentError, a determined-to-fail simulation (see simulateAndEnrich),
+    // and anything Network.ts throws (e.g. an FHE decrypt failure other than
+    // CiphertextNotFoundError, which Network.ts already normalizes to a "0.0" balance
+    // internally and never throws in the first place).
     return { error: errorMessage(err) };
   }
 }

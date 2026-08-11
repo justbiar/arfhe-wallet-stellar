@@ -46,17 +46,18 @@ export const READ_ONLY_TOOLS = [
   "get_pending_claims",
 ] as const;
 
-/** State-changing tools the agent may only propose — the user must confirm each one. */
+/**
+ * State-changing tools the agent may only propose — never execute.
+ *
+ * Each one produces a preview (see agentTools.ts for the exact schema) for the wallet UI to
+ * show the user; nothing is signed or broadcast until the user explicitly confirms outside
+ * this flow. `propose_*` naming (rather than e.g. `send_transaction`) is deliberate — it
+ * keeps it obvious at the tool-name level that these never move funds by themselves.
+ */
 export const PROPOSAL_TOOLS = [
-  "send_transaction",
-  "transfer",
-  "transfer_from",
-  "approve",
-  "shield",
-  "shield_native",
-  "shield_wrapped_native",
-  "unshield",
-  "transfer_encrypted",
+  "propose_send",
+  "propose_shield",
+  "propose_unshield",
 ] as const;
 
 /**

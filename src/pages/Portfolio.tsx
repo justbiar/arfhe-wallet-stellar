@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Box, IconButton, Typography, useTheme, Paper, Stack, Avatar } from "@mui/material";
 import { ArrowBack, Visibility, VisibilityOff, Shield, TrendingUp } from "@mui/icons-material";
 import { useNavigate } from "react-router";
@@ -34,7 +35,10 @@ export default function Portfolio() {
     const [isPrivacyMode, setIsPrivacyMode] = useState(false);
     const [totalBalanceUsd, setTotalBalanceUsd] = useState(0.00);
     const [shieldedRatio, setShieldedRatio] = useState(0);
+    const { t } = useTranslation();
     const [assets, setAssets] = useState<DetailedAsset[]>([]);
+    /** True when the figures come from an expired cache Home has not refreshed yet. */
+    const [isStale, setIsStale] = useState(false);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -52,14 +56,16 @@ export default function Portfolio() {
             const dataCache = wallet_context.dataCacheService;
             if (!dataCache) return;
 
-            const cached = dataCache.get(address, net.network_id);
-            if (!cached) {
-                // No cache yet — this happens on a cold open or right after the TTL lapses.
-                // Bouncing to /home here is what made the page feel like it "opens on the
-                // second try": the first click silently redirected, and only once Home had
-                // populated the cache did a second click stick. Wait for it instead.
+            // Stale data is accepted here. This page reads the cache that Home fills and
+            // has no loader of its own, so once the 60s TTL lapsed a strict read returned
+            // nothing and the page sat on a skeleton waiting for a page the user was not
+            // on — then showed an empty portfolio for an account that has funds.
+            const entry = dataCache.getAllowStale(address, net.network_id);
+            if (!entry) {
+                // Genuinely nothing cached yet (cold open). Keep polling.
                 return;
             }
+            const cached = entry.data;
 
             // Sync rendering with the verified cached data from Home.tsx
             const IGNORED_CONTRACTS = getHiddenTokenAddresses(net.network_id);
@@ -74,6 +80,13 @@ export default function Portfolio() {
                 // Shielded entries carry the decrypted balance and must survive the filter —
                 // they are what `shieldedUsd` below is measuring.
                 if (!b.isShielded && IGNORED_CONTRACTS.has(b.contractAddress.toLowerCase())) return;
+
+                // A portfolio is what the account holds. Airdropped and long-emptied
+                // contracts arrive in the balance list at zero and used to be listed all
+                // the same — over a hundred rows of nothing, none of which move the total.
+                // The native token stays regardless, because a zero native balance is
+                // itself worth seeing.
+                if (!b.isNative && !(bal > 0)) return;
 
                 const meta = wallet_context.tokenCache.getToken(net.network_id, b.contractAddress.toLowerCase()) ||
                     wallet_context.tokenCache.getToken(net.network_id, b.contractAddress);
@@ -104,6 +117,7 @@ export default function Portfolio() {
             detailedAssets.forEach((d, i) => d.color = COLORS[i % COLORS.length]);
 
             if (isMounted) {
+                setIsStale(entry.isStale);
                 setAssets(detailedAssets);
                 // Force total USD display exactly equal to cache to eliminate floating point diffs
                 setTotalBalanceUsd(cached.totalUsd);
@@ -178,6 +192,14 @@ export default function Portfolio() {
                     <Paper elevation={0} sx={{ p: 3, borderRadius: 4, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', boxShadow: '0 8px 32px rgba(0,0,0,0.02)', height: '100%' }}>
                         <Typography variant="body2" color="text.secondary" fontWeight={600} gutterBottom>Net Worth</Typography>
                         <Typography variant="h4" fontWeight="800" sx={{ mt: 1 }}>{formatMoney(totalBalanceUsd)}</Typography>
+                        {/* Rendering an expired cache is what keeps this page instant, but
+                            a figure that claims to be current when it is not has no place
+                            on a balance screen. */}
+                        {isStale && (
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                                {t('portfolio.staleData')}
+                            </Typography>
+                        )}
                     </Paper>
                 </Box>
                 {showFhe && (

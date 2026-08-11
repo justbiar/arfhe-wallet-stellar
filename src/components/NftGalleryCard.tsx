@@ -6,17 +6,16 @@
  * Features:
  * - Fetches tokenURI(0) via direct RPC eth_call and resolves metadata JSON
  * - Renders image (lazy-loaded) or video (autoplay/muted/loop)
+ * - Artwork and token id come from the indexer; nothing here guesses at a token
  * - IPFS gateway passthrough (ipfs:// → cloudflare-ipfs.com)
- * - Gradient shimmer skeleton while loading
  * - Hover lift + shadow animation
  * - Bottom info strip: name, symbol, balance
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import {
     Box,
     Typography,
-    Skeleton,
     Chip,
     alpha,
 } from "@mui/material";
@@ -31,70 +30,6 @@ function resolveIpfs(url: string): string {
         return url.replace("ipfs://", "https://cloudflare-ipfs.com/ipfs/");
     }
     return url;
-}
-
-// ------------------------------------------------------------------
-// tokenURI fetcher via eth_call
-// ------------------------------------------------------------------
-async function fetchNftMetadata(
-    rpcUrl: string,
-    contractAddress: string
-): Promise<{ image?: string; name?: string; description?: string } | null> {
-    try {
-        // tokenURI(uint256 tokenId) → tokenId = 1 as a best-effort default
-        const data =
-            "0xc87b56dd0000000000000000000000000000000000000000000000000000000000000001";
-
-        const res = await fetch(rpcUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                jsonrpc: "2.0",
-                id: 1,
-                method: "eth_call",
-                params: [{ to: contractAddress, data }, "latest"],
-            }),
-        });
-        const json = await res.json();
-        const hex: string = json?.result ?? "";
-        if (!hex || hex === "0x") return null;
-
-        // Decode ABI-encoded string
-        const bytes = hex.startsWith("0x") ? hex.slice(2) : hex;
-        const offsetHex = bytes.slice(64, 128);
-        const lengthHex = bytes.slice(
-            128 + parseInt(offsetHex, 16) * 2,
-            128 + parseInt(offsetHex, 16) * 2 + 64
-        );
-        const length = parseInt(lengthHex, 16) * 2;
-        const strHex = bytes.slice(
-            128 + parseInt(offsetHex, 16) * 2 + 64,
-            128 + parseInt(offsetHex, 16) * 2 + 64 + length
-        );
-        let tokenUri = Buffer
-            ? Buffer.from(strHex, "hex").toString("utf8")
-            : decodeURIComponent(
-                strHex.replace(/\s+/g, "").replace(/(..)/g, "%$1")
-            );
-
-        tokenUri = tokenUri.replace(/\0/g, "").trim();
-        tokenUri = resolveIpfs(tokenUri);
-
-        // Handle base64 data URIs
-        if (tokenUri.startsWith("data:application/json;base64,")) {
-            const b64 = tokenUri.split(",")[1];
-            const meta = JSON.parse(atob(b64));
-            return meta;
-        }
-
-        if (!tokenUri.startsWith("http")) return null;
-
-        const metaRes = await fetch(tokenUri, { mode: "cors" });
-        if (!metaRes.ok) return null;
-        return await metaRes.json();
-    } catch {
-        return null;
-    }
 }
 
 // ------------------------------------------------------------------
@@ -171,52 +106,43 @@ function NftMedia({ src, name }: { src: string; name: string }) {
 // ------------------------------------------------------------------
 interface NftGalleryCardProps {
     contractAddress: string;
+    /** Which token this card is. Required to show the right art and to link to it. */
+    tokenId: string;
     symbol: string;
     name: string;
+    /** Already-resolved artwork URL. */
+    imageUrl?: string;
     balance?: number;
     isShielded?: boolean;
-    rpcUrl?: string;
+    /** Marketplace link base for the active chain; omitted when there is none. */
+    marketplaceUrl?: string;
 }
 
 export default function NftGalleryCard({
     contractAddress,
+    tokenId,
     symbol,
     name,
+    imageUrl = "",
     balance = 1,
     isShielded = false,
-    rpcUrl,
+    marketplaceUrl,
 }: NftGalleryCardProps) {
-    const [imageUrl, setImageUrl] = useState<string>("");
-    const [metaName, setMetaName] = useState<string>("");
-    const [loading, setLoading] = useState(true);
+    const displayName = name || symbol || `#${tokenId}`;
 
-    useEffect(() => {
-        if (!rpcUrl || !contractAddress) {
-            setLoading(false);
-            return;
-        }
-
-        let cancelled = false;
-        fetchNftMetadata(rpcUrl, contractAddress)
-            .then((meta) => {
-                if (cancelled) return;
-                if (meta?.image) setImageUrl(resolveIpfs(meta.image));
-                if (meta?.name) setMetaName(meta.name);
-                setLoading(false);
-            })
-            .catch(() => {
-                if (!cancelled) setLoading(false);
-            });
-
-        return () => {
-            cancelled = true;
-        };
-    }, [contractAddress, rpcUrl]);
-
-    const displayName = metaName || name || symbol;
+    /** Open the item on a marketplace. Nothing happens when the chain has none. */
+    const openMarketplace = () => {
+        if (!marketplaceUrl) return;
+        window.open(marketplaceUrl, "_blank", "noopener,noreferrer");
+    };
 
     return (
         <Box
+            onClick={openMarketplace}
+            role={marketplaceUrl ? "link" : undefined}
+            tabIndex={marketplaceUrl ? 0 : undefined}
+            onKeyDown={(e) => { if (marketplaceUrl && (e.key === "Enter" || e.key === " ")) openMarketplace(); }}
+            aria-label={marketplaceUrl ? `${displayName} — view on marketplace` : undefined}
             sx={{
                 borderRadius: 3,
                 overflow: "hidden",
@@ -224,7 +150,9 @@ export default function NftGalleryCard({
                 borderColor: "divider",
                 bgcolor: "background.paper",
                 position: "relative",
-                cursor: "pointer",
+                // Only offer the affordance when there is somewhere to go. A card that
+                // looks clickable and does nothing is worse than a plain one.
+                cursor: marketplaceUrl ? "pointer" : "default",
                 transition: "transform 0.22s ease, box-shadow 0.22s ease",
                 "&:hover": {
                     transform: "translateY(-4px)",
@@ -238,15 +166,7 @@ export default function NftGalleryCard({
         >
             {/* Media area */}
             <Box sx={{ overflow: "hidden", borderRadius: "inherit" }}>
-                {loading ? (
-                    <Skeleton
-                        variant="rectangular"
-                        sx={{ width: "100%", aspectRatio: "1 / 1", borderRadius: "inherit" }}
-                        animation="wave"
-                    />
-                ) : (
-                    <NftMedia src={imageUrl} name={displayName} />
-                )}
+                <NftMedia src={imageUrl} name={displayName} />
             </Box>
 
             {/* Shield badge */}

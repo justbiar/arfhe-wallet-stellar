@@ -17,6 +17,32 @@ declare var chrome: any;
 
 
 const PBKDF2_ITERATIONS = 100_000;
+const LAST_ACTIVE_KEY = "arfhe_last_active";
+
+/**
+ * When the user was last active, captured the instant this module loads.
+ *
+ * This is the value the reopen check must use, and it has to be frozen before anything
+ * else runs. The timestamp is refreshed by user activity — mouse, keys, the tab becoming
+ * visible — and the extension popup produces some of those the moment it opens. Reading
+ * it later meant reading a stamp that the current page had already written: the staleness
+ * test compared "now" against "now", always passed, and a wallet closed for hours
+ * reopened unlocked.
+ *
+ * Module scope is deliberate. It is evaluated at import time, before React renders and
+ * long before any listener is attached, so nothing can have touched it yet.
+ */
+const LAST_ACTIVE_AT_LOAD: number | null = (() => {
+  try {
+    const raw = localStorage.getItem(LAST_ACTIVE_KEY);
+    if (!raw) return null;
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+})();
+
 const SALT_KEY = "arfhe_salt";
 const PASS_HASH_KEY = "arfhe_pass_hash";
 
@@ -159,7 +185,7 @@ class StorageManager {
         // Fallback to web sessionStorage
         sessionStorage.setItem('arfhe_session_key', base64Key);
       }
-      localStorage.setItem('arfhe_last_active', Date.now().toString());
+      localStorage.setItem(LAST_ACTIVE_KEY, Date.now().toString());
     } catch (e) {
       console.warn("Could not export session key", e);
     }
@@ -172,10 +198,11 @@ class StorageManager {
     if (this._cryptoKey) return true; // Already unlocked
 
     try {
-      const lastActiveStr = localStorage.getItem('arfhe_last_active');
-      if (!lastActiveStr) return false;
+      // Frozen at import time. Re-reading here would pick up a stamp this very page
+      // just wrote, which is what defeated this check before.
+      const lastActive = LAST_ACTIVE_AT_LOAD;
+      if (lastActive === null) return false;
 
-      const lastActive = parseInt(lastActiveStr, 10);
       if (timeoutMs > 0 && Date.now() - lastActive > timeoutMs) {
         // Session expired
         await this.clearSession();
@@ -203,7 +230,7 @@ class StorageManager {
       );
 
       // Update last active
-      localStorage.setItem('arfhe_last_active', Date.now().toString());
+      localStorage.setItem(LAST_ACTIVE_KEY, Date.now().toString());
       return true;
     } catch (e) {
       console.warn("Could not restore session key", e);
@@ -219,7 +246,7 @@ class StorageManager {
       await chrome.storage.session.remove('arfhe_session_key');
     }
     sessionStorage.removeItem('arfhe_session_key');
-    localStorage.removeItem('arfhe_last_active');
+    localStorage.removeItem(LAST_ACTIVE_KEY);
   }
 
   /**
@@ -492,6 +519,44 @@ class StorageManager {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Erase this wallet from the device.
+   *
+   * The only answer to a forgotten password. Nothing here can recover it: the password is
+   * never stored, only a PBKDF2 hash of it, and the accounts are encrypted with a key
+   * derived from it. Wiping and restoring from the recovery phrase is the sole path back —
+   * which is exactly why the phrase is verified during onboarding.
+   *
+   * Removes everything: encrypted accounts, the salt and password hash, the session key,
+   * site permissions, pending claims and cached data. A partial wipe would be worse than
+   * none — a leftover salt or permission record belongs to a wallet that no longer exists.
+   *
+   * Irreversible, and callers must confirm with the user before calling it.
+   */
+  async resetWallet(): Promise<void> {
+    // Drop the in-memory key first, so nothing can be written back mid-wipe.
+    this.lock();
+
+    try {
+      localStorage.clear();
+    } catch {
+      // Fall through to the targeted removals below.
+    }
+
+    try {
+      sessionStorage.clear();
+    } catch { /* not available */ }
+
+    // localStorage.clear() does not touch extension storage, where site permissions,
+    // background state and the session key live.
+    try {
+      if (typeof chrome !== "undefined" && chrome.storage) {
+        await chrome.storage.local.clear();
+        await chrome.storage.session?.clear();
+      }
+    } catch { /* not in an extension context */ }
   }
 
   /**

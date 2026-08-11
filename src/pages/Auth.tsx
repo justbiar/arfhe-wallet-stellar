@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Typography, Box, Button, Grid, Alert, Stack, TextField, Paper, Container, IconButton, InputAdornment, CircularProgress, LinearProgress } from "@mui/material";
+import { Typography, Box, Button, Grid, Alert, Stack, TextField, Paper, Container, IconButton, InputAdornment, CircularProgress, LinearProgress, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
 import { AppContext, WalletContext } from "../AppContext.js";
 import { useNavigate } from "react-router";
 import { Visibility, VisibilityOff, Google, Lock, Fingerprint } from "@mui/icons-material";
@@ -60,11 +60,35 @@ interface LoginProps {
 
 // --- Steps Components ---
 
+/**
+ * Pick `count` distinct word positions to quiz on.
+ *
+ * Random rather than fixed, so the answer cannot be learned from a screenshot or a
+ * walkthrough — the point is to catch someone who did not write the phrase down, and a
+ * fixed set of positions is something they could pass without having done so.
+ */
+function pickQuizPositions(total: number, count = 3): number[] {
+  const positions = new Set<number>();
+  while (positions.size < Math.min(count, total)) {
+    positions.add(Math.floor(Math.random() * total));
+  }
+  return [...positions].sort((a, b) => a - b);
+}
+
 function CreateWallet({ accountManager, onDone }: WalletStepProps) {
   const { t } = useTranslation();
   const [username, setUsername] = React.useState('');
   const [words, setWords] = React.useState<string[]>([]);
   const [isGenerated, setIsGenerated] = React.useState(false);
+
+  // A recovery phrase the user never actually wrote down is the single most common way
+  // people lose a wallet permanently — no support channel can undo it. Showing the words
+  // and accepting "I saved it" on trust verifies nothing, so the phrase has to be proved
+  // back before the flow continues.
+  const [isVerifying, setIsVerifying] = React.useState(false);
+  const [quizPositions, setQuizPositions] = React.useState<number[]>([]);
+  const [answers, setAnswers] = React.useState<Record<number, string>>({});
+  const [quizError, setQuizError] = React.useState('');
 
   const handleGenerate = () => {
     if (!accountManager || !username.trim()) return;
@@ -76,13 +100,86 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
     setIsGenerated(true);
   };
 
+  const startVerification = () => {
+    setQuizPositions(pickQuizPositions(words.length));
+    setAnswers({});
+    setQuizError('');
+    setIsVerifying(true);
+  };
+
+  /** Back to the word list — someone who cannot answer needs to read them again. */
+  const backToWords = () => {
+    setIsVerifying(false);
+    setQuizError('');
+  };
+
+  const submitVerification = () => {
+    const allCorrect = quizPositions.every(
+      (position) => (answers[position] ?? '').trim().toLowerCase() === words[position]?.toLowerCase()
+    );
+
+    if (!allCorrect) {
+      setQuizError(t('auth.phraseCheckFailed'));
+      return;
+    }
+    onDone();
+  };
+
   return (
     <Box>
       <Typography variant="h5" fontWeight={700} gutterBottom align="center" color="text.primary">
         {t('auth.createNewWallet')}
       </Typography>
 
-      {isGenerated ? (
+      {isVerifying ? (
+        <>
+          <Typography variant="body2" color="text.secondary" align="center" sx={{ mb: 2 }}>
+            {t('auth.confirmPhrasePrompt')}
+          </Typography>
+
+          <Stack spacing={2}>
+            {quizPositions.map((position) => (
+              <TextField
+                key={position}
+                fullWidth
+                size="small"
+                label={t('auth.wordNumber', { number: position + 1 })}
+                value={answers[position] ?? ''}
+                onChange={(e) => {
+                  setAnswers((prev) => ({ ...prev, [position]: e.target.value }));
+                  setQuizError('');
+                }}
+                onKeyDown={(e) => e.key === 'Enter' && submitVerification()}
+                autoComplete="off"
+                spellCheck={false}
+                error={!!quizError}
+              />
+            ))}
+          </Stack>
+
+          {quizError && (
+            <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1.5 }}>
+              {quizError}
+            </Typography>
+          )}
+
+          <Button
+            variant="contained"
+            fullWidth
+            onClick={submitVerification}
+            size="large"
+            sx={{ mt: 3, borderRadius: 0, height: 44, fontSize: 15 }}
+          >
+            {t('auth.confirmPhrase')}
+          </Button>
+
+          {/* Someone who cannot answer has not written it down — send them back to the
+              words rather than letting them guess until they get through. */}
+          <Button fullWidth onClick={backToWords} sx={{ mt: 1, borderRadius: 0 }}>
+            {t('auth.showPhraseAgain')}
+          </Button>
+        </>
+      ) : isGenerated ? (
         <>
           <Typography variant="body2" color="text.secondary" align="center" sx={{ mb: 2 }}>
             {t('auth.writeDownWords')}
@@ -123,7 +220,7 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
           <Button
             variant="contained"
             fullWidth
-            onClick={onDone}
+            onClick={startVerification}
             size="large"
             sx={{ mt: 3, borderRadius: 0, height: 44, fontSize: 15 }}
           >
@@ -249,6 +346,7 @@ function ImportWallet({ accountManager, onDone }: WalletStepProps) {
  */
 function SetPasswordScreen({ storageManager, accountManager, onDone }: PasswordScreenProps) {
   const { t } = useTranslation();
+  const context = React.useContext(WalletContext);
   const [password, setPassword] = React.useState("");
   const [confirmPassword, setConfirmPassword] = React.useState("");
   const [showPassword, setShowPassword] = React.useState(false);
@@ -281,12 +379,18 @@ function SetPasswordScreen({ storageManager, accountManager, onDone }: PasswordS
         return;
       }
 
-      // Now persist the in-memory accounts to encrypted storage
-      await accountManager?.loadFromEncryptedStorage(); // This will detect plaintext and auto-migrate
-      // If no migration happened (fresh create), manually trigger save
+      // Migrate any plaintext accounts left by an older build, then commit what is in
+      // memory. A freshly created account is only in memory at this point — nothing
+      // sensitive is written to disk before a password exists to encrypt it — so this
+      // call is what actually saves the wallet.
+      await accountManager?.loadFromEncryptedStorage();
+      // Balances are persisted encrypted; loading them here means Home renders with
+      // real numbers instead of an empty list and a spinner.
+      await context?.dataCacheService?.hydrate();
       if (storageManager?.hasUnencryptedAccounts()) {
         await storageManager?.migrateToEncrypted();
       }
+      await accountManager?.persistToEncryptedStorage();
 
       onDone();
     } catch (e) {
@@ -383,11 +487,14 @@ function SetPasswordScreen({ storageManager, accountManager, onDone }: PasswordS
 function LoginIntoWallet({ storageManager, accountManager }: LoginProps) {
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const context = React.useContext(WalletContext);
   const [password, setPassword] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [showPassword, setShowPassword] = React.useState(false);
   const [isLoading, setIsLoading] = React.useState(false);
   const [biometricAvailable, setBiometricAvailable] = React.useState(false);
+  const [resetOpen, setResetOpen] = React.useState(false);
+  const [resetting, setResetting] = React.useState(false);
 
   // Check if biometric login is available on mount
   React.useEffect(() => {
@@ -421,6 +528,9 @@ function LoginIntoWallet({ storageManager, accountManager }: LoginProps) {
 
       // Load and decrypt accounts into memory
       await accountManager?.loadFromEncryptedStorage();
+      // Balances are persisted encrypted; loading them here means Home renders with
+      // real numbers instead of an empty list and a spinner.
+      await context?.dataCacheService?.hydrate();
 
       navigate("/home");
     } catch (e) {
@@ -449,11 +559,38 @@ function LoginIntoWallet({ storageManager, accountManager }: LoginProps) {
       }
 
       await accountManager?.loadFromEncryptedStorage();
+      // Balances are persisted encrypted; loading them here means Home renders with
+      // real numbers instead of an empty list and a spinner.
+      await context?.dataCacheService?.hydrate();
       navigate("/home");
     } catch (e) {
       setError(t('auth.biometricFailed'));
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  /**
+   * Erase the wallet so a new one can be created or restored.
+   *
+   * There is no password reset for a non-custodial wallet: the password is never stored,
+   * and the accounts are encrypted with a key derived from it. Wiping and restoring from
+   * the recovery phrase is the only way back, so the dialog says that plainly rather than
+   * calling itself a reset.
+   */
+  const handleReset = async () => {
+    if (!storageManager) return;
+    setResetting(true);
+    try {
+      await storageManager.resetWallet();
+      // A full reload is deliberate: every in-memory service still holds state belonging
+      // to a wallet that no longer exists.
+      window.location.hash = '#/';
+      window.location.reload();
+    } catch (e) {
+      setError((e instanceof Error ? e.message : String(e)) || 'Reset failed.');
+      setResetting(false);
+      setResetOpen(false);
     }
   };
 
@@ -530,6 +667,35 @@ function LoginIntoWallet({ storageManager, accountManager }: LoginProps) {
           {t('auth.biometricUnlock')}
         </Button>
       )}
+
+      <Button
+        fullWidth
+        onClick={() => setResetOpen(true)}
+        disabled={isLoading}
+        sx={{ mt: 2, borderRadius: 0, color: 'text.secondary', fontWeight: 500 }}
+      >
+        {t('auth.forgotPassword')}
+      </Button>
+
+      <Dialog open={resetOpen} onClose={() => !resetting && setResetOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800 }}>{t('auth.resetWalletTitle')}</DialogTitle>
+        <DialogContent>
+          <Alert severity="warning" sx={{ mb: 2, borderRadius: 0 }}>
+            {t('auth.resetWalletWarning')}
+          </Alert>
+          <Typography variant="body2" color="text.secondary">
+            {t('auth.resetWalletExplain')}
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setResetOpen(false)} disabled={resetting}>
+            {t('common.cancel')}
+          </Button>
+          <Button color="error" variant="contained" onClick={handleReset} disabled={resetting} sx={{ borderRadius: 0 }}>
+            {resetting ? <CircularProgress size={20} color="inherit" /> : t('auth.resetWalletConfirm')}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
@@ -557,6 +723,9 @@ export default function Auth() {
         try {
           // Load accounts and proceed immediately without showing login screen
           await accountManager?.loadFromEncryptedStorage();
+      // Balances are persisted encrypted; loading them here means Home renders with
+      // real numbers instead of an empty list and a spinner.
+      await context?.dataCacheService?.hydrate();
           window.location.hash = "#/home";
           return;
         } catch (e) {

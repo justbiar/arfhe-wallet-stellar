@@ -70,19 +70,25 @@ export default function SendPanel() {
   const [sendAmount, setSendAmount] = useState("");
   const [sendMemo, setSendMemo] = useState("");
 
-  // Listen for prefill events from TokenDetail page
+  const [isConfidential, setIsConfidential] = useState(false);
+  const [showContacts, setShowContacts] = useState(false);
+
+  // Listen for prefill events from the token detail page.
+  //
+  // A confidential token also carries the mode it has to be sent in: its balance is in the
+  // encrypted ledger, so the public form has nothing to move. Switching the toggle here is
+  // what makes "Send" on a shielded token land on a screen that can actually send it.
   React.useEffect(() => {
     const handlePrefill = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.token) {
-        setSendTokenAddress(detail.token);
-      }
+      if (!detail?.token) return;
+
+      if (detail.confidential) setIsConfidential(true);
+      setSendTokenAddress(detail.token);
     };
     window.addEventListener('arf-send-prefill', handlePrefill);
     return () => window.removeEventListener('arf-send-prefill', handlePrefill);
   }, []);
-  const [isConfidential, setIsConfidential] = useState(false);
-  const [showContacts, setShowContacts] = useState(false);
 
   // Reset confidential mode when switching to a non-FHE network
   React.useEffect(() => {
@@ -238,7 +244,9 @@ export default function SendPanel() {
 
         const REAL_WETH = activeContracts["ETH"]?.public?.toLowerCase() || "";
 
-        const tokenBalances = await network.getTokenBalances(context?.tokenCache, address);
+        // Reuse what Home already fetched; only go to the network on a cold start.
+        const tokenBalances = context?.dataCacheService?.getTokenBalances(address, networkId)
+          ?? await network.getTokenBalances(context?.tokenCache, address);
 
         // Confidential wrappers must never appear as public tokens — their ERC-20 balance
         // is an activity counter, not a holding. Asking the registry covers every wrapper,
@@ -969,9 +977,23 @@ export default function SendPanel() {
                 ) : (
                   displayTokens.map(t => (
                     <MenuItem key={t.contractAddress} value={t.contractAddress}>
-                      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ width: '100%' }}>
-                        <Typography variant="body2" fontWeight={600}>{t.symbol}</Typography>
-                        <Typography variant="caption" color="text.secondary">{parseFloat(t.balance).toFixed(4)}</Typography>
+                      {/* Balances read as a column, so they are monospaced and right
+                          aligned — proportional digits make the list look ragged. */}
+                      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ width: '100%', gap: 2 }}>
+                        <Typography
+                          variant="body2"
+                          noWrap
+                          sx={{ fontFamily: 'var(--font-mono)', fontWeight: 700, textTransform: 'uppercase' }}
+                        >
+                          {t.symbol}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}
+                        >
+                          {parseFloat(t.balance).toFixed(4)}
+                        </Typography>
                       </Stack>
                     </MenuItem>
                   ))

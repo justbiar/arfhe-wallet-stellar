@@ -45,6 +45,7 @@ export class AppContext {
     this.tokenCache = new TokenCache(this.storageManager);
     this.nftCache = new NFTCache(this.storageManager);
     this.dataCacheService = new DataCacheService();
+    this.dataCacheService.attachStorage(this.storageManager);
     this.contactManager = new ContactManager(this.storageManager);
     this.walletConnectService = new WalletConnectService(this.accountManager);
     this.spamFilter = new SpamFilter(this.storageManager);
@@ -64,7 +65,9 @@ export class AppContext {
       FheCofheService.getInstance().reset();
     });
     this.storageManager.onLock(() => {
-      this.dataCacheService.invalidate();
+      // Memory only. The encrypted snapshot on disk stays, so unlocking renders balances
+      // straight away instead of starting from an empty list.
+      this.dataCacheService.clearMemory();
     });
   }
 }

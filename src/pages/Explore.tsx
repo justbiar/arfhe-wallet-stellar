@@ -121,9 +121,13 @@ const Explore = () => {
 
 
 
+    // The extension popup is ~360px wide. Anything that overflows horizontally makes the
+    // whole page pan sideways, which reads as a broken layout rather than a scrollable
+    // row — so the page is clamped and only the strips meant to scroll (categories,
+    // featured) are allowed to.
     return (
-        <Box sx={{ pb: 6, minHeight: '100%' }}>
-            <Container maxWidth="lg" sx={{ py: 2 }}>
+        <Box sx={{ pb: 6, minHeight: '100%', width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+            <Container maxWidth="lg" sx={{ py: 2, px: { xs: 1.5, sm: 3 } }}>
 
                 {/* ── Hero Header ── */}
                 <Box sx={{ mb: 4, borderBottom: '1px solid', borderColor: 'divider', pb: 2 }}>
@@ -133,7 +137,11 @@ const Explore = () => {
                             fontFamily: 'var(--font-mono)',
                             color: 'text.primary',
                             textTransform: 'uppercase',
-                            letterSpacing: 2,
+                            // A wide-tracked h3 does not fit a popup; both scale down so a
+                            // translated title cannot push the header past the edge.
+                            fontSize: { xs: '1.6rem', sm: '3rem' },
+                            letterSpacing: { xs: 1, sm: 2 },
+                            wordBreak: 'break-word',
                             mb: 1
                         }}
                     >
@@ -428,8 +436,11 @@ function FeaturedCard({ dApp, onClick }: { dApp: DApp; onClick: (d: DApp) => voi
             elevation={0}
             onClick={() => onClick(dApp)}
             sx={{
-                minWidth: 260,
-                maxWidth: 300,
+                // This one really is in a horizontal scroller, so it keeps a fixed width
+                // and refuses to shrink — otherwise the flex row squashes every card to
+                // fit and there is nothing left to scroll.
+                width: 240,
+                flexShrink: 0,
                 p: 2,
                 borderRadius: '0px',
                 cursor: 'pointer',
@@ -439,10 +450,9 @@ function FeaturedCard({ dApp, onClick }: { dApp: DApp; onClick: (d: DApp) => voi
                 '&:hover': {
                     borderColor: 'text.primary',
                 },
-                flexShrink: 0,
             }}
         >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, minWidth: 0 }}>
                 <Box
                     component="img"
                     src={dApp.icon}
@@ -450,18 +460,24 @@ function FeaturedCard({ dApp, onClick }: { dApp: DApp; onClick: (d: DApp) => voi
                     onError={(e: ImageErrorEvent) => { (e.target as HTMLImageElement).src = letterAvatarIcon(dApp.name[0]); }}
                     sx={{
                         width: 48, height: 48,
+                        flexShrink: 0,
                         borderRadius: '0px',
                         objectFit: 'cover',
                         border: '1px solid',
                         borderColor: 'divider',
                     }}
                 />
-                <Box>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        <Typography sx={{ fontFamily: 'var(--font-mono)', color: 'text.primary', textTransform: 'uppercase' }}>
+                {/* The card is a fixed 240px, so the text column must be allowed to shrink
+                    and truncate — otherwise a long name pushes the icon out of the card. */}
+                <Box sx={{ minWidth: 0, flex: 1 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+                        <Typography
+                            noWrap
+                            sx={{ fontFamily: 'var(--font-mono)', color: 'text.primary', textTransform: 'uppercase', minWidth: 0 }}
+                        >
                             {dApp.name}
                         </Typography>
-                        <Verified sx={{ fontSize: 14, color: 'text.secondary' }} />
+                        <Verified sx={{ fontSize: 14, color: 'text.secondary', flexShrink: 0 }} />
                     </Box>
                     <Chip
                         label={t(catInfo?.labelKey || 'explore.catTools')}
@@ -473,7 +489,16 @@ function FeaturedCard({ dApp, onClick }: { dApp: DApp; onClick: (d: DApp) => voi
                     />
                 </Box>
             </Box>
-            <Typography variant="body2" sx={{ color: 'text.secondary', mb: 2, minHeight: 40 }}>
+            <Typography
+                variant="body2"
+                sx={{
+                    color: 'text.secondary', mb: 2, minHeight: 40,
+                    // Descriptions vary wildly in length; clamping keeps the row of cards
+                    // a uniform height instead of one tall card dragging the strip out.
+                    display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                }}
+            >
                 {dApp.description}
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
@@ -496,6 +521,12 @@ function DAppCard({ dApp, onClick }: { dApp: DApp; onClick: (d: DApp) => void })
             elevation={0}
             onClick={() => onClick(dApp)}
             sx={{
+                // This card sits in a CSS grid, so it fills its track. It previously kept
+                // `minWidth: 260` and `flexShrink: 0` from when it lived in a horizontal
+                // scroller — inside a grid those force the track wider than the popup and
+                // push the whole page sideways.
+                width: '100%',
+                minWidth: 0,
                 p: 2,
                 borderRadius: '0px',
                 cursor: 'pointer',
@@ -507,7 +538,7 @@ function DAppCard({ dApp, onClick }: { dApp: DApp; onClick: (d: DApp) => void })
                 },
             }}
         >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, minWidth: 0 }}>
                 <Box
                     component="img"
                     src={dApp.icon}

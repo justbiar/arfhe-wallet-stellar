@@ -21,8 +21,6 @@ export interface DApp {
     tags: string[];
     featured?: boolean;
     wcProjectId?: string;      // WalletConnect project ID for deep linking
-    /** If true, this dApp can be opened in a whitelisted iframe with postMessage proxy */
-    whitelisted?: boolean;
     /** Informational link only (e.g. a project showcase page) — skip the WalletConnect prompt on click */
     infoOnly?: boolean;
 }

@@ -19,3 +19,4 @@ export type {
   MuiTheme,
 } from "./components.js";
 export type { ShieldedTokenMeta, UnshieldClaim, ShieldedHolding } from "./fhe.js";
+export type { OwnedNftItem } from "./nft.js";

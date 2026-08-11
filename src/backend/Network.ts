@@ -1,5 +1,5 @@
 import { formatEther, parseUnits, TransactionRequest } from "ethers";
-import { Alchemy, Network as AlchemyNetwork, SortingOrder, AssetTransfersCategory } from "alchemy-sdk";
+import { Alchemy, Network as AlchemyNetwork, SortingOrder, AssetTransfersCategory, NftFilters } from "alchemy-sdk";
 import Account from "./Account.js";
 import TokenCache, { TokenCacheItem } from "./TokenCache.js";
 import type NFTCache from "./NFTCache.js";
@@ -10,6 +10,7 @@ import { ExplorerService } from "./ExplorerService.js";
 import { withRetry, fetchWithTimeout, wssRpcCall, classifyError, NetworkErrorType } from "./NetworkErrorHandler.js";
 import type { RetryOptions } from "./NetworkErrorHandler.js";
 import type { ShieldedTokenMeta, UnshieldClaim, ShieldedHolding } from "../types/fhe.js";
+import type { OwnedNftItem } from "../types/nft.js";
 import type PendingClaimQueue from "./PendingClaimQueue.js";
 
 /**
@@ -491,6 +492,44 @@ class Network {
       nftCacheObj.setNFT(this.network_id, item);
     }
     return item;
+  }
+
+  /**
+   * NFTs this address actually owns, with their token IDs and artwork.
+   *
+   * The gallery previously knew only a contract address and a `balanceOf` count, so each
+   * card guessed at `tokenURI(1)` — token #1 belongs to whoever minted first, not to this
+   * user. Every card rendered as "Unknown NFT" with a broken image, and clicking one had
+   * nowhere to go because there was no token ID to link to.
+   *
+   * Requires the Alchemy NFT API; without a key there is no way to enumerate holdings
+   * from a plain RPC, so the gallery stays empty rather than showing guesses.
+   */
+  async getOwnedNfts(userAddress: string): Promise<OwnedNftItem[]> {
+    if (!this.alchemy) return [];
+
+    try {
+      const response = await this.alchemy.nft.getNftsForOwner(userAddress, {
+        // Spam is filtered by Alchemy's own classification; airdropped junk is the bulk
+        // of what an address accumulates and none of it is worth a card.
+        excludeFilters: [NftFilters.SPAM],
+        pageSize: 60,
+      });
+
+      return response.ownedNfts.map((nft) => ({
+        contractAddress: nft.contract.address,
+        tokenId: nft.tokenId,
+        name: nft.name || nft.contract.name || "",
+        symbol: nft.contract.symbol || "",
+        // Alchemy caches and normalises the media, which sidesteps dead IPFS gateways.
+        imageUrl: nft.image?.cachedUrl || nft.image?.thumbnailUrl || nft.image?.pngUrl || "",
+        balance: nft.balance ?? "1",
+        tokenType: nft.tokenType,
+      }));
+    } catch {
+      // No NFT support on this network, or the key lacks the NFT API.
+      return [];
+    }
   }
 
   async getNftBalance(contractAddress: string, userAddress: string): Promise<string> {

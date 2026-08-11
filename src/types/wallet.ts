@@ -46,7 +46,16 @@ export interface WrappedBalance {
 
 // ─── NFT Display (Home NFT tab) ──────────────────────────────────
 
+/**
+ * An NFT as the gallery renders it.
+ *
+ * `tokenId` and `imageUrl` come from the indexer rather than being guessed on the client:
+ * without a token id the wallet cannot fetch the right artwork or link to the item, which
+ * is why every card used to read "Unknown NFT".
+ */
 export interface NFTDisplayItem extends NFTCacheItem {
+  tokenId: string;
+  imageUrl: string;
   balance: number;
 }
 

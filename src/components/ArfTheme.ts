@@ -124,6 +124,71 @@ function getComponents(mode: PaletteMode) {
         },
       },
     },
+    // Dropdowns render in a portal, so they miss any styling done at the page level and
+    // fall back to stock MUI: rounded, shadowed, with a lavender selection tint. Against
+    // this design language — square, bordered, monospace — that reads as a different app.
+    // Styling them here fixes every menu in the wallet at once, including the asset
+    // pickers on Send, Shield and Swap.
+    MuiMenu: {
+      defaultProps: {
+        // Elevation paints an overlay tint on top of the background in dark mode.
+        elevation: 0,
+      },
+      styleOverrides: {
+        paper: {
+          backgroundColor: t.bg,
+          backgroundImage: "none",
+          border: `1px solid ${t.border}`,
+          borderRadius: "0px",
+          boxShadow: "none",
+        },
+        list: {
+          paddingTop: 0,
+          paddingBottom: 0,
+        },
+      },
+    },
+    MuiPopover: {
+      styleOverrides: {
+        paper: {
+          backgroundColor: t.bg,
+          backgroundImage: "none",
+          border: `1px solid ${t.border}`,
+          borderRadius: "0px",
+          boxShadow: "none",
+        },
+      },
+    },
+    MuiMenuItem: {
+      styleOverrides: {
+        root: {
+          fontFamily: baseTokens.typography.fontFamilyMono,
+          fontSize: "13px",
+          borderRadius: "0px",
+          color: t.fg,
+          "&:hover": {
+            backgroundColor: mode === "dark" ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)",
+          },
+          // The stock selected state is a translucent primary tint, which on the neon
+          // accent turns into a colour the rest of the wallet never uses. A left rule
+          // marks the selection instead, matching the flat/bordered language.
+          "&.Mui-selected": {
+            backgroundColor: "transparent",
+            boxShadow: `inset 2px 0 0 ${t.accent}`,
+            "&:hover": {
+              backgroundColor: mode === "dark" ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)",
+            },
+          },
+        },
+      },
+    },
+    MuiSelect: {
+      styleOverrides: {
+        select: {
+          borderRadius: "0px",
+        },
+      },
+    },
     MuiBottomNavigation: {
       styleOverrides: {
         root: {

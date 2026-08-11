@@ -11,7 +11,22 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+/**
+ * The extension version, read from the manifest at build time.
+ *
+ * The About line used to ask `chrome.runtime.getManifest()` for this, which meant it
+ * reported whatever manifest Chrome currently had loaded — a stale one after a rebuild
+ * that had not been reloaded — and read "dev" in the browser dev server. Baking it in
+ * makes the number belong to the build, so it cannot disagree with what shipped.
+ */
+const APP_VERSION = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, 'extension/manifest.json'), 'utf8')
+).version;
+
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
+  },
   plugins: [
     react(),
     // Serve tfhe WASM file with correct MIME type from node_modules

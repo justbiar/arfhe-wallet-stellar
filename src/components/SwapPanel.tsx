@@ -47,36 +47,28 @@ import { WalletContext } from "../AppContext.js";
 import { NetworkId } from "../backend/NetworkTypes.js";
 import SwapService, { SwapToken, SwapQuote } from "../backend/SwapService.js";
 
-import type { Theme } from "@mui/material/styles";
+import { inputCardSx, ctaButtonSx } from "./panels/shared.js";
 
-// ─── Glassmorphic Card Styles ──────────────────────────────────
-const glassCardSx = (theme: Theme) => ({
-  p: 1.5,
-  borderRadius: 3,
-  border: "1px solid",
-  borderColor: alpha(theme.palette.divider, 0.12),
-  bgcolor: alpha(theme.palette.background.paper, 0.6),
-  backdropFilter: "blur(20px)",
-  WebkitBackdropFilter: "blur(20px)",
-  transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
-  "&:hover": {
-    borderColor: alpha(theme.palette.primary.main, 0.3),
-    boxShadow: `0 8px 32px ${alpha(theme.palette.primary.main, 0.08)}`,
-  },
-});
+// ─── Card styles ───────────────────────────────────────────────
+//
+// This panel had its own translucent, blurred card treatment while Send and Shield used
+// the shared one. Sitting them side by side in the same drawer made Swap look like it came
+// from a different app. It uses the same `inputCardSx` as its siblings now, so a change to
+// the wallet's surface reaches all three.
+const glassCardSx = (_theme?: unknown) => inputCardSx;
 
 const tokenBadgeSx = (color: string) => ({
   width: 32,
   height: 32,
-  borderRadius: "50%",
+  // Square, matching the flat treatment the rest of the wallet uses.
+  borderRadius: 1,
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
   fontSize: "0.8rem",
   fontWeight: 800,
   color: "#fff",
-  background: `linear-gradient(135deg, ${color}, ${color}99)`,
-  boxShadow: `0 2px 8px ${color}40`,
+  bgcolor: color,
   flexShrink: 0,
 });
 
@@ -117,7 +109,61 @@ export default function SwapPanel() {
   const swapService = SwapService.getInstance();
 
   // ── Token State ──
-  const tokens = networkId ? swapService.getTokens(networkId) : [];
+  // Curated tokens plus whatever this wallet holds, so a swap is not limited to a
+  // hardcoded shortlist. Confidential wrappers are filtered out: their ERC-20 balance is
+  // an activity counter, and a router pulling it would move nothing.
+  const tokens = React.useMemo(() => {
+    if (!networkId) return [];
+
+    const address = activeAccount?.GetAddress();
+    const cached = address ? context?.dataCacheService?.getTokenBalances(address, networkId) : null;
+    if (!cached) return swapService.getTokens(networkId);
+
+    const held = cached
+      .filter((b) => parseFloat(b.tokenBalance) > 0)
+      .map((b) => ({
+        contractAddress: b.contractAddress,
+        symbol: context?.tokenCache?.getToken(networkId, b.contractAddress)?.symbol,
+        decimals: context?.tokenCache?.getToken(networkId, b.contractAddress)?.decimals,
+        isNative: b.isNative,
+      }));
+
+    const confidential = new Set(
+      cached.filter((b) => (b as { isShielded?: boolean }).isShielded)
+        .map((b) => b.contractAddress.toLowerCase())
+    );
+
+    return swapService.getSwappableTokens(networkId, held, (a) => confidential.has(a));
+  }, [networkId, activeAccount, context, swapService]);
+
+  /**
+   * Addresses this wallet actually holds, for splitting the two dropdowns.
+   *
+   * The sell side may only offer what there is to sell — listing tokens with no balance
+   * invites picking one and finding out at the amount field. The buy side is the opposite:
+   * you are acquiring something you do not have yet, so it stays open.
+   */
+  const heldAddresses = React.useMemo(() => {
+    const address = activeAccount?.GetAddress();
+    if (!networkId || !address) return null;
+
+    const cached = context?.dataCacheService?.getTokenBalances(address, networkId);
+    if (!cached) return null; // Nothing cached yet — do not hide anything on a guess.
+
+    return new Set(
+      cached
+        .filter((b) => parseFloat(b.tokenBalance) > 0)
+        .map((b) => (b.isNative ? "NATIVE" : b.contractAddress.toLowerCase()))
+    );
+  }, [networkId, activeAccount, context]);
+
+  /** Sell-side options: held only, once balances are known. */
+  const sellTokens = React.useMemo(() => {
+    if (!heldAddresses) return tokens;
+    return tokens.filter((t) =>
+      heldAddresses.has(t.isNative || t.address === "NATIVE" ? "NATIVE" : t.address.toLowerCase())
+    );
+  }, [tokens, heldAddresses]);
   const [tokenIn, setTokenIn] = useState<SwapToken | null>(null);
   const [tokenOut, setTokenOut] = useState<SwapToken | null>(null);
   const [amountIn, setAmountIn] = useState("");
@@ -149,10 +195,23 @@ export default function SwapPanel() {
   // ── Initialize default tokens ──
   useEffect(() => {
     if (tokens.length >= 2) {
-      if (!tokenIn) setTokenIn(tokens[0]); // ETH
+      if (!tokenIn) setTokenIn(sellTokens[0] ?? tokens[0]);
       if (!tokenOut) setTokenOut(tokens[2] ?? tokens[1]); // USDC or WETH
     }
-  }, [tokens.length, networkId]);
+  }, [tokens.length, sellTokens.length, networkId]);
+
+  // Keep the sell selection inside the sell list.
+  //
+  // The list is held-only, so a default of ETH on an account with no ETH — or a flip that
+  // puts an unheld token on the sell side — leaves the dropdown showing a value it does
+  // not contain, which renders blank.
+  useEffect(() => {
+    if (sellTokens.length === 0) return;
+    if (tokenIn && sellTokens.some((t) => t.address === tokenIn.address)) return;
+
+    const replacement = sellTokens.find((t) => t.address !== tokenOut?.address) ?? sellTokens[0];
+    setTokenIn(replacement);
+  }, [sellTokens, tokenIn, tokenOut]);
 
   // ── Fetch balances when tokens change ──
   useEffect(() => {
@@ -340,12 +399,7 @@ export default function SwapPanel() {
         <Typography
           variant="subtitle1"
           fontWeight={800}
-          sx={{
-            background: "linear-gradient(135deg, #2563eb, #1e40af)",
-            WebkitBackgroundClip: "text",
-            WebkitTextFillColor: "transparent",
-            letterSpacing: "-0.02em",
-          }}
+          sx={{ letterSpacing: "-0.02em" }}
         >
           {t("swap.swapTokens")}
         </Typography>
@@ -497,7 +551,7 @@ export default function SwapPanel() {
               "&:hover": { bgcolor: alpha(theme.palette.primary.main, 0.06) },
             }}
           >
-            {tokens.filter((t) => t.symbol !== tokenOut?.symbol).map((t) => (
+            {sellTokens.filter((t) => t.symbol !== tokenOut?.symbol).map((t) => (
               <MenuItem key={t.symbol} value={t.symbol}>
                 <Stack direction="row" alignItems="center" spacing={1}>
                   <Box sx={tokenBadgeSx(t.logoColor)}>{t.symbol.charAt(0)}</Box>

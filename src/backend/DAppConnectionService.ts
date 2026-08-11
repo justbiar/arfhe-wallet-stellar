@@ -2,9 +2,11 @@
  * DAppConnectionService.ts — Handles dApp connection flow for ArfheWallet
  * 
  * Architecture:
- * 1. Primary: Opens dApp in new tab → user connects via WalletConnect QR/paste
- * 2. Fallback: For whitelisted internal dApps, uses postMessage proxy in iframe
- * 3. FHE Security Guard: Blocks dangerous FHE method calls from external dApps
+ * 1. dApps open in a new tab; the user connects from there via WalletConnect, or through
+ *    the injected provider with its own approval window.
+ * 2. FHE Security Guard: flags calls that touch confidential balances.
+ * 3. Request/wallet agreement: refuses to sign for a chain or account the site did not ask
+ *    for (see `checkRequestMatchesWallet`).
  */
 
 import { DApp } from './DAppRegistry';
@@ -78,99 +80,27 @@ export function analyzeFheRisk(txData: string | undefined, toAddress: string | u
 
 // ─── Connection Service ────────────────────────────────────────────
 
-export type ConnectionMode = 'walletconnect' | 'external' | 'iframe';
+export type ConnectionMode = 'external';
 
 export interface ConnectionResult {
     mode: ConnectionMode;
     url?: string;
-    wcUri?: string;
 }
 
 /**
- * Determine the best connection strategy for a dApp.
- * 
- * Priority:
- * 1. Whitelisted dApps → can use iframe with postMessage proxy (internal tools only)
- * 2. WalletConnect-supported dApps → open externally, connect via WC v2
- * 3. Default → open in new tab, user pastes WC URI manually
- */
-export function getConnectionStrategy(dApp: DApp): ConnectionMode {
-    if (dApp.whitelisted) return 'iframe';
-    return 'external';  // All external dApps open in new tab
-}
-
-/**
- * Open a dApp and initiate connection.
- * Returns the connection mode used.
+ * Open a dApp in a new tab.
+ *
+ * Every dApp opens the same way. There was an `iframe` mode here for "whitelisted"
+ * dApps, backed by a postMessage proxy that was never built — no dApp was ever
+ * whitelisted, so the branch never ran, but anything marked whitelisted would have
+ * returned a mode nobody handles and simply not opened at all.
+ *
+ * `noopener,noreferrer` matters: without it the opened page gets a handle on this one
+ * through `window.opener`.
  */
 export function openDApp(dApp: DApp): ConnectionResult {
-    const mode = getConnectionStrategy(dApp);
-
-    if (mode === 'external') {
-        // Open dApp in new tab — user will connect via WalletConnect from there
-        window.open(dApp.url, '_blank', 'noopener,noreferrer');
-        return { mode: 'external', url: dApp.url };
-    }
-
-    // iframe mode for whitelisted dApps (currently none)
-    return { mode: 'iframe', url: dApp.url };
-}
-
-// ─── postMessage Proxy (for whitelisted iframe dApps) ──────────────
-//
-// This creates a simulated window.ethereum provider that forwards
-// RPC calls from the iframe to our wallet via postMessage.
-// Currently unused — reserved for future internal tools.
-
-export interface ProxyMessage {
-    type: 'arfhe-rpc-request' | 'arfhe-rpc-response';
-    id: number;
-    method: string;
-    params?: unknown[];
-    result?: unknown;
-    error?: string;
-}
-
-/**
- * Validate an incoming postMessage from a whitelisted iframe.
- * Rejects messages from unknown origins.
- */
-export function validateProxyMessage(event: MessageEvent, allowedOrigins: string[]): ProxyMessage | null {
-    if (!allowedOrigins.includes(event.origin)) {
-        return null;
-    }
-
-    const data = event.data as ProxyMessage;
-    if (!data || data.type !== 'arfhe-rpc-request' || typeof data.id !== 'number') {
-        return null;
-    }
-
-    // Block dangerous methods
-    if (APPROVAL_REQUIRED_METHODS.includes(data.method)) {
-        // These will be routed to DAppApprovalModal instead of auto-responding
-        return data;
-    }
-
-    // Allow safe read-only methods
-    const SAFE_METHODS = [
-        'eth_chainId',
-        'eth_accounts',
-        'eth_blockNumber',
-        'eth_getBalance',
-        'eth_call',
-        'eth_estimateGas',
-        'eth_gasPrice',
-        'eth_getCode',
-        'eth_getTransactionReceipt',
-        'eth_getTransactionByHash',
-        'net_version',
-    ];
-
-    if (!SAFE_METHODS.includes(data.method) && !APPROVAL_REQUIRED_METHODS.includes(data.method)) {
-        return null;
-    }
-
-    return data;
+    window.open(dApp.url, '_blank', 'noopener,noreferrer');
+    return { mode: 'external', url: dApp.url };
 }
 
 /**

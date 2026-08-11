@@ -533,7 +533,9 @@ export default function History() {
           elevation={0}
           sx={{
             borderRadius: 4,
-            bgcolor: (theme) => theme.palette.mode === 'dark' ? 'rgba(30, 30, 30, 0.85)' : 'rgba(255, 255, 255, 0.85)',
+            // Follow the theme rather than hardcoding white: the wallet's light surface is
+            // a warm bone tone, so a literal white panel reads as a foreign element.
+            bgcolor: 'background.paper',
             backdropFilter: "blur(20px)",
             border: "1px solid",
             borderColor: "divider",
@@ -546,11 +548,43 @@ export default function History() {
           {loading && (
             <Box sx={{ p: 2 }}>
               {[1, 2, 3, 4, 5].map((i) => (
-                <Stack key={i} direction="row" spacing={2} alignItems="center" sx={{ py: 1.5 }}>
-                  <Skeleton variant="circular" width={40} height={40} />
-                  <Box sx={{ flex: 1 }}>
-                    <Skeleton variant="text" width="60%" height={24} />
-                    <Skeleton variant="text" width="40%" height={18} />
+                <Stack
+                  key={i}
+                  direction="row"
+                  spacing={2}
+                  alignItems="center"
+                  sx={{
+                    py: 1.5,
+                    // Mirror the real rows' divider so the list does not shift when the
+                    // placeholders are replaced.
+                    borderBottom: i < 5 ? '1px solid' : 'none',
+                    borderColor: 'divider',
+                  }}
+                >
+                  {/* Tinted from the theme's text colour, so the placeholders sit on the
+                      surface instead of glowing grey against it. */}
+                  <Skeleton
+                    variant="circular"
+                    width={40}
+                    height={40}
+                    animation="wave"
+                    sx={{ bgcolor: (theme) => alpha(theme.palette.text.primary, 0.07), flexShrink: 0 }}
+                  />
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Skeleton
+                      variant="text"
+                      width="60%"
+                      height={24}
+                      animation="wave"
+                      sx={{ bgcolor: (theme) => alpha(theme.palette.text.primary, 0.07) }}
+                    />
+                    <Skeleton
+                      variant="text"
+                      width="40%"
+                      height={18}
+                      animation="wave"
+                      sx={{ bgcolor: (theme) => alpha(theme.palette.text.primary, 0.05) }}
+                    />
                   </Box>
                 </Stack>
               ))}

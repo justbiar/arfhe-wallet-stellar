@@ -26,7 +26,8 @@ import {
   CurrencyExchange,
   DriveFileRenameOutline,
 } from "@mui/icons-material";
-import { CustomNetworkConfig } from "../backend/NetworkTypes";
+import { CustomNetworkConfig, NetworkId, isFheNetwork } from "../backend/NetworkTypes";
+import { useTranslation } from "react-i18next";
 
 interface AddNetworkModalProps {
   open: boolean;
@@ -37,6 +38,7 @@ interface AddNetworkModalProps {
 type RpcTestStatus = "idle" | "testing" | "success" | "error";
 
 export default function AddNetworkModal({ open, onClose, onAdd }: AddNetworkModalProps) {
+  const { t } = useTranslation();
   const theme = useTheme();
 
   const [networkName, setNetworkName] = useState("");
@@ -172,14 +174,27 @@ export default function AddNetworkModal({ open, onClose, onAdd }: AddNetworkModa
       return;
     }
 
-    // Warn if RPC test hasn't been done — but allow skipping with a warning
-    if (rpcTestStatus === "idle") {
-      setFormError("Please test the RPC connection first (or enter chain ID manually if test fails).");
+    // The chain ID must come from the chain itself, never from what was typed.
+    //
+    // A transaction is signed for a specific chain ID; if it does not match the chain the
+    // RPC actually serves, the signature is either rejected or — on a chain that shares the
+    // ID — replayable somewhere the user never intended. Accepting an unverified value
+    // (previously allowed whenever the connection test failed) makes that the user's
+    // problem to notice, which is not a reasonable thing to ask.
+    if (rpcTestStatus !== "success") {
+      setFormError(
+        "The RPC connection must be tested successfully before adding the network — " +
+        "the chain ID has to be confirmed by the chain itself, not entered by hand."
+      );
       return;
     }
 
-    // Warn if detected chain ID doesn't match
-    if (rpcTestStatus === "success" && rpcTestChainId && rpcTestChainId !== Number(chainId)) {
+    if (!rpcTestChainId) {
+      setFormError("The RPC did not report a chain ID. This endpoint cannot be used safely.");
+      return;
+    }
+
+    if (rpcTestChainId !== Number(chainId)) {
       setFormError(`Chain ID mismatch: RPC returned ${rpcTestChainId}, but you entered ${chainId}.`);
       return;
     }
@@ -202,7 +217,21 @@ export default function AddNetworkModal({ open, onClose, onAdd }: AddNetworkModa
     }
   };
 
-  const isFormValid = networkName.trim() && rpcUrl.trim() && chainId.trim() && currencySymbol.trim() && rpcTestStatus !== "idle";
+  // Mirrors the submit check, so the button reflects the requirement instead of enabling
+  // and then failing: the chain ID has to be confirmed by a successful RPC test.
+  const isFormValid = networkName.trim() && rpcUrl.trim() && chainId.trim()
+    && currencySymbol.trim() && rpcTestStatus === "success";
+
+  // Shielding needs a CoFHE coprocessor, which exists on three chains only. A custom
+  // network is almost never one of them, so say so at add time rather than letting the
+  // user discover it when Shield is greyed out later.
+  const willSupportFhe = !!chainId && isFheNetwork(Number(chainId) as NetworkId);
+
+  const fheNotice = chainId.trim() && !willSupportFhe ? (
+    <Alert severity="info" sx={{ mt: 2, borderRadius: 2, fontSize: "0.8rem" }}>
+      {t("network.customNoFhe")}
+    </Alert>
+  ) : null;
 
   return (
     <Dialog
@@ -420,6 +449,7 @@ export default function AddNetworkModal({ open, onClose, onAdd }: AddNetworkModa
               {formError}
             </Alert>
           )}
+            {fheNotice}
 
           {/* Submit Button */}
           <Button

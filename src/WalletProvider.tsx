@@ -27,6 +27,86 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     };
   }, [appContext.accountManager, appContext.networkProvider]);
 
+  // --- Keep connected websites in step with the wallet ---
+  //
+  // The service worker answers sites on the wallet's behalf, so it has to know which chain
+  // and RPC are active. It also cannot see React state, which is why this is pushed rather
+  // than pulled.
+  //
+  // The `chainChanged` event is not optional politeness: EIP-1193 requires it, and a dApp
+  // that never receives it keeps preparing transactions for the chain the user has left.
+  React.useEffect(() => {
+    const runtime = (window as unknown as { chrome?: { runtime?: { id?: string; sendMessage?: typeof chrome.runtime.sendMessage } } }).chrome?.runtime;
+    if (!runtime?.id || !runtime.sendMessage) return;
+
+    const push = () => {
+      try {
+        const net = appContext.networkProvider.getActiveNetwork();
+        runtime.sendMessage?.({
+          type: "SET_WALLET_STATE",
+          chainId: Number(net.network_id),
+          rpcUrl: net.rpc_url ?? null,
+        });
+      } catch {
+        // The worker may be restarting; the next change pushes again.
+      }
+    };
+
+    push();
+    const unsubscribeNetwork = appContext.networkProvider.subscribe(push);
+
+    // An account switch changes what each connected site is allowed to see, and each site
+    // must be told its own list — never the whole wallet's.
+    const unsubscribeAccount = appContext.accountManager.subscribe(() => {
+      try {
+        runtime.sendMessage?.({ type: "PERMISSIONS_CHANGED" });
+      } catch { /* worker restarting */ }
+    });
+
+    return () => {
+      unsubscribeNetwork();
+      unsubscribeAccount();
+    };
+  }, [appContext.networkProvider, appContext.accountManager]);
+
+  // --- Resume interrupted unshields ---
+  // The second half of an unshield (decrypt + claim) can be cut short by the popup
+  // closing, leaving burned balance behind an unsettled claim. Retry whenever the wallet
+  // is open and unlocked so it completes without the user having to do anything.
+  //
+  // A locked wallet cannot participate: settling needs a signature, and the signing key
+  // only exists in memory while unlocked. Resuming here is the safe equivalent of a
+  // background worker, without handing that key to one.
+  React.useEffect(() => {
+    let cancelled = false;
+
+    const resume = async () => {
+      if (cancelled) return;
+      if (!appContext.storageManager.isUnlocked()) return;
+      if (location.pathname === '/auth' || location.pathname === '/') return;
+
+      const account = appContext.accountManager.GetActive();
+      if (!account?.ethers_wallet) return;
+
+      const network = appContext.networkProvider.getActiveNetwork();
+      try {
+        const settled = await network.drainPendingClaims(account, appContext.pendingClaimQueue);
+        if (settled > 0 && !cancelled) setRefresh(f => f + 1);
+      } catch {
+        // Best-effort background work; failures stay queued for the next attempt.
+      }
+    };
+
+    void resume();
+    // Also retry periodically: the threshold network may simply have been slow.
+    const interval = setInterval(() => void resume(), 60_000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [appContext, location.pathname]);
+
   // --- Auto-Lock Feature ---
   React.useEffect(() => {
     let timeoutId: NodeJS.Timeout;

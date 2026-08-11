@@ -147,45 +147,73 @@ describe('TransactionSimulator', () => {
   // ─── FHE Selectors ────────────────────────────────────────────
   describe('FHE Selectors', () => {
     it('transferEncrypted selector algılanır', async () => {
-      // transferEncrypted selector: 0x7c231884
+      // confidentialTransfer(address,(uint256,uint8,uint8,bytes)): 0xa794ee95
       const result = await simulator.simulateTransaction({
         from: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266',
         to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
         value: '0',
-        data: '0x7c231884' + '0'.repeat(128), // selector + dummy params
+        data: '0xa794ee95' + '0'.repeat(128), // selector + dummy params
       });
       expect(result.operationType).toBe('transferEncrypted');
       expect(result.warnings.some(w => w.includes('FHE'))).toBe(true);
     });
 
-    it('wrap selector algılanır', async () => {
+    it('shield selector algılanır', async () => {
+      // shield(address,uint256): 0x8f214a33
       const result = await simulator.simulateTransaction({
         from: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266',
         to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
         value: '0',
-        data: '0xea598cb0' + '0'.repeat(64),
+        data: '0x8f214a33' + '0'.repeat(128),
       });
       expect(result.operationType).toBe('wrap');
     });
 
-    it('wrapETH selector algılanır', async () => {
+    it('shieldNative selector algılanır', async () => {
+      // shieldNative(address): 0x759ded8c
       const result = await simulator.simulateTransaction({
         from: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266',
         to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
         value: '1000000000000000000',
-        data: '0xa3211896',
+        data: '0x759ded8c' + '0'.repeat(64),
       });
       expect(result.operationType).toBe('wrapETH');
     });
 
-    it('unwrap selector algılanır', async () => {
+    it('unshield selector algılanır ve claim uyarısı verir', async () => {
+      // unshield(address,address,uint64): 0x4ccac778
       const result = await simulator.simulateTransaction({
         from: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266',
         to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
         value: '0',
-        data: '0xde0e9a3e' + '0'.repeat(64),
+        data: '0x4ccac778' + '0'.repeat(192),
       });
       expect(result.operationType).toBe('unwrap');
+      // Unshielding is two-step — the user must be told a claim still follows.
+      expect(result.warnings.some(w => w.includes('Claim'))).toBe(true);
+    });
+
+    it('claimUnshielded selector algılanır', async () => {
+      // claimUnshielded(bytes32,uint64,bytes): 0xcdc75a80
+      const result = await simulator.simulateTransaction({
+        from: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266',
+        to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+        value: '0',
+        data: '0xcdc75a80' + '0'.repeat(192),
+      });
+      expect(result.operationType).toBe('claimUnshielded');
+    });
+
+    it('setOperator tüm bakiye uyarısı verir', async () => {
+      // setOperator(address,uint48): 0xd4febb96
+      const result = await simulator.simulateTransaction({
+        from: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266',
+        to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+        value: '0',
+        data: '0xd4febb96' + '0'.repeat(128),
+      });
+      expect(result.operationType).toBe('setOperator');
+      expect(result.warnings.some(w => w.includes('TAMAMINI'))).toBe(true);
     });
   });
 

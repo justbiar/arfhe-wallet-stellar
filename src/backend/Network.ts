@@ -9,6 +9,8 @@ import { NetworkId, TokenBalance, TransactionHistory, PendingTransaction, Custom
 import { ExplorerService } from "./ExplorerService.js";
 import { withRetry, fetchWithTimeout, wssRpcCall, classifyError, NetworkErrorType } from "./NetworkErrorHandler.js";
 import type { RetryOptions } from "./NetworkErrorHandler.js";
+import type { ShieldedTokenMeta, UnshieldClaim, ShieldedHolding } from "../types/fhe.js";
+import type PendingClaimQueue from "./PendingClaimQueue.js";
 
 /**
  * Returns the correct CoinGecko API base URL.
@@ -240,6 +242,141 @@ class Network {
         },
       }
     );
+  }
+
+  /**
+   * Issue many JSON-RPC calls as a single batched HTTP request.
+   *
+   * Scanning the token list one `eth_call` at a time is what made the shield panel take
+   * minutes to open: a hundred tokens meant a hundred round trips, each with its own
+   * retry budget. Batching collapses that to a couple of requests.
+   *
+   * Failures are per-item, never fatal: an entry that errors (or is missing from the
+   * response) comes back as `null` so callers degrade to "unknown" instead of losing the
+   * whole batch. Falls back to individual calls when the endpoint rejects batching,
+   * which some RPCs and all WebSocket transports do.
+   *
+   * @param requests One `{ method, params }` per call, in order.
+   * @param chunkSize Maximum calls per HTTP request; providers cap batch sizes.
+   * @returns Results positionally aligned with `requests`; `null` where the call failed.
+   */
+  async callBatch(
+    requests: { method: string; params: unknown[] }[],
+    chunkSize = 50
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ): Promise<(any | null)[]> {
+    if (requests.length === 0) return [];
+    if (!this.rpc_url) throw new Error("RPC URL not set");
+
+    const rpcUrl = this.rpc_url;
+    const isWs = rpcUrl.startsWith("ws://") || rpcUrl.startsWith("wss://");
+
+    // WebSocket transport has no batch helper here — fall back to bounded concurrency,
+    // which still beats fully sequential calls.
+    if (isWs) return this.callEachLimited(requests);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const results: (any | null)[] = new Array(requests.length).fill(null);
+
+    for (let offset = 0; offset < requests.length; offset += chunkSize) {
+      const chunk = requests.slice(offset, offset + chunkSize);
+      const body = JSON.stringify(
+        chunk.map((r, i) => ({ id: i, jsonrpc: "2.0", method: r.method, params: r.params }))
+      );
+
+      try {
+        const response = await fetchWithTimeout(
+          rpcUrl,
+          { method: "POST", headers: this.FETCH_HEADERS, body },
+          20_000
+        );
+        const json = await response.json();
+
+        // A provider that does not support batching answers with a single object.
+        if (!Array.isArray(json)) throw new Error("Batch not supported");
+
+        for (const entry of json) {
+          const index = typeof entry?.id === "number" ? offset + entry.id : -1;
+          if (index < 0 || index >= requests.length) continue;
+          results[index] = entry.error ? null : entry.result;
+        }
+      } catch {
+        // Batch rejected or malformed — redo just this chunk one call at a time.
+        const individual = await this.callEachLimited(chunk);
+        individual.forEach((value, i) => { results[offset + i] = value; });
+      }
+    }
+
+    return results;
+  }
+
+  /** Run calls with bounded concurrency, mapping individual failures to null. */
+  private async callEachLimited(
+    requests: { method: string; params: unknown[] }[],
+    concurrency = 8
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ): Promise<(any | null)[]> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const results: (any | null)[] = new Array(requests.length).fill(null);
+    let cursor = 0;
+
+    const worker = async () => {
+      for (;;) {
+        const index = cursor++;
+        if (index >= requests.length) return;
+        try {
+          results[index] = await this.call(requests[index].method, requests[index].params);
+        } catch {
+          results[index] = null;
+        }
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(concurrency, requests.length) }, worker)
+    );
+    return results;
+  }
+
+  /** Resolved ERC-20 decimals per token address; immutable after deployment. */
+  private decimalsCache = new Map<string, number>();
+
+  /**
+   * Read an ERC-20's `decimals()` from the contract.
+   *
+   * Decimals scale the amount that actually leaves the wallet, so they must come from the
+   * token rather than from cached metadata supplied by a third-party indexer: treating a
+   * 6-decimal token as 18-decimal sends a million times the intended amount.
+   *
+   * @throws When the token does not answer `decimals()`. Guessing here would mean signing
+   *         a transfer whose size nobody has established.
+   */
+  async getErc20Decimals(tokenAddress: string): Promise<number> {
+    const key = tokenAddress.toLowerCase();
+    const cached = this.decimalsCache.get(key);
+    if (cached !== undefined) return cached;
+
+    const { Interface } = await import("ethers");
+    const iface = new Interface(["function decimals() view returns (uint8)"]);
+
+    const hex = await this.call("eth_call", [
+      { to: tokenAddress, data: iface.encodeFunctionData("decimals", []) },
+      "latest",
+    ]);
+
+    if (!hex || hex === "0x") {
+      throw new Error(
+        "This token does not report its decimals, so the amount to send cannot be determined safely."
+      );
+    }
+
+    const decimals = Number(BigInt(hex));
+    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) {
+      throw new Error(`This token reports an implausible decimals value (${decimals}).`);
+    }
+
+    this.decimalsCache.set(key, decimals);
+    return decimals;
   }
 
   async getBlockNumber(): Promise<number> {
@@ -895,12 +1032,12 @@ class Network {
         order: SortingOrder.DESCENDING
       };
 
-      const CETH_SEP = (import.meta.env.VITE_WRAPPED_ETH_ADDRESS || "").toLowerCase();
-      const CUSDC_SEP = (import.meta.env.VITE_WRAPPED_USDC_ADDRESS || "").toLowerCase();
-      const CETH_ARB = (import.meta.env.VITE_ARB_WRAPPED_ETH_ADDRESS || "").toLowerCase();
-      const CUSDC_ARB = (import.meta.env.VITE_ARB_WRAPPED_USDC_ADDRESS || "").toLowerCase();
-      const CETH_BASE = (import.meta.env.VITE_BASE_WRAPPED_ETH_ADDRESS || "").toLowerCase();
-      const CUSDC_BASE = (import.meta.env.VITE_BASE_WRAPPED_USDC_ADDRESS || "").toLowerCase();
+      // Every confidential wrapper on this network, not just the two in .env. History has
+      // to recognise all of them or a shielded ERC-20 transfer is rendered as a plain
+      // ~7984 token movement — publishing an amount that is supposed to be encrypted.
+      const shieldedContracts = this.isFheCapable()
+        ? await this.getKnownWrapperSet().catch(() => new Set<string>())
+        : new Set<string>();
 
       const promises: Promise<unknown>[] = [];
 
@@ -917,9 +1054,7 @@ class Network {
       // 2. Direct eth_getLogs for incoming FHE ConfidentialTransfers
       const isFheNetwork = this.network_id === NetworkId.Ethereum_Sepolia || this.network_id === NetworkId.Arbitrum_Sepolia || this.network_id === NetworkId.Base_Sepolia;
       if (isFheNetwork) {
-        const ceth = this.network_id === NetworkId.Ethereum_Sepolia ? CETH_SEP : this.network_id === NetworkId.Arbitrum_Sepolia ? CETH_ARB : CETH_BASE;
-        const cusdc = this.network_id === NetworkId.Ethereum_Sepolia ? CUSDC_SEP : this.network_id === NetworkId.Arbitrum_Sepolia ? CUSDC_ARB : CUSDC_BASE;
-        const fheContracts = [ceth, cusdc].filter(Boolean);
+        const fheContracts = [...shieldedContracts];
 
         if (fheContracts.length > 0) {
           promises.push((async () => {
@@ -1026,18 +1161,27 @@ class Network {
           };
         }
 
-        const isShielded = [CETH_SEP, CUSDC_SEP, CETH_ARB, CUSDC_ARB].includes(contractAddress) && contractAddress !== "";
-        const isWrapOrUnwrap = isShielded && tx.value && tx.value > 0;
+        const isShielded = !!contractAddress && shieldedContracts.has(contractAddress);
 
-        const finalValue = isShielded && (!tx.value || tx.value === 0 || tx.value?.toString() === "0")
-          ? "Encrypted"
-          : tx.value?.toString() || "0";
+        // On a confidential wrapper the ERC-20 Transfer event deliberately carries a fixed
+        // activity indicator (~7984.0001) instead of the real amount, so explorers can show
+        // activity without leaking value. Rendering it as an amount would be a lie, so any
+        // erc20-category movement on these contracts is reported as encrypted.
+        //
+        // The native legs are different: the ETH deposited when shielding and the ETH paid
+        // out when claiming are genuinely public, and their values are real.
+        const isIndicatorTransfer = isShielded && tx.category === "erc20";
+        const hasRealValue = !!tx.value && Number(tx.value) > 0;
+
+        const finalValue = isShielded
+          ? (isIndicatorTransfer || !hasRealValue ? "Encrypted" : tx.value.toString())
+          : (tx.value?.toString() || "0");
 
         let methodLabel = "Transfer";
         if (isShielded) {
-          if (tx.category === "external" && tx.value > 0) methodLabel = "Wrap";
-          else if (tx.category === "internal" && tx.value > 0) methodLabel = "Unwrap";
-          else methodLabel = "Shield Transfer";
+          if (tx.category === "external" && hasRealValue) methodLabel = "Shield";
+          else if (tx.category === "internal" && hasRealValue) methodLabel = "Unshield Claim";
+          else methodLabel = "Confidential Transfer";
         } else if (tx.to && SWAP_ROUTERS.has(tx.to.toLowerCase())) {
           methodLabel = "Swap";
         } else if (tx.to && WETH_ADDRESSES.has(tx.to.toLowerCase()) && tx.category === "external") {
@@ -1152,7 +1296,17 @@ class Network {
       gasPrice?: string;
       data?: string;
       gasMultiplier?: number;
-    }
+    },
+    /**
+     * Called with the hash the moment the transaction is broadcast, before it is mined.
+     *
+     * This method only returns once there is a receipt, so without this hook the caller
+     * holds nothing for the entire mining window — the user watches a spinner with no hash
+     * and no explorer link, and a popup closed in that window leaves no record of a
+     * transaction that is already on-chain. The same applies when the transaction reverts:
+     * the error thrown below would otherwise discard the hash of a real transaction.
+     */
+    onBroadcast?: (hash: string) => void
   ): Promise<string> {
     if (!this.rpc_url) throw new Error("RPC URL not set");
     if (!account.ethers_wallet) throw new Error("Account is missing ethers_wallet");
@@ -1201,6 +1355,14 @@ class Network {
 
     try {
       const sentTx = await connectedWallet.sendTransaction(txRequest);
+
+      // Hand the hash over before waiting. Everything after this point can take minutes,
+      // and the transaction is already irreversible on the network.
+      try {
+        onBroadcast?.(sentTx.hash);
+      } catch {
+        // A UI callback throwing must not look like a failed transaction.
+      }
 
       // Track as pending until confirmed
       this.pendingTransactions.set(sentTx.hash, {
@@ -1444,292 +1606,1098 @@ class Network {
     }
   }
 
-  // --- FHE / SHIELDING METHODS ---
+  // --- FHE / CONFIDENTIAL TOKEN METHODS ---
+  //
+  // Backed by FHERC20 wrappers (fhenix-confidential-contracts) on the three chains CoFHE
+  // supports. Two unit systems are in play and must not be mixed up:
+  //
+  //   underlying units  — what the wrapped ERC20/ETH uses (e.g. 18 decimals for ETH)
+  //   confidential units — what the encrypted euint64 balance uses (capped at 6 decimals)
+  //
+  // `shield*` takes underlying units. `unshield` and `confidentialTransfer` take
+  // confidential units. `rate()` converts between them.
 
-  async getShieldedBalance(contractAddress: string, userAddress: string, account?: Account): Promise<string> {
-    if (this.network_id !== NetworkId.Ethereum_Sepolia && this.network_id !== NetworkId.Arbitrum_Sepolia && this.network_id !== NetworkId.Base_Sepolia) return "0.0";
+  /** Per-contract metadata cache; these values are immutable after deployment. */
+  private shieldedMetaCache = new Map<string, ShieldedTokenMeta>();
+
+  /** ABI subset of the FHERC20 wrappers the wallet drives. */
+  private static readonly SHIELDED_ABI = [
+    "function decimals() view returns (uint8)",
+    "function rate() view returns (uint256)",
+    "function symbol() view returns (string)",
+    "function name() view returns (string)",
+    "function underlying() view returns (address)",
+    "function confidentialBalanceOf(address account) view returns (bytes32)",
+    "function getUserClaims(address user) view returns (tuple(address to, bytes32 ctHash, uint64 requestedAmount, uint64 decryptedAmount, bool claimed)[])",
+    "function shieldNative(address to) payable returns (bytes32)",
+    "function shieldWrappedNative(address to, uint256 value) returns (bytes32)",
+    "function shield(address to, uint256 amount) returns (bytes32)",
+    "function unshield(address from, address to, uint64 amount) returns (bytes32)",
+    "function claimUnshielded(bytes32 ctHash, uint64 decryptedAmount, bytes decryptionProof)",
+    "function claimUnshieldedBatch(bytes32[] ctHashes, uint64[] decryptedAmounts, bytes[] decryptionProofs)",
+    "function confidentialTransfer(address to, tuple(uint256 ctHash, uint8 securityZone, uint8 utype, bytes signature) encryptedAmount) returns (bytes32)",
+  ];
+
+  /** Cached `balanceOfIsIndicator()` result per token address. */
+  private confidentialTokenCache = new Map<string, boolean>();
+
+  /**
+   * Whether a token is a confidential FHERC20 wrapper.
+   *
+   * Asks the contract itself via `balanceOfIsIndicator()` rather than matching against a
+   * list of known addresses. Address lists go stale the moment wrappers are redeployed —
+   * and a stale list means old wrappers leak back into the token list showing their
+   * ~7984 activity counter as if it were a balance.
+   *
+   * Plain ERC-20s have no such function, so the call reverts and the answer is false.
+   * Results are cached because the answer is fixed at deployment.
+   */
+  async isConfidentialToken(tokenAddress: string): Promise<boolean> {
+    const key = tokenAddress.toLowerCase();
+    const cached = this.confidentialTokenCache.get(key);
+    if (cached !== undefined) return cached;
+
+    // The registry answers for free; only addresses it has never heard of need probing.
+    const known = await this.getKnownWrapperSet();
+    if (known.has(key)) {
+      this.confidentialTokenCache.set(key, true);
+      return true;
+    }
+
+    const { Interface } = await import("ethers");
+    const iface = new Interface(["function balanceOfIsIndicator() view returns (bool)"]);
+
+    let result = false;
+    try {
+      const hex = await this.call("eth_call", [
+        { to: tokenAddress, data: iface.encodeFunctionData("balanceOfIsIndicator", []) },
+        "latest",
+      ]);
+      if (hex && hex !== "0x") {
+        [result] = iface.decodeFunctionResult("balanceOfIsIndicator", hex) as unknown as [boolean];
+      }
+    } catch {
+      // Not an FHERC20 — a plain token has no such function.
+    }
+
+    this.confidentialTokenCache.set(key, result);
+    return result;
+  }
+
+  /**
+   * Resolve {@link isConfidentialToken} for many addresses; returns the confidential ones.
+   *
+   * Anything the factory registry already knows about is answered for free. Only genuinely
+   * unknown addresses are probed on-chain, and those probes go out as a single batched
+   * request rather than one round trip per token.
+   */
+  async filterConfidentialTokens(tokenAddresses: string[]): Promise<Set<string>> {
+    const found = new Set<string>();
+    if (tokenAddresses.length === 0) return found;
+
+    const known = await this.getKnownWrapperSet();
+    const unknown: string[] = [];
+
+    for (const address of tokenAddresses) {
+      const key = address.toLowerCase();
+      if (known.has(key)) {
+        this.confidentialTokenCache.set(key, true);
+        found.add(key);
+        continue;
+      }
+      const cached = this.confidentialTokenCache.get(key);
+      if (cached !== undefined) {
+        if (cached) found.add(key);
+        continue;
+      }
+      unknown.push(key);
+    }
+
+    if (unknown.length === 0) return found;
+
+    // Wrappers from superseded deployments are not in the current registry, so they still
+    // need the standard's own detection hook — batched, so this stays one request.
+    const { Interface } = await import("ethers");
+    const iface = new Interface(["function balanceOfIsIndicator() view returns (bool)"]);
+    const data = iface.encodeFunctionData("balanceOfIsIndicator", []);
+
+    const results = await this.callBatch(
+      unknown.map((to) => ({ method: "eth_call", params: [{ to, data }, "latest"] }))
+    );
+
+    unknown.forEach((key, i) => {
+      let isConfidential = false;
+      const hex = results[i];
+      if (hex && hex !== "0x") {
+        try {
+          [isConfidential] = iface.decodeFunctionResult("balanceOfIsIndicator", hex) as unknown as [boolean];
+        } catch {
+          // Not an FHERC20 — a plain token returns something undecodable or reverts.
+        }
+      }
+      this.confidentialTokenCache.set(key, isConfidential);
+      if (isConfidential) found.add(key);
+    });
+
+    return found;
+  }
+
+  /** ABI subset of {ArfheWrapperFactory}. */
+  private static readonly FACTORY_ABI = [
+    "function wrapperFor(address underlying) view returns (address)",
+    "function wrappersFor(address[] underlyings) view returns (address[])",
+    "function createWrapper(address underlying) returns (address)",
+    "function wrapperCount() view returns (uint256)",
+    "function wrappersAt(uint256 offset, uint256 limit) view returns (address[])",
+  ];
+
+  /** Resolved underlying -> wrapper, cached per network instance. */
+  private wrapperCache = new Map<string, string>();
+
+  /** Address of the wrapper factory on this network, or "" when none is configured. */
+  private factoryAddress(): string {
+    const env = import.meta.env;
+    if (this.network_id === NetworkId.Arbitrum_Sepolia) return env.VITE_ARB_WRAPPER_FACTORY_ADDRESS || "";
+    if (this.network_id === NetworkId.Base_Sepolia) return env.VITE_BASE_WRAPPER_FACTORY_ADDRESS || "";
+    if (this.network_id === NetworkId.Ethereum_Sepolia) return env.VITE_WRAPPER_FACTORY_ADDRESS || "";
+    return "";
+  }
+
+  /**
+   * Look up the confidential wrapper for an ERC-20, if one has been deployed.
+   *
+   * Shielding is per-token: each ERC-20 needs its own wrapper holding the deposits that
+   * back its encrypted balances. The factory is the registry of those wrappers, which is
+   * what lets the wallet offer shielding for arbitrary tokens instead of a fixed pair.
+   *
+   * @returns The wrapper address, or null when the token has none yet.
+   */
+  async getWrapperFor(underlyingAddress: string): Promise<string | null> {
+    if (!this.isFheCapable()) return null;
+
+    const factory = this.factoryAddress();
+    if (!factory) return null;
+
+    const key = underlyingAddress.toLowerCase();
+    const cached = this.wrapperCache.get(key);
+    if (cached !== undefined) return cached || null;
+
+    const { Interface, ZeroAddress, getAddress } = await import("ethers");
+    const iface = new Interface(Network.FACTORY_ABI);
 
     try {
-      const { default: FheCofheService } = await import("./FheCofheService.js");
-      const ethers = await import("ethers");
+      const resultHex = await this.call("eth_call", [
+        { to: factory, data: iface.encodeFunctionData("wrapperFor", [underlyingAddress]) },
+        "latest",
+      ]);
+      if (!resultHex || resultHex === "0x") return null;
 
-      const instance = FheCofheService.getInstance();
+      const [wrapper] = iface.decodeFunctionResult("wrapperFor", resultHex);
+      const address = wrapper === ZeroAddress ? "" : getAddress(wrapper as string);
+      this.wrapperCache.set(key, address);
+      return address || null;
+    } catch {
+      return null;
+    }
+  }
 
-      // Ensure cofhejs is initialized for the correct account
-      if (!instance.isReadyForAccount(userAddress, this.network_id)) {
-        if (account && account.ethers_wallet) {
-          const provider = new ethers.JsonRpcProvider(this.rpc_url);
-          const connectedWallet = account.ethers_wallet.connect(provider);
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- cofhejs expects its own signer interface
-          await instance.init(provider, connectedWallet as any);
-        } else if (!instance.isReady()) {
-          return "0.0";
+  /** Resolve many tokens in one call — used to annotate a whole token list. */
+  async getWrappersFor(underlyingAddresses: string[]): Promise<Map<string, string>> {
+    const found = new Map<string, string>();
+    if (!this.isFheCapable() || underlyingAddresses.length === 0) return found;
+
+    const factory = this.factoryAddress();
+    if (!factory) return found;
+
+    const { Interface, ZeroAddress, getAddress } = await import("ethers");
+    const iface = new Interface(Network.FACTORY_ABI);
+
+    try {
+      const resultHex = await this.call("eth_call", [
+        { to: factory, data: iface.encodeFunctionData("wrappersFor", [underlyingAddresses]) },
+        "latest",
+      ]);
+      if (!resultHex || resultHex === "0x") return found;
+
+      const [wrappers] = iface.decodeFunctionResult("wrappersFor", resultHex);
+      (wrappers as string[]).forEach((wrapper, i) => {
+        const key = underlyingAddresses[i].toLowerCase();
+        const address = wrapper === ZeroAddress ? "" : getAddress(wrapper);
+        this.wrapperCache.set(key, address);
+        if (address) found.set(key, address);
+      });
+    } catch {
+      // Registry unavailable — callers fall back to "no wrapper", which only hides the
+      // shielding option rather than breaking the token list.
+    }
+
+    return found;
+  }
+
+  /** Wrapper addresses shipped in .env for this network: the native one, plus USDC. */
+  private configuredWrappers(): { native: string; extra: string[] } {
+    const env = import.meta.env;
+    let native = "";
+    let usdc = "";
+
+    if (this.network_id === NetworkId.Arbitrum_Sepolia) {
+      native = env.VITE_ARB_WRAPPED_ETH_ADDRESS || "";
+      usdc = env.VITE_ARB_WRAPPED_USDC_ADDRESS || "";
+    } else if (this.network_id === NetworkId.Base_Sepolia) {
+      native = env.VITE_BASE_WRAPPED_ETH_ADDRESS || "";
+      usdc = env.VITE_BASE_WRAPPED_USDC_ADDRESS || "";
+    } else if (this.network_id === NetworkId.Ethereum_Sepolia) {
+      native = env.VITE_WRAPPED_ETH_ADDRESS || "";
+      usdc = env.VITE_WRAPPED_USDC_ADDRESS || "";
+    }
+
+    return { native: native.toLowerCase(), extra: [usdc.toLowerCase()].filter(Boolean) };
+  }
+
+  /** Cached registry enumeration; wrappers are only ever added, never removed. */
+  private registryWrappers: string[] | null = null;
+
+  /**
+   * Every wrapper the factory has ever deployed on this network.
+   *
+   * Enumerating the registry is what makes shielded balances discoverable at all. Deriving
+   * the list from the tokens someone currently holds does not work: shielding the whole
+   * balance leaves the public balance at zero, so the wrapper holding those funds would
+   * drop out of the list precisely when it matters most.
+   */
+  private async listRegistryWrappers(): Promise<string[]> {
+    if (this.registryWrappers) return this.registryWrappers;
+    if (!this.isFheCapable()) return [];
+
+    const factory = this.factoryAddress();
+    if (!factory) return [];
+
+    const { Interface } = await import("ethers");
+    const iface = new Interface(Network.FACTORY_ABI);
+
+    try {
+      const countHex = await this.call("eth_call", [
+        { to: factory, data: iface.encodeFunctionData("wrapperCount", []) },
+        "latest",
+      ]);
+      if (!countHex || countHex === "0x") return [];
+
+      const count = Number(BigInt(countHex));
+      if (count === 0) {
+        this.registryWrappers = [];
+        return [];
+      }
+
+      // Page through the whole registry. Reading only the newest slice would be wrong:
+      // creation is permissionless, so anyone can push a user's own wrapper out of a
+      // trailing window and make their shielded balance disappear from the wallet. The
+      // overall cap is a denial-of-service bound, not a correctness one, and the pages go
+      // out as one batched request.
+      const PAGE = 500;
+      const MAX = 5000;
+      const total = Math.min(count, MAX);
+
+      const pageCalls = [];
+      for (let offset = 0; offset < total; offset += PAGE) {
+        pageCalls.push({
+          method: "eth_call",
+          params: [
+            { to: factory, data: iface.encodeFunctionData("wrappersAt", [offset, Math.min(PAGE, total - offset)]) },
+            "latest",
+          ],
+        });
+      }
+
+      const pages = await this.callBatch(pageCalls);
+      const all: string[] = [];
+      for (const pageHex of pages) {
+        if (!pageHex || pageHex === "0x") continue;
+        try {
+          const [addresses] = iface.decodeFunctionResult("wrappersAt", pageHex);
+          all.push(...(addresses as string[]).map((a) => a.toLowerCase()));
+        } catch {
+          // Skip an unreadable page rather than dropping the whole registry.
         }
       }
 
-      // FHERC20.confidentialBalanceOf returns euint64 handle
-      const iface = new ethers.Interface([
-        "function confidentialBalanceOf(address account) view returns (uint256)"
-      ]);
-
-      const data = iface.encodeFunctionData("confidentialBalanceOf", [userAddress]);
-
-      // eth_call to get encrypted balance handle
-      const resultHex = await this.call("eth_call", [{
-        to: contractAddress,
-        data: data
-      }, "latest"]);
-
-      if (!resultHex || resultHex === "0x" || resultHex === "0x0") {
-        return "0.0";
-      }
-
-      // Handle is euint64 (encrypted uint64)
-      const handle = BigInt(resultHex);
-
-
-      // Handle 0 means no encrypted balance exists for this user - skip unseal
-      if (handle === BigInt(0)) {
-        return "0.0";
-      }
-
-      // Unseal using cofhejs (TRUE FHE)
-      const decrypted = await instance.unseal(handle);
-
-      if (decrypted !== null && decrypted !== undefined) {
-        // Determine decimals based on contract address
-        // cETH: 18 decimals, cUSDC: 6 decimals
-        const WRAPPED_ETH_SEP = (import.meta.env.VITE_WRAPPED_ETH_ADDRESS || "").toLowerCase();
-        const WRAPPED_ETH_ARB = (import.meta.env.VITE_ARB_WRAPPED_ETH_ADDRESS || "").toLowerCase();
-        const WRAPPED_ETH_BASE = (import.meta.env.VITE_BASE_WRAPPED_ETH_ADDRESS || "").toLowerCase();
-        const isEth = contractAddress.toLowerCase() === WRAPPED_ETH_SEP || contractAddress.toLowerCase() === WRAPPED_ETH_ARB || contractAddress.toLowerCase() === WRAPPED_ETH_BASE;
-        const decimals = isEth ? 18 : 6;
-        const formatted = this.formatTokenAmount(decrypted, decimals);
-        return formatted;
-      }
-
-      return "0.0";
-    } catch (e) {
-      return "0.0";
+      this.registryWrappers = all;
+      return all;
+    } catch {
+      return [];
     }
   }
 
+  /** Registry wrappers plus the ones configured in .env, lowercased. */
+  private async getKnownWrapperSet(): Promise<Set<string>> {
+    const { native, extra } = this.configuredWrappers();
+    const registry = await this.listRegistryWrappers();
+    return new Set([native, ...extra, ...registry].filter(Boolean));
+  }
+
   /**
-   * Wrap: Converts public tokens to wrapped tokens
-   * Works for both USDC (6 decimals) and WETH (18 decimals)
-   * For ETH: Automatically deposits to WETH first if needed
+   * Every confidential token this account actually holds a balance in.
+   *
+   * Reads `confidentialBalanceOf` across the whole registry in one batched request and
+   * keeps the wrappers whose handle is non-zero — a zero handle means no ciphertext was
+   * ever created for this account, so there is nothing to decrypt and nothing to show.
+   *
+   * Decryption is the expensive part (each one is a round trip to the coprocessor), which
+   * is why it happens only for wrappers that passed the handle check. The native wrapper is
+   * always included so "Shielded ETH" stays visible as a target even at zero.
+   *
+   * Callers get metadata alongside the balance because every downstream screen needs it:
+   * the symbol to label the row, the underlying to pair it with its public token, and the
+   * confidential decimals to format amounts in the right unit system.
    */
-  async wrap(account: Account, publicTokenAddress: string, wrappedTokenAddress: string, amount: string): Promise<string> {
-    const ethers = await import("ethers");
+  async getShieldedPortfolio(account: Account): Promise<ShieldedHolding[]> {
+    if (!this.isFheCapable()) return [];
 
-    // Fetch decimals from the public token
-    const ifaceErc20 = new ethers.Interface([
-      "function allowance(address owner, address spender) view returns (uint256)",
-      "function approve(address spender, uint256 amount) returns (bool)",
-      "function decimals() view returns (uint8)",
-      "function balanceOf(address owner) view returns (uint256)"
+    const owner = account.GetAddress();
+    if (!owner) return [];
+
+    const { native } = this.configuredWrappers();
+    const known = await this.getKnownWrapperSet();
+    const wrappers = [...known];
+    if (wrappers.length === 0) return [];
+
+    const { Interface, ZeroAddress, getAddress } = await import("ethers");
+    const iface = new Interface(Network.SHIELDED_ABI);
+    const balanceData = iface.encodeFunctionData("confidentialBalanceOf", [owner]);
+
+    const handles = await this.callBatch(
+      wrappers.map((to) => ({ method: "eth_call", params: [{ to, data: balanceData }, "latest"] }))
+    );
+
+    const active: string[] = [];
+    wrappers.forEach((wrapper, i) => {
+      const hex = handles[i];
+      const hasHandle = !!hex && hex !== "0x" && BigInt(hex) !== 0n;
+      if (hasHandle || wrapper === native) active.push(wrapper);
+    });
+    if (active.length === 0) return [];
+
+    // One batch for all four metadata reads across all active wrappers.
+    const metaCalls = active.flatMap((to) => [
+      { method: "eth_call", params: [{ to, data: iface.encodeFunctionData("symbol", []) }, "latest"] },
+      { method: "eth_call", params: [{ to, data: iface.encodeFunctionData("decimals", []) }, "latest"] },
+      { method: "eth_call", params: [{ to, data: iface.encodeFunctionData("rate", []) }, "latest"] },
+      { method: "eth_call", params: [{ to, data: iface.encodeFunctionData("underlying", []) }, "latest"] },
     ]);
+    const metaResults = await this.callBatch(metaCalls);
 
-    const decimalsData = ifaceErc20.encodeFunctionData("decimals", []);
-    const decimalsHex = await this.call("eth_call", [{ to: publicTokenAddress, data: decimalsData }, "latest"]);
-    const decimals = decimalsHex && decimalsHex !== "0x" ? parseInt(decimalsHex, 16) : 18;
+    const parsed: (Omit<ShieldedHolding, "balance"> & { key: string })[] = [];
 
-    const amountValue = ethers.parseUnits(amount, decimals);
+    for (let i = 0; i < active.length; i++) {
+      const wrapper = active[i];
+      const [symbolHex, decimalsHex, rateHex, underlyingHex] = metaResults.slice(i * 4, i * 4 + 4);
 
-    // Special handling for WETH: Check if user has enough WETH, if not deposit native ETH first
-    const WETH_ADDRESS_SEP = (import.meta.env.VITE_SEPOLIA_WETH_ADDRESS || "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9").toLowerCase();
-    const WETH_ADDRESS_ARB = (import.meta.env.VITE_ARB_SEPOLIA_WETH_ADDRESS || "").toLowerCase();
+      let symbol = "ae???";
+      try {
+        if (symbolHex && symbolHex !== "0x") {
+          [symbol] = iface.decodeFunctionResult("symbol", symbolHex) as unknown as [string];
+        }
+      } catch { /* keep the placeholder */ }
 
-    if (publicTokenAddress.toLowerCase() === WETH_ADDRESS_SEP || (WETH_ADDRESS_ARB && publicTokenAddress.toLowerCase() === WETH_ADDRESS_ARB)) {
+      const confidentialDecimals = decimalsHex && decimalsHex !== "0x" ? Number(BigInt(decimalsHex)) : 6;
+      const rate = rateHex && rateHex !== "0x" ? BigInt(rateHex) : 1n;
 
-      // Check WETH balance
-      const balanceData = ifaceErc20.encodeFunctionData("balanceOf", [account.GetAddress()]);
-      const balanceHex = await this.call("eth_call", [{ to: publicTokenAddress, data: balanceData }, "latest"]);
-      const wethBalance = balanceHex && balanceHex !== "0x" ? BigInt(balanceHex) : 0n;
+      // `underlying()` only exists on the ERC-20 wrapper; the native one reverts, which is
+      // exactly how we tell the two apart.
+      let underlying = "";
+      try {
+        if (underlyingHex && underlyingHex !== "0x") {
+          const [addr] = iface.decodeFunctionResult("underlying", underlyingHex) as unknown as [string];
+          if (addr && addr !== ZeroAddress) underlying = getAddress(addr);
+        }
+      } catch { /* native wrapper */ }
 
+      this.shieldedMetaCache.set(wrapper, { confidentialDecimals, rate });
 
-      // If insufficient WETH, deposit native ETH to WETH first
-      if (wethBalance < amountValue) {
-        const depositAmount = amountValue - wethBalance;
-
-        // WETH.deposit() - payable function
-        const wethIface = new ethers.Interface(["function deposit() payable"]);
-        const depositData = wethIface.encodeFunctionData("deposit", []);
-
-        const depositTx = await this.sendTransaction(account, {
-          to: publicTokenAddress,
-          value: ethers.formatEther(depositAmount), // Send native ETH
-          data: depositData
-        });
-
-        await this.waitForTransaction(depositTx);
-      }
-    }
-
-    // 1. Check and approve token spending
-    const allowData = ifaceErc20.encodeFunctionData("allowance", [account.GetAddress(), wrappedTokenAddress]);
-    const allowHex = await this.call("eth_call", [{ to: publicTokenAddress, data: allowData }, "latest"]);
-
-    let currentAllowance = 0n;
-    try {
-      currentAllowance = allowHex && allowHex !== "0x" ? BigInt(allowHex) : 0n;
-    } catch (e) {
-      currentAllowance = 0n;
-    }
-
-    if (currentAllowance < amountValue) {
-      const approveData = ifaceErc20.encodeFunctionData("approve", [wrappedTokenAddress, amountValue]);
-      const approveTx = await this.sendTransaction(account, {
-        to: publicTokenAddress,
-        data: approveData,
-        value: "0"
+      parsed.push({
+        key: wrapper,
+        wrapper: getAddress(wrapper),
+        underlying,
+        symbol,
+        confidentialDecimals,
+        rate,
+        isNative: wrapper === native,
+        isLegacy: false, // resolved below, once the canonical wrappers are known
       });
     }
 
-
-    // 2. Call wrap(uint256 amount)
-    const iface = new ethers.Interface([
-      "function wrap(uint256 amount) external"
-    ]);
-
-    const data = iface.encodeFunctionData("wrap", [amountValue]);
-
-    return this.sendTransaction(account, {
-      to: wrappedTokenAddress,
-      value: "0",
-      data: data
-    });
-  }
-
-  /**
-   * Wrap ETH: Directly wrap native ETH into cETH
-   * Uses the wrapETH() payable function on WrappedETH_V3
-   */
-  async wrapETH(account: Account, wrappedTokenAddress: string, amount: string): Promise<string> {
-    const ethers = await import("ethers");
-
-
-    // Call wrapETH() with ETH value (WrappedETH_V3 has payable wrapETH())
-    const iface = new ethers.Interface([
-      "function wrapETH() payable external"
-    ]);
-
-    const data = iface.encodeFunctionData("wrapETH", []);
-
-    return this.sendTransaction(account, {
-      to: wrappedTokenAddress,
-      value: amount, // Send native ETH
-      data: data
-    });
-  }
-
-  /**
-   * Unwrap: Burns wrapped tokens and returns underlying tokens to sender
-   * Works for both cUSDC (6 decimals) and cETH (18 decimals)
-   */
-  async unwrap(account: Account, wrappedTokenAddress: string, amount: string): Promise<string> {
-    const ethers = await import("ethers");
-
-    // Fetch decimals from the wrapped token
-    const ifaceErc20 = new ethers.Interface([
-      "function decimals() view returns (uint8)"
-    ]);
-
-    const decimalsData = ifaceErc20.encodeFunctionData("decimals", []);
-    const decimalsHex = await this.call("eth_call", [{ to: wrappedTokenAddress, data: decimalsData }, "latest"]);
-    const decimals = decimalsHex && decimalsHex !== "0x" ? parseInt(decimalsHex, 16) : 18;
-
-    const amountValue = ethers.parseUnits(amount, decimals);
-
-
-    const iface = new ethers.Interface([
-      "function unwrap(uint256 amount) external"
-    ]);
-
-    const data = iface.encodeFunctionData("unwrap", [
-      amountValue  // amount: how much to unwrap
-    ]);
-
-    return this.sendTransaction(account, {
-      to: wrappedTokenAddress,
-      value: "0",
-      data: data
-    });
-  }
-
-  /**
-   * Confidential Transfer: Send encrypted tokens using cofhejs (TRUE FHE)
-   * 
-   * WrappedETH_V3/WrappedUSDC_V2.transferEncrypted(address to, InEuint64 calldata inValue)
-   * Transfers encrypted amount without revealing the value
-   */
-  async transferConfidential(account: Account, shieldedTokenAddress: string, to: string, amount: string): Promise<string> {
-    const { default: FheCofheService } = await import("./FheCofheService.js");
-    const ethers = await import("ethers");
-
-    // Initialize cofhejs if needed - MUST be initialized with the SAME account that sends the TX
-    // cofhejs uses signer.getAddress() as the account for the verifier hash
-    // TaskManager uses msg.sender for verification - these must match
-    const txSenderAddress = account.GetAddress();
-    if (!txSenderAddress) throw new Error("Account address not available");
-
-    if (!FheCofheService.getInstance().isReadyForAccount(txSenderAddress, this.network_id)) {
-      if (!account.ethers_wallet) throw new Error("Wallet not accessible");
-      const provider = new ethers.JsonRpcProvider(this.rpc_url);
-      const connectedWallet = account.ethers_wallet.connect(provider);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- cofhejs expects its own signer interface
-      await FheCofheService.getInstance().init(provider, connectedWallet as any);
+    // A token can end up with more than one wrapper — an early hand-deployed one plus the
+    // registry's. Ask the registry which is canonical rather than assuming, so a superseded
+    // wrapper is flagged instead of quietly competing with the real one under the same
+    // symbol. Resolved in one batched call for every underlying at once.
+    const underlyings = parsed.map((p) => p.underlying).filter(Boolean);
+    if (underlyings.length > 0) {
+      const canonical = await this.getWrappersFor(underlyings);
+      for (const entry of parsed) {
+        if (!entry.underlying) continue;
+        const preferred = canonical.get(entry.underlying.toLowerCase());
+        entry.isLegacy = !!preferred && preferred.toLowerCase() !== entry.key;
+      }
     }
 
-    // Determine decimals based on contract address
-    // cETH: 18 decimals, cUSDC: 6 decimals
-    const WRAPPED_ETH_SEP = (import.meta.env.VITE_WRAPPED_ETH_ADDRESS || "").toLowerCase();
-    const WRAPPED_ETH_ARB = (import.meta.env.VITE_ARB_WRAPPED_ETH_ADDRESS || "").toLowerCase();
-    const WRAPPED_ETH_BASE = (import.meta.env.VITE_BASE_WRAPPED_ETH_ADDRESS || "").toLowerCase();
-    const isEth = shieldedTokenAddress.toLowerCase() === WRAPPED_ETH_SEP || shieldedTokenAddress.toLowerCase() === WRAPPED_ETH_ARB || shieldedTokenAddress.toLowerCase() === WRAPPED_ETH_BASE;
-    const decimals = isEth ? 18 : 6;
-    const amountValue = ethers.parseUnits(amount, decimals);
+    // Decryption is a round trip to the coprocessor each — running them together keeps the
+    // wallet responsive when several tokens are shielded. A wrapper that cannot be
+    // decrypted right now (coprocessor hiccup, revoked permit) reports zero rather than
+    // taking the rest of the portfolio down with it.
+    const holdings: ShieldedHolding[] = await Promise.all(
+      parsed.map(async ({ key, ...rest }) => ({
+        ...rest,
+        balance: await this.getShieldedBalance(key, owner, account).catch(() => "0.0"),
+      }))
+    );
 
+    // Native first, superseded wrappers last, otherwise by balance.
+    return holdings.sort((a, b) => {
+      if (a.isNative !== b.isNative) return a.isNative ? -1 : 1;
+      if (a.isLegacy !== b.isLegacy) return a.isLegacy ? 1 : -1;
+      return parseFloat(b.balance) - parseFloat(a.balance);
+    });
+  }
 
-    // Encrypt amount using cofhejs (TRUE FHE)
-    const encrypted = await FheCofheService.getInstance().encrypt(BigInt(amountValue.toString()));
+  /**
+   * Deploy the confidential wrapper for a token that does not have one yet.
+   *
+   * A one-time cost per token, paid by whoever shields it first; everyone else reuses the
+   * same wrapper via the registry.
+   *
+   * Only plain ERC-20s are safe here — rebasing and fee-on-transfer tokens break the 1:1
+   * backing invariant and cannot be detected on-chain, so the UI must warn before calling.
+   */
+  async createWrapperFor(account: Account, underlyingAddress: string): Promise<string> {
+    if (!this.isFheCapable()) throw new Error("FHE is not available on this network");
 
+    const factory = this.factoryAddress();
+    if (!factory) throw new Error("No wrapper factory is deployed on this network");
 
-    // V4 contract: transferEncrypted(address to, InEuint64 encryptedAmount) - NO plaintext amount
-    // struct InEuint64 { uint256 ctHash; uint8 securityZone; uint8 utype; bytes signature; }
-    const iface = new ethers.Interface([
-      "function transferEncrypted(address to, tuple(uint256 ctHash, uint8 securityZone, uint8 utype, bytes signature) inValue) external returns (uint256)"
+    const { Interface } = await import("ethers");
+    const iface = new Interface(Network.FACTORY_ABI);
+
+    const hash = await this.sendTransaction(account, {
+      to: factory,
+      value: "0",
+      data: iface.encodeFunctionData("createWrapper", [underlyingAddress]),
+    });
+    await this.waitForTransaction(hash);
+
+    // Force a re-read so the freshly deployed address is picked up — both the per-token
+    // lookup and the registry enumeration, or the new wrapper stays invisible until reload.
+    this.wrapperCache.delete(underlyingAddress.toLowerCase());
+    this.registryWrappers = null;
+
+    // Some RPCs (Base Sepolia reliably) still answer from pre-transaction state for a few
+    // seconds after the receipt lands. Returning immediately would leave the caller reading
+    // address(0) and reporting "not enabled" for a wrapper that was just deployed.
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const wrapper = await this.getWrapperFor(underlyingAddress);
+      if (wrapper) return hash;
+      this.wrapperCache.delete(underlyingAddress.toLowerCase());
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+
+    throw new Error(
+      "The wrapper was deployed but the network is still serving old state. " +
+      "It will appear shortly — reopen this panel in a moment."
+    );
+  }
+
+  /** True when this network has a CoFHE coprocessor behind it. */
+  private isFheCapable(): boolean {
+    return (
+      this.network_id === NetworkId.Ethereum_Sepolia ||
+      this.network_id === NetworkId.Arbitrum_Sepolia ||
+      this.network_id === NetworkId.Base_Sepolia
+    );
+  }
+
+  /**
+   * Connect the CoFHE SDK as `account` on this network.
+   *
+   * Encrypted inputs and permits are bound to a specific `account + chainId`, so this
+   * reconnects whenever either changes rather than reusing a stale session.
+   */
+  private async ensureFhe(account: Account) {
+    const { default: FheCofheService } = await import("./FheCofheService.js");
+    const service = FheCofheService.getInstance();
+
+    const address = account.GetAddress();
+    if (!address) throw new Error("Account address not available");
+
+    if (!service.isReadyForAccount(address, this.network_id)) {
+      if (!account.ethers_wallet) throw new Error("Wallet is locked");
+      if (!this.rpc_url) throw new Error("RPC URL not set");
+
+      const { JsonRpcProvider } = await import("ethers");
+      const provider = new JsonRpcProvider(this.rpc_url);
+      const connectedWallet = account.ethers_wallet.connect(provider);
+      await service.init(provider, connectedWallet as unknown as Parameters<typeof service.init>[1], this.network_id);
+    }
+
+    return service;
+  }
+
+  /**
+   * Reject a shield amount smaller than one confidential unit.
+   *
+   * The confidential layer is capped at 6 decimals, so amounts below `rate()` underlying
+   * units round to zero. The contract reverts with `AmountTooSmallForConfidentialPrecision`,
+   * which surfaces as an unexplained failed transaction; this states the minimum instead.
+   *
+   * @param amountValue Amount in the underlying token's own units.
+   * @param underlyingDecimals Decimals of the underlying token, for the error message.
+   */
+  private async assertAboveConfidentialPrecision(
+    shieldedTokenAddress: string,
+    amountValue: bigint,
+    underlyingDecimals: number
+  ): Promise<void> {
+    if (amountValue <= 0n) throw new Error("Amount must be greater than zero");
+
+    const { formatUnits } = await import("ethers");
+    const meta = await this.getShieldedTokenMeta(shieldedTokenAddress);
+
+    if (amountValue < meta.rate) {
+      const minimum = formatUnits(meta.rate, underlyingDecimals);
+      throw new Error(
+        `Amount is below the confidential precision limit. The minimum you can shield is ${minimum}.`
+      );
+    }
+  }
+
+  /**
+   * Reject an amount larger than the caller's confidential balance.
+   *
+   * This guard is not optional. FHE arithmetic cannot revert on insufficient funds —
+   * reverting would itself leak that the balance is below the requested amount. Instead
+   * the contract silently substitutes an encrypted zero, so an over-sized transfer or
+   * unshield *succeeds* on-chain while moving nothing. Without this check the user pays
+   * gas, sees a confirmed transaction, and loses nothing but also sends nothing.
+   *
+   * Costs one decryption round-trip, which is the correct trade against a silent no-op.
+   *
+   * @param amountValue Requested amount in confidential units.
+   */
+  private async assertSufficientShieldedBalance(
+    account: Account,
+    shieldedTokenAddress: string,
+    amountValue: bigint
+  ): Promise<void> {
+    const address = account.GetAddress();
+    if (!address) throw new Error("Account address not available");
+
+    const { Interface, formatUnits } = await import("ethers");
+    const iface = new Interface(Network.SHIELDED_ABI);
+    const meta = await this.getShieldedTokenMeta(shieldedTokenAddress);
+
+    const resultHex = await this.call("eth_call", [
+      { to: shieldedTokenAddress, data: iface.encodeFunctionData("confidentialBalanceOf", [address]) },
+      "latest",
     ]);
 
-    const inEuint64 = {
-      ctHash: encrypted.ctHash,
-      securityZone: encrypted.securityZone,
-      utype: encrypted.utype,
-      signature: encrypted.signature
+    const handle = !resultHex || resultHex === "0x" ? 0n : BigInt(resultHex);
+    if (handle === 0n) {
+      throw new Error("You have no shielded balance for this token — shield some first.");
+    }
+
+    const service = await this.ensureFhe(account);
+    const balance = await service.decryptForView(handle);
+
+    if (amountValue > balance) {
+      const have = formatUnits(balance, meta.confidentialDecimals);
+      const want = formatUnits(amountValue, meta.confidentialDecimals);
+      throw new Error(
+        `Insufficient shielded balance: you have ${have} but tried to use ${want}. ` +
+        `Confidential transfers cannot revert on-chain, so this would have silently moved zero.`
+      );
+    }
+  }
+
+  /** Read and cache `decimals()` / `rate()` for a confidential wrapper. */
+  private async getShieldedTokenMeta(contractAddress: string): Promise<ShieldedTokenMeta> {
+    const key = contractAddress.toLowerCase();
+    const cached = this.shieldedMetaCache.get(key);
+    if (cached) return cached;
+
+    const { Interface } = await import("ethers");
+    const iface = new Interface(Network.SHIELDED_ABI);
+
+    const [decimalsHex, rateHex] = await Promise.all([
+      this.call("eth_call", [{ to: contractAddress, data: iface.encodeFunctionData("decimals", []) }, "latest"]),
+      this.call("eth_call", [{ to: contractAddress, data: iface.encodeFunctionData("rate", []) }, "latest"]),
+    ]);
+
+    if (!decimalsHex || decimalsHex === "0x" || !rateHex || rateHex === "0x") {
+      throw new Error(`${contractAddress} does not look like a confidential wrapper`);
+    }
+
+    const meta: ShieldedTokenMeta = {
+      confidentialDecimals: Number(BigInt(decimalsHex)),
+      rate: BigInt(rateHex),
+    };
+    this.shieldedMetaCache.set(key, meta);
+    return meta;
+  }
+
+  /**
+   * Decrypt the caller's confidential balance for display.
+   *
+   * Returns "0.0" rather than throwing for the two states that are normal rather than
+   * exceptional: a non-FHE network, and an account that has never shielded (no
+   * ciphertext exists yet). Any other failure propagates so the UI can report it.
+   */
+  async getShieldedBalance(contractAddress: string, userAddress: string, account?: Account): Promise<string> {
+    if (!this.isFheCapable()) return "0.0";
+    if (!account) return "0.0";
+
+    const { Interface } = await import("ethers");
+    const iface = new Interface(Network.SHIELDED_ABI);
+
+    const resultHex = await this.call("eth_call", [
+      { to: contractAddress, data: iface.encodeFunctionData("confidentialBalanceOf", [userAddress]) },
+      "latest",
+    ]);
+
+    if (!resultHex || resultHex === "0x") return "0.0";
+
+    const handle = BigInt(resultHex);
+    // An uninitialised euint64 is the zero handle — no balance has ever been created.
+    if (handle === 0n) return "0.0";
+
+    const service = await this.ensureFhe(account);
+    const meta = await this.getShieldedTokenMeta(contractAddress);
+
+    try {
+      const decrypted = await service.decryptForView(handle);
+      return this.formatTokenAmount(decrypted, meta.confidentialDecimals);
+    } catch (e) {
+      const { CiphertextNotFoundError } = await import("./FheCofheService.js");
+      if (e instanceof CiphertextNotFoundError) return "0.0";
+      throw e;
+    }
+  }
+
+  /**
+   * Shield native ETH into an encrypted balance (ArfheShieldedETH only).
+   *
+   * @param amount Amount of ETH, as a decimal string.
+   */
+  async shieldNative(account: Account, shieldedTokenAddress: string, amount: string): Promise<string> {
+    if (!this.isFheCapable()) throw new Error("FHE is not available on this network");
+
+    const { Interface, parseEther } = await import("ethers");
+    const iface = new Interface(Network.SHIELDED_ABI);
+
+    const to = account.GetAddress();
+    if (!to) throw new Error("Account address not available");
+
+    await this.assertAboveConfidentialPrecision(shieldedTokenAddress, parseEther(amount), 18);
+
+    // Dust above the minimum but below the next whole confidential unit is refunded by
+    // the contract, so no rounding is needed here.
+    return this.sendTransaction(account, {
+      to: shieldedTokenAddress,
+      value: amount,
+      data: iface.encodeFunctionData("shieldNative", [to]),
+    });
+  }
+
+  /**
+   * Shield an ERC20 into an encrypted balance (ArfheShieldedERC20).
+   *
+   * Approves the wrapper first when the existing allowance is short, and waits for that
+   * approval to confirm — `shield` reverts if it lands in the same block unconfirmed.
+   *
+   * @param amount Amount in the underlying token's own decimals, as a decimal string.
+   */
+  async shieldERC20(
+    account: Account,
+    underlyingTokenAddress: string,
+    shieldedTokenAddress: string,
+    amount: string
+  ): Promise<string> {
+    if (!this.isFheCapable()) throw new Error("FHE is not available on this network");
+
+    const { Interface, parseUnits: parseUnitsFn } = await import("ethers");
+    const erc20 = new Interface([
+      "function allowance(address owner, address spender) view returns (uint256)",
+      "function approve(address spender, uint256 amount) returns (bool)",
+      "function decimals() view returns (uint8)",
+    ]);
+
+    const owner = account.GetAddress();
+    if (!owner) throw new Error("Account address not available");
+
+    // Shielding into a superseded wrapper is a one-way mistake: each wrapper holds its own
+    // backing pool, so those funds could only ever be unshielded through that same
+    // contract, while the rest of the wallet operates on the canonical one. The registry
+    // decides which is canonical, and this refuses anything else.
+    const canonical = await this.getWrapperFor(underlyingTokenAddress);
+    if (canonical && canonical.toLowerCase() !== shieldedTokenAddress.toLowerCase()) {
+      throw new Error(
+        "This token's confidential contract has been replaced. Reopen the shield screen " +
+        "to use the current one — your existing balance in the old contract is safe and " +
+        "can still be unshielded."
+      );
+    }
+
+    // Read from the token, never assume. Defaulting to 18 for a 6-decimal token would
+    // approve and pull a million times the amount the user typed.
+    const decimals = await this.getErc20Decimals(underlyingTokenAddress);
+    const amountValue = parseUnitsFn(amount, decimals);
+
+    await this.assertAboveConfidentialPrecision(shieldedTokenAddress, amountValue, decimals);
+
+    const readAllowance = async (): Promise<bigint> => {
+      const hex = await this.call("eth_call", [
+        { to: underlyingTokenAddress, data: erc20.encodeFunctionData("allowance", [owner, shieldedTokenAddress]) },
+        "latest",
+      ]);
+      return hex && hex !== "0x" ? BigInt(hex) : 0n;
     };
 
-    const data = iface.encodeFunctionData("transferEncrypted", [to, inEuint64]);
+    if (await readAllowance() < amountValue) {
+      const approveTx = await this.sendTransaction(account, {
+        to: underlyingTokenAddress,
+        value: "0",
+        data: erc20.encodeFunctionData("approve", [shieldedTokenAddress, amountValue]),
+      });
+      await this.waitForTransaction(approveTx);
 
-
-    const txHash = await this.sendTransaction(account, {
-      to: shieldedTokenAddress,
-      value: "0",
-      data: data,
-      gasLimit: 3000000n
-    });
-
-    // Fetch and log receipt details for debugging
-    try {
-      const receipt = await this.call("eth_getTransactionReceipt", [txHash]);
-      const status = typeof receipt?.status === "string" ? parseInt(receipt.status, 16) : receipt?.status;
-      if (receipt?.logs) {
-        receipt.logs.forEach((log: { topics?: string[]; data?: string }, i: number) => {
-        });
+      // The receipt is not enough. Base Sepolia in particular keeps answering `allowance`
+      // from pre-transaction state for several seconds, and `shield` is estimated against
+      // that stale view — it reverts with "transfer amount exceeds allowance" for an
+      // approval that has already confirmed. Wait for the approval to actually be visible.
+      let visible = await readAllowance();
+      for (let attempt = 0; visible < amountValue && attempt < 10; attempt++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        visible = await readAllowance();
       }
-    } catch (e) {
+      if (visible < amountValue) {
+        throw new Error(
+          "The approval confirmed but the network is still serving old state. " +
+          "Wait a few seconds and try shielding again — no funds have moved."
+        );
+      }
     }
 
-    return txHash;
+    const iface = new Interface(Network.SHIELDED_ABI);
+    return this.sendTransaction(account, {
+      to: shieldedTokenAddress,
+      value: "0",
+      data: iface.encodeFunctionData("shield", [owner, amountValue]),
+    });
+  }
+
+  /**
+   * Step 1 of unshielding: burn the confidential balance and open a claim.
+   *
+   * The burned handle is marked publicly decryptable by the contract, which is what lets
+   * {@link claimUnshielded} settle it without a permit. Note the protocol's
+   * zero-replacement rule: unshielding more than the balance burns zero and opens a claim
+   * worth nothing rather than reverting, so callers must check the balance first.
+   *
+   * @param amount Amount in confidential units, as a decimal string.
+   */
+  async unshield(account: Account, shieldedTokenAddress: string, amount: string): Promise<string> {
+    if (!this.isFheCapable()) throw new Error("FHE is not available on this network");
+
+    const { Interface, parseUnits: parseUnitsFn } = await import("ethers");
+    const iface = new Interface(Network.SHIELDED_ABI);
+
+    const owner = account.GetAddress();
+    if (!owner) throw new Error("Account address not available");
+
+    const meta = await this.getShieldedTokenMeta(shieldedTokenAddress);
+    const amountValue = parseUnitsFn(amount, meta.confidentialDecimals);
+
+    if (amountValue <= 0n) throw new Error("Amount must be greater than zero");
+
+    // Same zero-replacement trap as transfers: unshielding more than the balance burns
+    // nothing and opens a claim worth zero, which the user cannot tell apart from success.
+    await this.assertSufficientShieldedBalance(account, shieldedTokenAddress, amountValue);
+
+    return this.sendTransaction(account, {
+      to: shieldedTokenAddress,
+      value: "0",
+      data: iface.encodeFunctionData("unshield", [owner, owner, amountValue]),
+    });
+  }
+
+  /** List the caller's unsettled unshield claims. */
+  async getPendingClaims(shieldedTokenAddress: string, userAddress: string): Promise<UnshieldClaim[]> {
+    if (!this.isFheCapable()) return [];
+
+    const { Interface } = await import("ethers");
+    const iface = new Interface(Network.SHIELDED_ABI);
+
+    const resultHex = await this.call("eth_call", [
+      { to: shieldedTokenAddress, data: iface.encodeFunctionData("getUserClaims", [userAddress]) },
+      "latest",
+    ]);
+
+    if (!resultHex || resultHex === "0x") return [];
+
+    const [claims] = iface.decodeFunctionResult("getUserClaims", resultHex);
+    return (claims as unknown[]).map((c) => {
+      const claim = c as { to: string; ctHash: string; requestedAmount: bigint; decryptedAmount: bigint; claimed: boolean };
+      return {
+        to: claim.to,
+        ctHash: claim.ctHash,
+        requestedAmount: BigInt(claim.requestedAmount),
+        decryptedAmount: BigInt(claim.decryptedAmount),
+        claimed: claim.claimed,
+      };
+    });
+  }
+
+  /**
+   * Step 2 of unshielding: decrypt the burned amount off-chain and settle the claim.
+   *
+   * Uses `decryptForTx`, which returns the plaintext together with a Threshold Network
+   * signature the contract verifies before releasing funds. No permit is required — the
+   * burned handle was made publicly decryptable by `unshield`.
+   *
+   * The payout always goes to the address stored on the claim, regardless of who submits
+   * this transaction.
+   */
+  async claimUnshielded(account: Account, shieldedTokenAddress: string, ctHash: string): Promise<string> {
+    if (!this.isFheCapable()) throw new Error("FHE is not available on this network");
+
+    const service = await this.ensureFhe(account);
+    const { Interface } = await import("ethers");
+    const iface = new Interface(Network.SHIELDED_ABI);
+
+    const { decryptedValue, signature } = await service.decryptForTx(BigInt(ctHash));
+
+    // The contract reverts on an unverifiable proof. Checking first turns a burnt
+    // transaction into an error the UI can explain. A verifier that cannot answer is not
+    // treated as a rejection — only an explicit `false` blocks the claim.
+    let verified = true;
+    try {
+      verified = await service.verifyDecryptResult(BigInt(ctHash), decryptedValue, signature);
+    } catch {
+      // Verification unavailable; fall through and let the contract be the judge.
+    }
+    if (!verified) {
+      throw new Error("Decryption proof failed verification — the claim was not submitted.");
+    }
+
+    return this.sendTransaction(account, {
+      to: shieldedTokenAddress,
+      value: "0",
+      data: iface.encodeFunctionData("claimUnshielded", [ctHash, decryptedValue, signature]),
+    });
+  }
+
+  /**
+   * Settle several claims against one token in a single transaction.
+   *
+   * The wrappers expose `claimUnshieldedBatch` precisely for this: a user who was
+   * interrupted mid-unshield more than once accumulates claims, and settling them
+   * separately costs a signature, a gas payment and a confirmation wait each.
+   *
+   * Every proof is verified off-chain first. The batch is atomic, so one bad proof would
+   * revert the whole transaction and strand the good claims with it — rejecting up front
+   * keeps a single unverifiable claim from blocking the rest.
+   *
+   * Falls through to {@link claimUnshielded} for a single claim, which is the common case
+   * and avoids the array encoding overhead.
+   */
+  async claimUnshieldedMany(
+    account: Account,
+    shieldedTokenAddress: string,
+    ctHashes: string[]
+  ): Promise<string> {
+    if (!this.isFheCapable()) throw new Error("FHE is not available on this network");
+    if (ctHashes.length === 0) throw new Error("No claims to settle");
+    if (ctHashes.length === 1) {
+      return this.claimUnshielded(account, shieldedTokenAddress, ctHashes[0]);
+    }
+
+    const service = await this.ensureFhe(account);
+    const { Interface } = await import("ethers");
+    const iface = new Interface(Network.SHIELDED_ABI);
+
+    const decrypted: { ctHash: string; value: bigint; signature: `0x${string}` }[] = [];
+
+    for (const ctHash of ctHashes) {
+      const { decryptedValue, signature } = await service.decryptForTx(BigInt(ctHash));
+
+      let verified = true;
+      try {
+        verified = await service.verifyDecryptResult(BigInt(ctHash), decryptedValue, signature);
+      } catch {
+        // Verifier unavailable; let the contract be the judge rather than blocking.
+      }
+      if (!verified) {
+        throw new Error("Decryption proof failed verification — no claims were submitted.");
+      }
+
+      decrypted.push({ ctHash, value: decryptedValue, signature });
+    }
+
+    return this.sendTransaction(account, {
+      to: shieldedTokenAddress,
+      value: "0",
+      data: iface.encodeFunctionData("claimUnshieldedBatch", [
+        decrypted.map((d) => d.ctHash),
+        decrypted.map((d) => d.value),
+        decrypted.map((d) => d.signature),
+      ]),
+    });
+  }
+
+  /**
+   * Unshield and settle in one call, queueing the claim so it cannot be lost.
+   *
+   * The burn is recorded the instant it confirms, before the slow decrypt begins. If the
+   * popup is dismissed mid-flight — or the claim simply fails — the intent survives in
+   * `queue` and is retried the next time the wallet is open and unlocked, so burned
+   * balance is never stranded behind an unsettled claim.
+   *
+   * @param onPhase Progress hook so the UI can narrate without blocking on it.
+   * @returns The burn transaction hash. Settlement may still be in flight.
+   */
+  async unshieldAndClaim(
+    account: Account,
+    shieldedTokenAddress: string,
+    amount: string,
+    queue: PendingClaimQueue,
+    symbol: string,
+    onPhase?: (phase: "burning" | "confirming" | "decrypting" | "claiming" | "done") => void
+  ): Promise<string> {
+    const owner = account.GetAddress();
+    if (!owner) throw new Error("Account address not available");
+
+    onPhase?.("burning");
+    const burnHash = await this.unshield(account, shieldedTokenAddress, amount);
+
+    onPhase?.("confirming");
+    await this.waitForTransaction(burnHash);
+
+    // Persist before decrypting: everything after this point can be interrupted.
+    //
+    // Read with retries. Some RPCs (Base Sepolia notably) still serve pre-transaction
+    // state for a moment after a receipt is available, which would return an empty claim
+    // list — and a claim that never reaches the queue is burned balance nobody retries.
+    let claims = await this.getPendingClaims(shieldedTokenAddress, owner);
+    for (let attempt = 0; claims.length === 0 && attempt < 5; attempt++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      claims = await this.getPendingClaims(shieldedTokenAddress, owner);
+    }
+
+    const fresh = claims[claims.length - 1];
+    if (fresh) {
+      queue.add({
+        ctHash: fresh.ctHash,
+        tokenAddress: shieldedTokenAddress,
+        accountAddress: owner,
+        networkId: this.network_id,
+        symbol,
+      });
+    }
+
+    onPhase?.("decrypting");
+    await this.drainPendingClaims(account, queue, onPhase);
+    onPhase?.("done");
+
+    return burnHash;
+  }
+
+  /**
+   * Settle every queued claim for this account on this network.
+   *
+   * Reconciles against the chain first so claims settled elsewhere are dropped rather
+   * than retried. Never throws — a claim that fails stays queued for the next attempt.
+   *
+   * @returns Number of claims settled.
+   */
+  async drainPendingClaims(
+    account: Account,
+    queue: PendingClaimQueue,
+    onPhase?: (phase: "claiming") => void
+  ): Promise<number> {
+    if (!this.isFheCapable()) return 0;
+
+    const owner = account.GetAddress();
+    if (!owner) return 0;
+
+    // Drop anything the chain no longer lists as pending.
+    const tokens = new Set(queue.getFor(owner, this.network_id).map((c) => c.tokenAddress));
+    for (const token of tokens) {
+      try {
+        const live = await this.getPendingClaims(token, owner);
+        queue.reconcile(owner, this.network_id, live.map((c) => c.ctHash));
+      } catch {
+        // A failed read must not delete queued intents — leave them for the next pass.
+      }
+    }
+
+    return queue.drainGrouped(owner, this.network_id, async (tokenAddress, intents) => {
+      onPhase?.("claiming");
+      const hash = await this.claimUnshieldedMany(
+        account, tokenAddress, intents.map((i) => i.ctHash)
+      );
+      await this.waitForTransaction(hash);
+    });
+  }
+
+  /**
+   * Send confidential tokens without revealing the amount.
+   *
+   * The amount is encrypted client-side into an `InEuint64` carrying a verifier
+   * signature bound to this account and chain, so it cannot be replayed elsewhere.
+   *
+   * Zero-replacement applies here too: an amount exceeding the balance transfers
+   * encrypted zero instead of reverting.
+   *
+   * @param amount Amount in confidential units, as a decimal string.
+   */
+  async transferConfidential(
+    account: Account,
+    shieldedTokenAddress: string,
+    to: string,
+    amount: string,
+    onStep?: (step: string) => void
+  ): Promise<string> {
+    if (!this.isFheCapable()) throw new Error("FHE is not available on this network");
+
+    const service = await this.ensureFhe(account);
+    const { Interface, parseUnits: parseUnitsFn, isAddress, ZeroAddress } = await import("ethers");
+    const iface = new Interface(Network.SHIELDED_ABI);
+
+    // The contract rejects these, but only after the proof has been generated and the
+    // transaction mined — cheaper and clearer to stop here.
+    if (!isAddress(to)) throw new Error("Invalid recipient address");
+    if (to === ZeroAddress) throw new Error("Cannot send to the zero address");
+
+    const meta = await this.getShieldedTokenMeta(shieldedTokenAddress);
+    const amountValue = parseUnitsFn(amount, meta.confidentialDecimals);
+
+    if (amountValue <= 0n) throw new Error("Amount must be greater than zero");
+
+    // Must precede encryption: an over-sized transfer would otherwise confirm on-chain
+    // while moving encrypted zero (see assertSufficientShieldedBalance).
+    await this.assertSufficientShieldedBalance(account, shieldedTokenAddress, amountValue);
+
+    const encrypted = await service.encryptUint64(amountValue, onStep);
+
+    return this.sendTransaction(account, {
+      to: shieldedTokenAddress,
+      value: "0",
+      data: iface.encodeFunctionData("confidentialTransfer", [
+        to,
+        {
+          ctHash: encrypted.ctHash,
+          securityZone: encrypted.securityZone,
+          utype: encrypted.utype,
+          signature: encrypted.signature,
+        },
+      ]),
+    });
   }
 }
 

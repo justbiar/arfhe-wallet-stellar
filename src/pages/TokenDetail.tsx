@@ -15,6 +15,8 @@ import {
 } from "@mui/material";
 import {
   ArrowBack,
+  Visibility,
+  VisibilityOff,
   Send as SendIcon,
   CallReceived,
   ContentCopy,
@@ -141,6 +143,24 @@ export default function TokenDetail() {
   const activeNetwork = context?.networkProvider?.getActiveNetwork();
   const activeNetworkId = context?.networkProvider?.getActiveNetworkId() ?? NetworkId.Ethereum_Mainnet;
   const networkName = activeNetwork?.network_name ?? "Unknown";
+  const isNativeToken = !contractAddr || contractAddr === "ETH";
+  const [isHidden, setIsHidden] = useState(() =>
+    !isNativeToken && !!context?.spamFilter?.isTokenHidden(activeNetworkId, (contractAddr ?? "").toLowerCase())
+  );
+
+  const handleToggleHidden = () => {
+    const sf = context?.spamFilter;
+    if (!sf || isNativeToken || !contractAddr) return;
+    const addr = contractAddr.toLowerCase();
+    if (sf.isTokenHidden(activeNetworkId, addr)) {
+      sf.unhideToken(activeNetworkId, addr);
+      setIsHidden(false);
+    } else {
+      sf.hideToken(activeNetworkId, addr);
+      setIsHidden(true);
+    }
+  };
+
   const networkColor = getNetworkColor(activeNetworkId);
   const explorerBase = getExplorerBase(activeNetworkId, activeNetwork?.explorer_url);
 
@@ -371,6 +391,15 @@ export default function TokenDetail() {
           <Typography variant="subtitle1" fontWeight={700} sx={{ flex: 1 }}>
             {tokenSymbol || t("tokenDetail.title")}
           </Typography>
+          {!isNativeToken && (
+            <Tooltip title={isHidden ? t("tokenDetail.unhideToken") : t("tokenDetail.hideToken")}>
+              <IconButton size="small" onClick={handleToggleHidden} aria-label={isHidden ? t("tokenDetail.unhideToken") : t("tokenDetail.hideToken")}>
+                {isHidden
+                  ? <VisibilityOff sx={{ fontSize: 18 }} />
+                  : <Visibility sx={{ fontSize: 18 }} />}
+              </IconButton>
+            </Tooltip>
+          )}
           <Chip
             icon={<Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: networkColor, flexShrink: 0 }} />}
             label={networkName}

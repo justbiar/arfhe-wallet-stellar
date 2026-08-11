@@ -41,7 +41,7 @@ describe('NetworkTypes helpers', () => {
     it('returns false for Zama network', () => {
       expect(isFheNetwork(NetworkId.Zama)).toBe(false);
     });
-
+  });
 
   // ─── isTestnetNetwork ──────────────────────────────────────────
   describe('isTestnetNetwork', () => {
@@ -64,8 +64,12 @@ describe('NetworkTypes helpers', () => {
 
   // ─── FHE_NETWORK_IDS set ──────────────────────────────────────
   describe('FHE_NETWORK_IDS', () => {
-    it('contains exactly 4 FHE-enabled networks', () => {
-      expect(FHE_NETWORK_IDS.size).toBe(4);
+    // Pinned to CoFHE's official support list. Adding a network here without a
+    // coprocessor behind it silently offers shielding that cannot work.
+    it('contains exactly the three CoFHE-supported chains', () => {
+      expect([...FHE_NETWORK_IDS].sort()).toEqual(
+        [NetworkId.Ethereum_Sepolia, NetworkId.Arbitrum_Sepolia, NetworkId.Base_Sepolia].sort()
+      );
     });
 
     it('does not contain any mainnet', () => {
@@ -77,8 +81,16 @@ describe('NetworkTypes helpers', () => {
 
   // ─── TESTNET_IDS set ──────────────────────────────────────────
   describe('TESTNET_IDS', () => {
-    it('contains exactly 4 testnets', () => {
-      expect(TESTNET_IDS.size).toBe(4);
+    it('lists every testnet the wallet ships', () => {
+      expect([...TESTNET_IDS].sort()).toEqual(
+        [
+          NetworkId.Ethereum_Sepolia,
+          NetworkId.Arbitrum_Sepolia,
+          NetworkId.Base_Sepolia,
+          NetworkId.Monad_Testnet,
+          NetworkId.Avalanche_Fuji,
+        ].sort()
+      );
     });
 
     it('all FHE networks are testnets (FHE ⊆ Testnet)', () => {
@@ -120,5 +132,4 @@ describe('NetworkTypes helpers', () => {
       expect(NetworkId.Base_Sepolia).toBe(84532);
     });
   });
-});
 });

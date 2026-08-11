@@ -17,7 +17,6 @@ export enum NetworkId {
     Avalanche = 43114,
     Avalanche_Fuji = 43113,
     Linea = 59144,
-    Fhenix_Helium = 8008135,
 }
 
 export type TokenBalance = {
@@ -67,14 +66,18 @@ export type TokenWithMetadata = TokenBalance & {
 };
 
 /**
- * Set of network IDs that support FHE (Fully Homomorphic Encryption) operations.
- * Currently only testnets — mainnet FHE will be added when contracts are deployed.
+ * Networks with a CoFHE coprocessor behind them.
+ *
+ * This is the official support list, not a wish list: encrypting or decrypting anywhere
+ * else has no coprocessor to talk to.
+ *
+ * Must stay in sync with `COFHE_CHAIN_IDS` in FheCofheService.
+ * @see https://cofhe-docs.fhenix.zone/get-started/introduction/compatibility
  */
 export const FHE_NETWORK_IDS = new Set<NetworkId>([
     NetworkId.Ethereum_Sepolia,
     NetworkId.Arbitrum_Sepolia,
     NetworkId.Base_Sepolia,
-    NetworkId.Fhenix_Helium,
 ]);
 
 /** Check whether a given network supports FHE operations */
@@ -89,7 +92,6 @@ export const TESTNET_IDS = new Set<NetworkId>([
     NetworkId.Base_Sepolia,
     NetworkId.Monad_Testnet,
     NetworkId.Avalanche_Fuji,
-    NetworkId.Fhenix_Helium,
 ]);
 
 /** Check whether a given network is a testnet */

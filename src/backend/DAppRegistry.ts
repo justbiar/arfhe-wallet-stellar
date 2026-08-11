@@ -63,7 +63,8 @@ export const DAPP_REGISTRY: DApp[] = [
         url: 'https://www.fhenix.io',
         icon: letterAvatarIcon('F', '#10b981'),
         category: 'fhe',
-        chains: [8008135],
+        // The chains CoFHE actually runs on — Fhenix's own L2 is not one of them.
+        chains: [11155111, 421614, 84532],
         tags: ['fhe', 'confidential', 'evm'],
         featured: true,
         infoOnly: true,

@@ -582,15 +582,13 @@ export default function History() {
               const isSent = tx.from.toLowerCase() === userAddress;
               const token = network ? tokenCache?.getToken(network.network_id, tx.contractAddress) : undefined;
 
-              // Resolve symbol: check token cache, then check if it's a known FHE contract
-              let symbol = token?.symbol || (tx.isNative ? "ETH" : "");
-              if (!symbol && tx.isShielded) {
-                const wrappedEth = (import.meta.env.VITE_WRAPPED_ETH_ADDRESS || "").toLowerCase();
-                const wrappedUsdc = (import.meta.env.VITE_WRAPPED_USDC_ADDRESS || "").toLowerCase();
-                if (tx.contractAddress.toLowerCase() === wrappedEth) symbol = "cETH";
-                else if (tx.contractAddress.toLowerCase() === wrappedUsdc) symbol = "cUSDC";
-                else symbol = "Shielded";
-              }
+              // Resolve symbol from the token cache, which Home fills with the symbol of
+              // every confidential wrapper the account holds. Matching against a pair of
+              // .env addresses used to label every other wrapper — and every wrapper on
+              // Arbitrum and Base, whose addresses were never checked — as generic.
+              const symbol = token?.symbol
+                || (tx.isNative ? "ETH" : "")
+                || (tx.isShielded ? t("history.shielded") : "");
 
               const isEncrypted = tx.value === "Encrypted";
               const counterparty = isSent ? tx.to : tx.from;
@@ -679,10 +677,10 @@ export default function History() {
                           >
                             {tx.methodLabel === "Swap"
                               ? "Swapped"
-                              : tx.methodLabel === "Wrap"
-                                ? "Wrapped"
-                                : tx.methodLabel === "Unwrap"
-                                  ? "Unwrapped"
+                              : tx.methodLabel === "Shield" || tx.methodLabel === "Wrap"
+                                ? "Shielded"
+                                : tx.methodLabel === "Unshield Claim" || tx.methodLabel === "Unwrap"
+                                  ? "Claimed"
                                   : isSent ? "Sent" : "Received"}{" "}
                             {isEncrypted ? (
                               <em style={{ fontWeight: 400, fontSize: "0.85rem" }}>Encrypted Amount </em>

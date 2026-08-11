@@ -26,6 +26,7 @@ import { formatEther, JsonRpcProvider } from "ethers";
 import type { WalletConnectRequest, WalletConnectProposal } from "../backend/WalletConnectService";
 import type { Network } from "../backend/Network";
 import type Account from "../backend/Account";
+import { analyzeFheRisk, checkRequestMatchesWallet } from "../backend/DAppConnectionService";
 
 // Icons
 import LinkIcon from '@mui/icons-material/Link';
@@ -77,7 +78,6 @@ const CHAIN_NAMES: Record<string, { name: string; color: string }> = {
     "eip155:130": { name: "Unichain", color: "#FF007A" },
     "eip155:1868": { name: "Soneium", color: "#3B82F6" },
     "eip155:143": { name: "Unichain Sepolia", color: "#FF007A" },
-    "eip155:8008135": { name: "Fhenix", color: "#6366F1" },
 };
 
 const METHOD_INFO: Record<string, { label: string; icon: React.ReactNode; risk: "safe" | "warning" | "danger" }> = {
@@ -202,22 +202,30 @@ export default function WalletConnectManager() {
 
             if (!bareWallet) throw new Error("Wallet locked or not found");
 
-            // Determine RPC URL: prefer active network, fallback by chainId
-            let rpcUrl = network?.rpc_url;
-            if (!rpcUrl) {
-                // Derive from WC chainId
-                const chainNum = chainId?.split(":")?.[1];
-                if (chainNum === "1") rpcUrl = "https://ethereum.publicnode.com";
-                else if (chainNum === "11155111") rpcUrl = "https://ethereum-sepolia.publicnode.com";
-                else throw new Error("No RPC URL available for chain: " + chainId);
-            }
+            // The request must name the chain and account we are actually about to sign
+            // with. See `checkRequestMatchesWallet` for why each half matters.
+            const requestedChain = Number(chainId?.split(":")?.[1]);
+            const assertSigner = (claimed: unknown) => {
+                const problem = checkRequestMatchesWallet(
+                    chainId,
+                    network ? Number(network.network_id) : undefined,
+                    claimed,
+                    account.GetAddress()
+                );
+                if (problem) throw new Error(problem);
+            };
+
+            // Chain agreement is checked up front; the per-method calls add the signer.
+            assertSigner(undefined);
+            if (!network?.rpc_url) throw new Error("The active network has no RPC configured.");
 
             // Connect bare wallet to provider (project pattern: wallet.connect(provider))
-            const provider = new JsonRpcProvider(rpcUrl);
+            const provider = new JsonRpcProvider(network.rpc_url);
             const connectedWallet = bareWallet.connect(provider);
 
             if (rpcReq.method === "personal_sign") {
                 // personal_sign: params[0] = hex message, params[1] = address
+                assertSigner(rpcReq.params[1]);
                 const hexMsg = rpcReq.params[0];
                 // Decode hex to bytes for signMessage
                 const msgBytes = hexMsg.startsWith("0x")
@@ -227,31 +235,52 @@ export default function WalletConnectManager() {
             }
             else if (rpcReq.method === "eth_sendTransaction") {
                 const txParams = rpcReq.params[0];
+                assertSigner(txParams?.from);
                 const tx = await connectedWallet.sendTransaction({
                     to: txParams.to,
                     value: txParams.value || "0x0",
                     data: txParams.data || "0x",
                     gasLimit: txParams.gasLimit || txParams.gas,
+                    // Pin the chain explicitly. Left unset, ethers takes it from whatever
+                    // provider it happens to hold, which is the mismatch guarded above.
+                    chainId: requestedChain,
                 });
                 result = tx.hash;
             }
             else if (rpcReq.method === "eth_signTypedData" || rpcReq.method === "eth_signTypedData_v4") {
                 // params[0] = address, params[1] = JSON typed data
+                assertSigner(rpcReq.params[0]);
                 const raw = rpcReq.params[1];
                 const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+
+                // A typed-data payload carries its own chain, and it is the one the
+                // contract will verify. Signing a mainnet domain while on a testnet
+                // produces a signature valid somewhere the user never agreed to.
+                const domainChain = data?.domain?.chainId;
+                if (domainChain !== undefined && Number(domainChain) !== requestedChain) {
+                    throw new Error(
+                        `This signature is for chain ${Number(domainChain)}, but the request ` +
+                        `says chain ${requestedChain}. Rejected as inconsistent.`
+                    );
+                }
+
                 // Remove EIP712Domain from types (ethers handles it automatically)
                 const types = { ...data.types };
                 delete types.EIP712Domain;
                 result = await connectedWallet.signTypedData(data.domain, types, data.message || data.value);
             }
-            else if (rpcReq.method === "eth_sign") {
-                // eth_sign: params[0] = address, params[1] = hex data
-                const hexData = rpcReq.params[1];
-                const dataBytes = new Uint8Array(hexData.slice(2).match(/.{1,2}/g)!.map((b: string) => parseInt(b, 16)));
-                result = await connectedWallet.signMessage(dataBytes);
-            }
             else {
-                throw new Error("Unsupported Method: " + rpcReq.method);
+                // `eth_sign` lands here deliberately. It asks for a signature over opaque
+                // bytes, which may be the hash of a transaction the user never sees — the
+                // long-standing blind-signing attack. Major wallets disabled it years ago,
+                // and the previous implementation was wrong regardless: it signed through
+                // `signMessage`, which applies the EIP-191 prefix and therefore returns a
+                // signature that is not what `eth_sign` means.
+                throw new Error(
+                    rpcReq.method === "eth_sign"
+                        ? "eth_sign is not supported — it allows a site to obtain a signature over data you cannot read. Ask the site to use personal_sign or eth_signTypedData_v4."
+                        : "Unsupported Method: " + rpcReq.method
+                );
             }
 
             await service.approveRequest(account, request, result);
@@ -674,9 +703,23 @@ function RequestDialog({
     const { dApp, params } = request;
     const { request: rpcReq, chainId } = params;
 
-    const isChainSupported = chainId === "eip155:1" || chainId === "eip155:11155111";
+    // Approval signs on the wallet's active network, so "supported" means "the chain the
+    // site asked for is the one we are on". The old check hardcoded mainnet and Sepolia,
+    // which rejected every other chain the wallet actually supports — and, worse, passed a
+    // mainnet request through while the wallet sat on a testnet.
+    const requestedChain = Number(chainId?.split(":")?.[1]);
+    const activeChain = network ? Number(network.network_id) : NaN;
+    const isChainSupported = Number.isFinite(requestedChain) && requestedChain === activeChain;
+
     const isTransaction = rpcReq.method === "eth_sendTransaction";
     const isDangerousSign = rpcReq.method === "eth_sign";
+
+    // Confidential balances are the point of this wallet, so a site reaching for the
+    // shield/unshield surface is the risk worth naming explicitly rather than showing as
+    // an anonymous blob of calldata.
+    const fheRisk = isTransaction
+        ? analyzeFheRisk(rpcReq.params[0]?.data, rpcReq.params[0]?.to)
+        : null;
     const isPersonalSign = rpcReq.method === "personal_sign";
     const isTypedData = rpcReq.method === "eth_signTypedData" || rpcReq.method === "eth_signTypedData_v4";
 
@@ -837,10 +880,23 @@ function RequestDialog({
             </Box>
 
             <DialogContent sx={{ px: 3, pt: 1, pb: 2 }}>
-                {/* Unsupported chain warning */}
+                {/* The request is signed on the active network, so a mismatch is refused
+                    rather than silently redirected onto whichever chain is selected. */}
                 {!isChainSupported && (
                     <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>
-                        Unsupported chain: {getChainName(chainId)}
+                        {Number.isFinite(requestedChain) && network
+                            ? `This request is for ${getChainName(chainId)}, but your wallet is on ${network.network_name}. Switch networks, then approve.`
+                            : `Unsupported chain: ${getChainName(chainId)}`}
+                    </Alert>
+                )}
+
+                {/* Confidential-token operations requested by an outside site. */}
+                {fheRisk?.isFheSensitive && (
+                    <Alert
+                        severity={fheRisk.riskLevel === 'critical' ? 'error' : 'warning'}
+                        sx={{ mb: 2, borderRadius: 2 }}
+                    >
+                        {fheRisk.reason}
                     </Alert>
                 )}
 

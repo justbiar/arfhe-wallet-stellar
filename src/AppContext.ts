@@ -12,6 +12,7 @@ import { WalletConnectService } from "./backend/WalletConnectService";
 import SpamFilter from "./backend/SpamFilter.js";
 import PendingClaimQueue from "./backend/PendingClaimQueue.js";
 import SitePermissionService from "./backend/SitePermissionService.js";
+import { configureAgentToolRunner } from "./backend/AgentToolRunner.js";
 
 export const WalletContext = createContext<AppContext | undefined>(undefined);
 
@@ -65,6 +66,28 @@ export class AppContext {
     });
     this.storageManager.onLock(() => {
       this.dataCacheService.invalidate();
+    });
+
+    // The in-wallet AI Agent (AgentChatPanel -> AgentOrchestrator -> AgentToolRunner) needs
+    // to resolve a live Network / Account from the context it's given before it can execute
+    // any tool call. Wired here, synchronously in the constructor, so it's configured before
+    // React ever renders a child that could call runAgentTurn — a useEffect elsewhere would
+    // leave a real window where the UI is mounted but the runner isn't configured yet.
+    configureAgentToolRunner({
+      getNetwork: (networkId) => {
+        const activeId = this.networkProvider.getActiveNetworkId();
+        if (String(activeId) !== networkId) {
+          throw new Error(
+            `Requested network (${networkId}) does not match the active network (${activeId}). ` +
+            "Switch networks and try again."
+          );
+        }
+        return this.networkProvider.getActiveNetwork();
+      },
+      getAccount: (address) => {
+        const target = address.toLowerCase();
+        return this.accountManager.GetAll().find((a) => a.GetAddress()?.toLowerCase() === target);
+      },
     });
   }
 }

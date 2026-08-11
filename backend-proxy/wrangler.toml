@@ -1,0 +1,22 @@
+name = "arfhewallet-agent-proxy"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+
+[vars]
+# Exact origin of the published extension, e.g. "chrome-extension://abcdefghijklmnop".
+# Requests from any other origin are rejected before hitting OpenRouter.
+ALLOWED_ORIGIN = "chrome-extension://ajfpejolnhgeflhgjmboikiffpdlhngi"
+# Requests allowed per IP per 60 seconds.
+RATE_LIMIT_PER_MINUTE = "15"
+
+# KV namespace used by src/rateLimiter.ts to track per-IP request counts.
+# Create with: wrangler kv namespace create RATE_LIMIT_KV
+#              wrangler kv namespace create RATE_LIMIT_KV --preview
+# then replace the ids below with the ones it prints.
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "dc1dcdbb178742ea94181d2e0260e6c8"
+preview_id = "e0bdca44a58d419494524c41f0d5ef4a"
+
+# OPENROUTER_API_KEY is NOT set here — it's a secret, not a var:
+#   wrangler secret put OPENROUTER_API_KEY

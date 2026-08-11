@@ -74,6 +74,14 @@ beforeEach(() => {
   chromeStorageMock.session._store = {};
 });
 
+// ─── scrollIntoView polyfill (jsdom doesn't implement it) ───────
+// Needed by any component that auto-scrolls a chat/list container (e.g. AgentChatPanel).
+// Guarded because backend tests run under `@vitest-environment node`, where `Element`
+// doesn't exist at all.
+if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = vi.fn();
+}
+
 // ─── Web Crypto polyfill (jsdom has limited support) ────────────
 // jsdom now ships with a functional crypto.subtle, but if needed:
 if (!globalThis.crypto?.subtle) {

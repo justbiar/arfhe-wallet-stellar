@@ -215,6 +215,23 @@ function parseToolArguments(raw: string): Record<string, unknown> {
   }
 }
 
+/**
+ * Builds the final turn result, guaranteeing `reply` is visible in `updatedHistory` as a
+ * trailing assistant message. Needed because early-return paths (proxy failure, turn-limit)
+ * produce a `reply` that was never pushed onto `newMessages` — without this, AgentChatPanel
+ * (which renders `updatedHistory`, not `reply`) shows nothing for those turns.
+ */
+function finishTurn(
+  reply: string,
+  newMessages: ChatMessage[],
+  conversationHistory: ChatMessage[]
+): RunAgentTurnResult {
+  const last = newMessages[newMessages.length - 1];
+  const alreadyVisible = last?.role === "assistant" && last.content === reply;
+  const messages = alreadyVisible ? newMessages : [...newMessages, { role: "assistant" as const, content: reply }];
+  return { reply, updatedHistory: [...conversationHistory, ...messages] };
+}
+
 async function runOneToolCall(call: AgentToolCall, context: ToolExecutionContext): Promise<ChatMessage> {
   const args = parseToolArguments(call.function.arguments);
   const outcome = await executeToolCall(call.function.name, args, context);
@@ -254,7 +271,7 @@ export async function runAgentTurn(
     const outcome = await callProxy(workingMessages);
 
     if (!outcome.ok) {
-      return { reply: outcome.friendlyMessage, updatedHistory: [...conversationHistory, ...newMessages] };
+      return finishTurn(outcome.friendlyMessage, newMessages, conversationHistory);
     }
 
     const assistantMessage = outcome.message;
@@ -263,7 +280,7 @@ export async function runAgentTurn(
 
     const toolCalls = assistantMessage.tool_calls ?? [];
     if (toolCalls.length === 0) {
-      return { reply: assistantMessage.content, updatedHistory: [...conversationHistory, ...newMessages] };
+      return finishTurn(assistantMessage.content, newMessages, conversationHistory);
     }
 
     for (const call of toolCalls) {
@@ -273,5 +290,5 @@ export async function runAgentTurn(
     }
   }
 
-  return { reply: MAX_TURNS_EXCEEDED_REPLY, updatedHistory: [...conversationHistory, ...newMessages] };
+  return finishTurn(MAX_TURNS_EXCEEDED_REPLY, newMessages, conversationHistory);
 }

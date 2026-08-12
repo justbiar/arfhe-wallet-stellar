@@ -116,6 +116,19 @@ describe('ConfirmationCard', () => {
     );
   }
 
+  /** Same tree as renderCard, but lets the test swap `activeAccount` afterwards via rerender. */
+  function renderCardAs(preview: ProposalPreview, account: Account) {
+    const tree = (acc: Account) => (
+      <WalletContext.Provider value={mockWallet}>
+        <ActiveAccountContext.Provider value={{ activeIndex: 0, activeAccount: acc, setActiveIndex: vi.fn() }}>
+          <ConfirmationCard preview={preview} onResolved={onResolved} />
+        </ActiveAccountContext.Provider>
+      </WalletContext.Provider>
+    );
+    const result = render(tree(account));
+    return { ...result, rerenderWithAccount: (acc: Account) => result.rerender(tree(acc)) };
+  }
+
   // ─── Genel gösterim ────────────────────────────────────────────
   describe('gösterim', () => {
     it('bakiye değişimini (simulation) "X ETH gönderilecek" olarak gösterir', () => {
@@ -160,6 +173,51 @@ describe('ConfirmationCard', () => {
 
       expect(mockNetwork.sendTransaction).not.toHaveBeenCalled();
       expect(onResolved).toHaveBeenCalledWith({ status: 'rejected', toolName: 'propose_send' });
+    });
+  });
+
+  // ─── Aktif hesap değişimi ────────────────────────────────────────
+  describe('aktif hesap değişimi', () => {
+    const otherAccount = { GetAddress: () => '0x00000000000000000000000000000000000bad' } as unknown as Account;
+
+    it('kart review fazındayken aktif hesap değişirse otomatik iptal edilir', async () => {
+      const { rerenderWithAccount } = renderCardAs(makePreview(), mockAccount);
+      expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument();
+
+      rerenderWithAccount(otherAccount);
+
+      await waitFor(() =>
+        expect(onResolved).toHaveBeenCalledWith({
+          status: 'rejected',
+          toolName: 'propose_send',
+          reason: 'Active account changed before approval',
+        })
+      );
+      expect(onResolved).toHaveBeenCalledTimes(1);
+      expect(mockNetwork.sendTransaction).not.toHaveBeenCalled();
+      expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
+      expect(screen.getByText(/active account changed/i)).toBeInTheDocument();
+    });
+
+    it('aynı hesaba "değişim" (referans değişse de adres aynıysa) iptal tetiklemez', () => {
+      const sameAddressDifferentInstance = { GetAddress: () => TEST_ADDRESS } as unknown as Account;
+      const { rerenderWithAccount } = renderCardAs(makePreview(), mockAccount);
+
+      rerenderWithAccount(sameAddressDifferentInstance);
+
+      expect(onResolved).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument();
+    });
+
+    it('işlem zaten onaylanmış/tamamlanmışken hesap değişimi onResolved\'ı tekrar tetiklemez', async () => {
+      const { rerenderWithAccount } = renderCardAs(makePreview(), mockAccount);
+      fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+      await waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1));
+
+      rerenderWithAccount(otherAccount);
+
+      expect(onResolved).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -279,6 +337,7 @@ describe('ConfirmationCard', () => {
       // Minimal stand-in translator matching en.json's interpolation for these keys.
       const map: Record<string, string> = {
         'agent.confirmationCardOutcomeRejected': `rejected:${params?.toolName}`,
+        'agent.confirmationCardOutcomeCancelled': `cancelled:${params?.toolName}:${params?.reason}`,
         'agent.confirmationCardOutcomeConfirmed': `confirmed:${params?.toolName}:${params?.txHash}`,
         'agent.confirmationCardOutcomeFailed': `failed:${params?.toolName}:${params?.message}`,
       };
@@ -287,6 +346,15 @@ describe('ConfirmationCard', () => {
 
     it('rejected için doğru mesajı üretir', () => {
       expect(buildConfirmationOutcomeSummary({ status: 'rejected', toolName: 'propose_send' }, t)).toBe('rejected:propose_send');
+    });
+
+    it('reason\'lı rejected (otomatik iptal) için ayrı bir mesaj üretir', () => {
+      expect(
+        buildConfirmationOutcomeSummary(
+          { status: 'rejected', toolName: 'propose_send', reason: 'Active account changed before approval' },
+          t
+        )
+      ).toBe('cancelled:propose_send:Active account changed before approval');
     });
 
     it('confirmed için tx hash içeren mesajı üretir', () => {

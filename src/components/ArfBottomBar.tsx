@@ -14,6 +14,7 @@ import ArfBottomMenu from "./ArfBottomMenu";
 import ShieldPanel from "./panels/ShieldPanel.js";
 import { useNavigate, useLocation } from "react-router";
 import { useTheme } from "@mui/material";
+import { useTranslation } from "react-i18next";
 
 /** Fix for MUI passing invalid props to non-Action children */
 interface SafeBoxProps extends Omit<BoxProps, 'onChange'> {
@@ -27,6 +28,7 @@ function ArfBottomBar() {
   const navigate = useNavigate();
   const location = useLocation();
   const theme = useTheme();
+  const { t } = useTranslation();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [shieldDrawerOpen, setShieldDrawerOpen] = useState(false);
 
@@ -157,7 +159,7 @@ function ArfBottomBar() {
             onClick={() => navigate('history')}
           />
           <BottomNavigationAction
-            label="Agent"
+            label={t('agent.navTabLabel')}
             icon={<Hub sx={{ fontSize: 22 }} />}
             onClick={() => navigate('agent')}
           />

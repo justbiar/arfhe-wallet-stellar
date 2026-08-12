@@ -82,7 +82,8 @@ const MAX_TURNS_EXCEEDED_REPLY =
  */
 export function buildSystemPrompt(): string {
   return [
-    "Sen ArfheWallet'ın cüzdan içi AI asistanısın. ArfheWallet, FHE (Fully Homomorphic " +
+    "Senin adın Arfio. ArfheWallet'ın cüzdan içi AI asistanısın. Kendini tanıtırken veya " +
+      "birinci ağızdan konuşurken Arfio ismini kullan. ArfheWallet, FHE (Fully Homomorphic " +
       "Encryption) tabanlı, gizli (confidential) bakiye ve transfer destekleyen bir kripto cüzdanıdır.",
     "",
     "YETKİ SINIRLARIN:",

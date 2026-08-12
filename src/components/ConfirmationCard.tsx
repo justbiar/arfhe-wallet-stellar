@@ -12,7 +12,16 @@
  * that came from the agent is never less scrutinized than one typed by hand. Nothing here
  * re-derives a shortcut path — wrapper/recipient addresses are re-resolved live at approval
  * time (not trusted from the frozen preview), the same way SendPanel/ShieldPanel always read
- * current state right before acting rather than caching it.
+ * current state right before acting rather than caching it. The preview itself, though, was
+ * simulated against a specific account (originalAddressRef) — if the active account changes
+ * while this card is still under review, it self-cancels rather than let a stale preview be
+ * approved against a different account (see the effect + handleApprove's own check below).
+ * NOTE: in practice pages/Agent.tsx now owns per-account chat history, so switching accounts
+ * always swaps `conversationHistory` to the new account's own array in the same render this
+ * card's tool_call_id came from — meaning this component gets unmounted, not re-rendered with
+ * a new `activeAccount`, and Agent.tsx's own effect (using the same ACCOUNT_CHANGED_REASON) is
+ * what actually performs the cancel. The effect below is kept as defense-in-depth for any path
+ * where this component stays mounted across an account change.
  */
 
 import * as React from "react";
@@ -30,14 +39,31 @@ import type { BalanceChange } from "../backend/TransactionSimulator.js";
 // ─── Public types ────────────────────────────────────────────────────
 
 export type ConfirmationOutcome =
-  | { status: "rejected"; toolName: string }
+  | { status: "rejected"; toolName: string; reason?: string }
   | { status: "confirmed"; toolName: string; txHash: string }
   | { status: "failed"; toolName: string; message: string };
+
+/**
+ * Set as ConfirmationOutcome.reason when the active account changed before approval — see the
+ * auto-cancel effect below. Exported so pages/Agent.tsx's own account-switch handling (which
+ * cancels a pending card for the OUTGOING account — this component will already have been
+ * unmounted by then, so its own effect never gets a chance to run) uses the exact same reason
+ * text, keeping Agent Geçmişi consistent regardless of which mechanism actually fired.
+ */
+export const ACCOUNT_CHANGED_REASON = "Active account changed before approval";
 
 export interface ConfirmationCardProps {
   preview: ProposalPreview;
   /** Called exactly once, when the user has rejected, or the real transaction has settled (success or failure). */
   onResolved: (outcome: ConfirmationOutcome) => void;
+  /**
+   * Called once, synchronously, the instant approval begins signing/broadcasting — before the
+   * transaction has settled. Lets the caller mark the underlying history entry as "in flight"
+   * so that if the popup closes mid-broadcast (chrome.storage.session persistence, see
+   * AgentChatPanel), reopening it never re-renders this card as still-actionable and risks a
+   * double-submit of a transaction that may already be on-chain.
+   */
+  onApproveStarted?: (toolName: string) => void;
 }
 
 /**
@@ -51,7 +77,9 @@ export function buildConfirmationOutcomeSummary(
 ): string {
   switch (outcome.status) {
     case "rejected":
-      return t("agent.confirmationCardOutcomeRejected", { toolName: outcome.toolName });
+      return outcome.reason
+        ? t("agent.confirmationCardOutcomeCancelled", { toolName: outcome.toolName, reason: outcome.reason })
+        : t("agent.confirmationCardOutcomeRejected", { toolName: outcome.toolName });
     case "confirmed":
       return t("agent.confirmationCardOutcomeConfirmed", { toolName: outcome.toolName, txHash: outcome.txHash });
     case "failed":
@@ -61,7 +89,7 @@ export function buildConfirmationOutcomeSummary(
 
 // ─── Display helpers ─────────────────────────────────────────────────
 
-type CardPhase = "review" | "working" | "success" | "error";
+type CardPhase = "review" | "working" | "success" | "error" | "cancelled";
 
 function primaryBalanceChange(changes: BalanceChange[]): BalanceChange | undefined {
   return changes.find((c) => c.type !== "FHE_ENCRYPTED") ?? changes[0];
@@ -74,7 +102,7 @@ function riskColor(risk: string): "success" | "info" | "warning" | "error" {
   return "success";
 }
 
-export default function ConfirmationCard({ preview, onResolved }: ConfirmationCardProps) {
+export default function ConfirmationCard({ preview, onResolved, onApproveStarted }: ConfirmationCardProps) {
   const { t } = useTranslation();
   const wallet = React.useContext(WalletContext);
   const { activeAccount } = useActiveAccount();
@@ -87,6 +115,25 @@ export default function ConfirmationCard({ preview, onResolved }: ConfirmationCa
   const [beforeBalance, setBeforeBalance] = React.useState<number | null>(null);
 
   const { toolName, originalArgs, simulation } = preview;
+
+  // The account this card's preview (simulation, risk level, to/amount) was actually generated
+  // against — fixed on mount, never re-derived. Compared below against the live activeAccount
+  // so a mid-review account switch can't leave a stale preview approvable.
+  const originalAddressRef = React.useRef(activeAccount?.GetAddress());
+
+  // SECURITY: a proposal preview (simulation/risk/to/amount) is only valid for the account it
+  // was generated against — AgentToolRunner simulated it there, not against whatever account
+  // happens to be active later. If the user switches accounts while this card is still
+  // reviewable, auto-cancel rather than let a stale preview be approved (and signed/broadcast)
+  // against a different account. Only acts in "review" — once approval has started
+  // (cardPhase !== "review"), onResolved has already fired exactly once and there's nothing
+  // left to cancel.
+  React.useEffect(() => {
+    if (cardPhase !== "review") return;
+    if (activeAccount?.GetAddress() === originalAddressRef.current) return;
+    setCardPhase("cancelled");
+    onResolved({ status: "rejected", toolName, reason: ACCOUNT_CHANGED_REASON });
+  }, [activeAccount, cardPhase, onResolved, toolName]);
   const change = primaryBalanceChange(simulation.balanceChanges);
 
   // propose_unshield's calldata never gets a balanceChange entry (TransactionSimulator's FHE
@@ -154,6 +201,15 @@ export default function ConfirmationCard({ preview, onResolved }: ConfirmationCa
   }
 
   const handleApprove = async () => {
+    // Defense-in-depth alongside the account-change effect above: that effect only runs
+    // between renders, so if the account switch and this click landed in the same commit
+    // (a race the effect hasn't caught yet), this catches it before anything is ever signed.
+    if (activeAccount?.GetAddress() !== originalAddressRef.current) {
+      setCardPhase("cancelled");
+      onResolved({ status: "rejected", toolName, reason: ACCOUNT_CHANGED_REASON });
+      return;
+    }
+
     if (!wallet || !network || !activeAccount) {
       setErrorMessage(t("agent.confirmationCardNoWallet"));
       setCardPhase("error");
@@ -163,6 +219,7 @@ export default function ConfirmationCard({ preview, onResolved }: ConfirmationCa
     setCardPhase("working");
     setErrorMessage("");
     setWorkingLabel(t("agent.confirmationCardSigning"));
+    onApproveStarted?.(toolName);
 
     try {
       let hash: string;
@@ -359,6 +416,15 @@ export default function ConfirmationCard({ preview, onResolved }: ConfirmationCa
               <ErrorOutline color="error" sx={{ fontSize: 16, mt: 0.2 }} />
               <Typography variant="caption" color="error.main">
                 {errorMessage}
+              </Typography>
+            </Stack>
+          )}
+
+          {cardPhase === "cancelled" && (
+            <Stack direction="row" spacing={0.5} alignItems="flex-start">
+              <Cancel sx={{ fontSize: 16, mt: 0.2, color: "text.disabled" }} />
+              <Typography variant="caption" color="text.secondary">
+                {t("agent.confirmationCardAccountChangedCancelled")}
               </Typography>
             </Stack>
           )}

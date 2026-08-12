@@ -44,6 +44,11 @@ describe('AgentOrchestrator', () => {
 
   // ─── buildSystemPrompt ──────────────────────────────────────────
   describe('buildSystemPrompt', () => {
+    it('kendini Arfio olarak tanıtır', () => {
+      const prompt = buildSystemPrompt();
+      expect(prompt).toContain('Arfio');
+    });
+
     it('işlem imzalama yetkisi olmadığını belirtir', () => {
       const prompt = buildSystemPrompt();
       expect(prompt).toContain('imzalama');

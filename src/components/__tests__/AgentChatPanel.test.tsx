@@ -2,6 +2,7 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import '../../i18n.js';
+import * as React from 'react';
 import AgentChatPanel from '../AgentChatPanel';
 import { WalletContext } from '../../AppContext';
 import { ActiveAccountContext } from '../../ActiveAccountProvider';
@@ -10,6 +11,7 @@ import type { AppContext } from '../../AppContext';
 import type Account from '../../backend/Account';
 import type { ChatMessage, RunAgentTurnResult } from '../../backend/AgentOrchestrator';
 import type { ProposalPreview } from '../../backend/AgentToolRunner';
+import type { ProposalRecord } from '../../backend/AgentProposalHistory';
 
 /**
  * AgentChatPanel testleri
@@ -21,6 +23,13 @@ import type { ProposalPreview } from '../../backend/AgentToolRunner';
  * doğru argümanlarla tekrar çağrılması, input kilidi ve "aynı anda tek kart" garantisi. Gerçek
  * i18n (en.json) kullanılır. Mesaj listesi, loading göstergesi ve aktif hesap bulunamama
  * durumu da test edilir.
+ *
+ * AgentChatPanel artık conversationHistory/setConversationHistory/setProposalHistory'yi prop
+ * olarak alıyor (gerçek sahibi pages/Agent.tsx — hesap-bazlı depolama orada yönetiliyor, bkz.
+ * Agent.test.tsx). Burada bir test-harness bileşeni bu prop'ları gerçek React state'iyle
+ * besliyor ve proposalHistory'yi (harness dışına render edilmeyen bir state) gizli bir
+ * data-testid'li elemente JSON olarak yazıp test'lerin okumasını sağlıyor — AgentChatPanel'in
+ * setProposalHistory'yi doğru çağırdığını, gerçek storage'a dokunmadan doğrular.
  */
 
 vi.mock('../../backend/AgentOrchestrator.js', async () => {
@@ -90,10 +99,18 @@ function makeAccount(address: string | undefined = TEST_ADDRESS): Account | unde
   return { GetAddress: () => address } as unknown as Account;
 }
 
-function renderPanel(opts: { withAccount?: boolean; withWallet?: boolean } = {}) {
-  const { withAccount = true, withWallet = true } = opts;
+/**
+ * Stand-in for pages/Agent.tsx: holds the real React state AgentChatPanel now receives as
+ * props, so tests exercise the exact same prop contract without needing chrome.storage.session
+ * or a real Agent.tsx account-switch effect (that orchestration is covered separately in
+ * Agent.test.tsx). proposalHistory is exposed via a hidden JSON element so tests can assert on
+ * what AgentChatPanel wrote, without reaching into storage.
+ */
+function Harness({ withAccount = true, withWallet = true }: { withAccount?: boolean; withWallet?: boolean }) {
+  const [conversationHistory, setConversationHistory] = React.useState<ChatMessage[]>([]);
+  const [proposalHistory, setProposalHistory] = React.useState<ProposalRecord[]>([]);
 
-  return render(
+  return (
     <WalletContext.Provider value={withWallet ? makeWallet() : undefined}>
       <ActiveAccountContext.Provider
         value={{
@@ -102,27 +119,44 @@ function renderPanel(opts: { withAccount?: boolean; withWallet?: boolean } = {})
           setActiveIndex: vi.fn(),
         }}
       >
-        <AgentChatPanel />
+        <AgentChatPanel
+          conversationHistory={conversationHistory}
+          setConversationHistory={setConversationHistory}
+          setProposalHistory={setProposalHistory}
+        />
+        <div data-testid="debug-proposal-history" style={{ display: 'none' }}>
+          {JSON.stringify(proposalHistory)}
+        </div>
       </ActiveAccountContext.Provider>
     </WalletContext.Provider>
   );
 }
 
+function renderPanel(opts: { withAccount?: boolean; withWallet?: boolean } = {}) {
+  const { withAccount = true, withWallet = true } = opts;
+  return render(<Harness withAccount={withAccount} withWallet={withWallet} />);
+}
+
+function readDebugProposalHistory(): ProposalRecord[] {
+  return JSON.parse(screen.getByTestId('debug-proposal-history').textContent || '[]');
+}
+
 describe('AgentChatPanel', () => {
   beforeEach(() => {
     vi.mocked(runAgentTurn).mockReset();
+    sessionStorage.clear();
   });
 
   // ─── Boş / aktif hesap yok durumları ─────────────────────────────
   it('mesaj yokken boş durum metnini gösterir', () => {
     renderPanel();
-    expect(screen.getByText(/Ask a question about your wallet/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ask Arfio a question about your wallet/i)).toBeInTheDocument();
   });
 
   it('aktif hesap yoksa uyarı gösterir ve input devre dışı kalır', () => {
     renderPanel({ withAccount: false });
     expect(screen.getByText(/No active account found/i)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/Ask about your balance/i)).toBeDisabled();
+    expect(screen.getByPlaceholderText(/Ask Arfio about your balance/i)).toBeDisabled();
   });
 
   it('gönder butonu input boşken devre dışıdır', () => {
@@ -143,7 +177,7 @@ describe('AgentChatPanel', () => {
     vi.mocked(runAgentTurn).mockResolvedValueOnce(result);
 
     renderPanel();
-    const input = screen.getByPlaceholderText(/Ask about your balance/i);
+    const input = screen.getByPlaceholderText(/Ask Arfio about your balance/i);
     fireEvent.change(input, { target: { value: 'bakiyem ne kadar' } });
     fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 
@@ -163,10 +197,10 @@ describe('AgentChatPanel', () => {
     );
 
     renderPanel();
-    fireEvent.change(screen.getByPlaceholderText(/Ask about your balance/i), { target: { value: 'merhaba' } });
+    fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'merhaba' } });
     fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 
-    expect(await screen.findByText('Thinking...')).toBeInTheDocument();
+    expect(await screen.findByText('Arfio is thinking...')).toBeInTheDocument();
 
     await act(async () => {
       resolveTurn({
@@ -178,7 +212,7 @@ describe('AgentChatPanel', () => {
       });
     });
 
-    await waitFor(() => expect(screen.queryByText('Thinking...')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('Arfio is thinking...')).not.toBeInTheDocument());
     expect(screen.getByText('Merhaba!')).toBeInTheDocument();
   });
 
@@ -192,7 +226,7 @@ describe('AgentChatPanel', () => {
     });
 
     renderPanel();
-    const input = screen.getByPlaceholderText(/Ask about your balance/i);
+    const input = screen.getByPlaceholderText(/Ask Arfio about your balance/i);
     fireEvent.change(input, { target: { value: 'selam' } });
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: false });
 
@@ -210,7 +244,7 @@ describe('AgentChatPanel', () => {
     vi.mocked(runAgentTurn).mockResolvedValueOnce(firstTurn);
 
     renderPanel();
-    const input = screen.getByPlaceholderText(/Ask about your balance/i);
+    const input = screen.getByPlaceholderText(/Ask Arfio about your balance/i);
     fireEvent.change(input, { target: { value: 'ilk soru' } });
     fireEvent.click(screen.getByRole('button', { name: /send message/i }));
     await waitFor(() => expect(screen.getByText('ilk cevap')).toBeInTheDocument());
@@ -234,17 +268,17 @@ describe('AgentChatPanel', () => {
     vi.mocked(runAgentTurn).mockRejectedValueOnce(new Error('boom'));
 
     renderPanel();
-    fireEvent.change(screen.getByPlaceholderText(/Ask about your balance/i), { target: { value: 'test' } });
+    fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'test' } });
     fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 
     await waitFor(() => expect(screen.getByText(/couldn't process that/i)).toBeInTheDocument());
   });
 
-  // ─── Sohbeti temizle ────────────────────────────────────────────
-  describe('sohbeti temizle', () => {
-    it('mesaj yokken temizle butonu devre dışıdır', () => {
+  // ─── Yeni sohbet ────────────────────────────────────────────
+  describe('yeni sohbet', () => {
+    it('mesaj yokken yeni sohbet butonu devre dışıdır', () => {
       renderPanel();
-      expect(screen.getByRole('button', { name: /clear conversation/i })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /new chat/i })).toBeDisabled();
     });
 
     it('mesajlar varken tıklanınca conversationHistory ve görünümü sıfırlar', async () => {
@@ -257,17 +291,17 @@ describe('AgentChatPanel', () => {
       });
 
       renderPanel();
-      fireEvent.change(screen.getByPlaceholderText(/Ask about your balance/i), { target: { value: 'soru' } });
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'soru' } });
       fireEvent.click(screen.getByRole('button', { name: /send message/i }));
       await waitFor(() => expect(screen.getByText('cevap')).toBeInTheDocument());
 
-      const clearButton = screen.getByRole('button', { name: /clear conversation/i });
+      const clearButton = screen.getByRole('button', { name: /new chat/i });
       expect(clearButton).toBeEnabled();
       fireEvent.click(clearButton);
 
       expect(screen.queryByText('soru')).not.toBeInTheDocument();
       expect(screen.queryByText('cevap')).not.toBeInTheDocument();
-      expect(screen.getByText(/Ask a question about your wallet/i)).toBeInTheDocument();
+      expect(screen.getByText(/Ask Arfio a question about your wallet/i)).toBeInTheDocument();
       expect(clearButton).toBeDisabled();
     });
   });
@@ -285,7 +319,7 @@ describe('AgentChatPanel', () => {
       });
 
       renderPanel();
-      fireEvent.change(screen.getByPlaceholderText(/Ask about your balance/i), { target: { value: 'send 0.1 eth' } });
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'send 0.1 eth' } });
       fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 
       await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
@@ -302,13 +336,13 @@ describe('AgentChatPanel', () => {
       });
 
       renderPanel();
-      fireEvent.change(screen.getByPlaceholderText(/Ask about your balance/i), { target: { value: 'send 0.1 eth' } });
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'send 0.1 eth' } });
       fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 
       await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
-      expect(screen.getByPlaceholderText(/Ask about your balance/i)).toBeDisabled();
+      expect(screen.getByPlaceholderText(/Ask Arfio about your balance/i)).toBeDisabled();
       expect(screen.getByRole('button', { name: /send message/i })).toBeDisabled();
-      expect(screen.getByRole('button', { name: /clear conversation/i })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /new chat/i })).toBeDisabled();
     });
 
     it('onaylama: tool mesajı özetle güncellenir, runAgentTurn boş userMessage ile yeni history üzerinden tekrar çağrılır', async () => {
@@ -317,7 +351,7 @@ describe('AgentChatPanel', () => {
       vi.mocked(runAgentTurn).mockResolvedValueOnce({ reply: '', updatedHistory: historyWithProposal });
 
       renderPanel();
-      fireEvent.change(screen.getByPlaceholderText(/Ask about your balance/i), { target: { value: 'send 0.1 eth' } });
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'send 0.1 eth' } });
       fireEvent.click(screen.getByRole('button', { name: /send message/i }));
       await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
 
@@ -340,13 +374,18 @@ describe('AgentChatPanel', () => {
 
       const toolMessage = (historyArg as ChatMessage[]).find((m) => m.tool_call_id === 'call_1');
       expect(toolMessage).toBeDefined();
-      const parsedContent = JSON.parse(toolMessage!.content) as { result: string };
-      expect(parsedContent.result).toContain('propose_send');
-      expect(parsedContent.result.toLowerCase()).toContain('approved');
+      const parsedContent = JSON.parse(toolMessage!.content) as {
+        result: { settled: true; status: string; toolName: string; summary: string };
+      };
+      expect(parsedContent.result.settled).toBe(true);
+      expect(parsedContent.result.status).toBe('confirmed');
+      expect(parsedContent.result.toolName).toBe('propose_send');
+      expect(parsedContent.result.summary).toContain('propose_send');
+      expect(parsedContent.result.summary.toLowerCase()).toContain('approved');
 
       await waitFor(() => expect(screen.getByText('İşleminiz onaylandı, tebrikler.')).toBeInTheDocument());
       expect(screen.queryByTestId('confirmation-card')).not.toBeInTheDocument();
-      expect(screen.getByPlaceholderText(/Ask about your balance/i)).toBeEnabled();
+      expect(screen.getByPlaceholderText(/Ask Arfio about your balance/i)).toBeEnabled();
     });
 
     it('reddetme: benzer akış çalışır — tool mesajı "rejected" özetiyle güncellenir, kart kapanır', async () => {
@@ -355,7 +394,7 @@ describe('AgentChatPanel', () => {
       vi.mocked(runAgentTurn).mockResolvedValueOnce({ reply: '', updatedHistory: historyWithProposal });
 
       renderPanel();
-      fireEvent.change(screen.getByPlaceholderText(/Ask about your balance/i), { target: { value: 'send 0.1 eth' } });
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'send 0.1 eth' } });
       fireEvent.click(screen.getByRole('button', { name: /send message/i }));
       await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
 
@@ -376,8 +415,11 @@ describe('AgentChatPanel', () => {
       expect(userMessageArg).toBe('');
 
       const toolMessage = (historyArg as ChatMessage[]).find((m) => m.tool_call_id === 'call_1');
-      const parsedContent = JSON.parse(toolMessage!.content) as { result: string };
-      expect(parsedContent.result.toLowerCase()).toContain('rejected');
+      const parsedContent = JSON.parse(toolMessage!.content) as {
+        result: { settled: true; status: string; toolName: string; summary: string };
+      };
+      expect(parsedContent.result.status).toBe('rejected');
+      expect(parsedContent.result.summary.toLowerCase()).toContain('rejected');
 
       await waitFor(() => expect(screen.getByText('Anladım, iptal ettiniz.')).toBeInTheDocument());
       expect(screen.queryByTestId('confirmation-card')).not.toBeInTheDocument();
@@ -396,7 +438,7 @@ describe('AgentChatPanel', () => {
       });
 
       renderPanel();
-      fireEvent.change(screen.getByPlaceholderText(/Ask about your balance/i), { target: { value: 'do two things' } });
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'do two things' } });
       fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 
       await waitFor(() => expect(screen.getAllByTestId('confirmation-card')).toHaveLength(1));
@@ -417,6 +459,149 @@ describe('AgentChatPanel', () => {
 
       await waitFor(() => expect(screen.getAllByTestId('confirmation-card')).toHaveLength(1));
       expect(screen.getByTestId('confirmation-tool')).toHaveTextContent('propose_shield');
+    });
+  });
+
+  // ─── Hazır sorular (boş ekran) ────────────────────────────────────
+  describe('hazır sorular', () => {
+    it('boş ekranda hazır soru butonları görünür ve tıklanınca metin gönderilir', async () => {
+      vi.mocked(runAgentTurn).mockResolvedValueOnce({
+        reply: 'Bakiyeniz 1 ETH.',
+        updatedHistory: [
+          { role: 'user', content: "What's my balance?" },
+          { role: 'assistant', content: 'Bakiyeniz 1 ETH.' },
+        ],
+      });
+
+      renderPanel();
+      fireEvent.click(screen.getByRole('button', { name: "What's my balance?" }));
+
+      await waitFor(() =>
+        expect(runAgentTurn).toHaveBeenCalledWith("What's my balance?", [], {
+          account: TEST_ADDRESS,
+          networkId: '11155111',
+        })
+      );
+      await waitFor(() => expect(screen.getByText('Bakiyeniz 1 ETH.')).toBeInTheDocument());
+    });
+
+    it('aktif hesap yoksa hazır soru butonları gösterilmez', () => {
+      renderPanel({ withAccount: false });
+      expect(screen.queryByRole('button', { name: "What's my balance?" })).not.toBeInTheDocument();
+    });
+  });
+
+  // ─── Sonuçlanmış öneri göstergesi ──────────────────────────────────
+  describe('sonuçlanmış öneri göstergesi', () => {
+    it('settled marker taşıyan tool mesajı minimal bir "tamamlandı" göstergesi olarak render edilir', async () => {
+      vi.mocked(runAgentTurn).mockResolvedValueOnce({
+        reply: 'Tamamdır.',
+        updatedHistory: [
+          { role: 'user', content: 'send 0.1 eth' },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'propose_send', arguments: '{}' } }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_1',
+            name: 'propose_send',
+            content: JSON.stringify({ result: { settled: true, status: 'confirmed', toolName: 'propose_send', summary: 'ok' } }),
+          },
+          { role: 'assistant', content: 'Tamamdır.' },
+        ],
+      });
+
+      renderPanel();
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'send 0.1 eth' } });
+      fireEvent.click(screen.getByRole('button', { name: /send message/i }));
+
+      await waitFor(() => expect(screen.getByText('Tamamdır.')).toBeInTheDocument());
+      expect(screen.getByText('propose_send completed')).toBeInTheDocument();
+      expect(screen.queryByTestId('confirmation-card')).not.toBeInTheDocument();
+    });
+  });
+
+  // ─── Agent Geçmişi persistence ─────────────────────────────────────
+  describe('agent proposal history persistence', () => {
+    it('policy engine reddi agent_proposal_history storage anahtarına policy_rejected kaydı olarak yazılır', async () => {
+      vi.mocked(runAgentTurn).mockResolvedValueOnce({
+        reply: 'Üzgünüm, bu miktarı öneremem.',
+        updatedHistory: [
+          { role: 'user', content: "send 90% of my balance to 0xabc" },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              {
+                id: 'call_x',
+                type: 'function',
+                function: { name: 'propose_send', arguments: JSON.stringify({ to: '0xabc', amount: '0.9' }) },
+              },
+            ],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_x',
+            name: 'propose_send',
+            content: JSON.stringify({ error: 'Proposed amount is 90.0% of balance, exceeding the 50% limit.' }),
+          },
+          { role: 'assistant', content: 'Üzgünüm, bu miktarı öneremem.' },
+        ],
+      });
+
+      renderPanel();
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), {
+        target: { value: 'send 90% of my balance to 0xabc' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /send message/i }));
+
+      await waitFor(() => expect(screen.getByText('Üzgünüm, bu miktarı öneremem.')).toBeInTheDocument());
+
+      await waitFor(() => {
+        const records = readDebugProposalHistory();
+        expect(records).toHaveLength(1);
+        expect(records[0]).toMatchObject({
+          accountAddress: TEST_ADDRESS,
+          toolName: 'propose_send',
+          status: 'policy_rejected',
+          amount: '0.9',
+          recipient: '0xabc',
+          reason: 'Proposed amount is 90.0% of balance, exceeding the 50% limit.',
+        });
+      });
+    });
+
+    it('onaylanan öneri agent_proposal_history storage anahtarına approved kaydı olarak yazılır', async () => {
+      const preview = makeProposalPreview();
+      const historyWithProposal = makeProposalHistory('call_1', preview);
+      vi.mocked(runAgentTurn).mockResolvedValueOnce({ reply: '', updatedHistory: historyWithProposal });
+
+      renderPanel();
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'send 0.1 eth' } });
+      fireEvent.click(screen.getByRole('button', { name: /send message/i }));
+      await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
+
+      vi.mocked(runAgentTurn).mockResolvedValueOnce({
+        reply: 'Onaylandı.',
+        updatedHistory: [...historyWithProposal, { role: 'assistant', content: 'Onaylandı.' }],
+      });
+      fireEvent.click(screen.getByText('mock-approve'));
+
+      await waitFor(() => expect(screen.getByText('Onaylandı.')).toBeInTheDocument());
+
+      await waitFor(() => {
+        const records = readDebugProposalHistory();
+        expect(records).toHaveLength(1);
+        expect(records[0]).toMatchObject({
+          id: 'call_1',
+          accountAddress: TEST_ADDRESS,
+          toolName: 'propose_send',
+          status: 'approved',
+          txHash: '0xMOCKHASH',
+        });
+      });
     });
   });
 });

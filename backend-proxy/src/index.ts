@@ -107,9 +107,11 @@ type ChainResult =
 
 /**
  * Try each model in MODEL_CHAIN until one answers with something other than 429 (rate
- * limited), 5xx (upstream outage), or 404 (model no longer exists in OpenRouter's catalog —
+ * limited), 5xx (upstream outage), 404 (model no longer exists in OpenRouter's catalog —
  * free-tier models get retired without notice, which is exactly what happened to
- * qwen/qwen3-coder:free). Those are the only cases worth falling back for — anything else
+ * qwen/qwen3-coder:free), or a "successful" status whose body isn't valid JSON (a model/
+ * provider-side glitch, not a real answer — logged with the offending model name and a
+ * truncated body sample). Those are the only cases worth falling back for — anything else
  * (auth failure, malformed request, a genuine completion) is returned as-is, since retrying
  * a different model wouldn't change a client-side error and would just mask a real answer.
  */
@@ -157,7 +159,26 @@ async function callModelChain(body: AgentChatRequestBody, apiKey: string): Promi
       continue;
     }
 
-    const data = await response.json().catch(() => ({ error: "Upstream returned a non-JSON response." }));
+    // A "successful" status (not 429/404/5xx) with a body that isn't valid JSON is never a
+    // usable completion — it's a model/provider-side glitch (an HTML error page, truncated
+    // output, etc.), not a real answer. Treated as retryable exactly like 5xx/429, rather
+    // than forwarded as a synthetic {error} "response" that would short-circuit the whole
+    // fallback chain on one flaky model. The raw body (truncated) and which model produced
+    // it are logged so a future occurrence is diagnosable from `wrangler tail` / dev console
+    // instead of only showing up as the client's generic "couldn't process that" reply.
+    const rawText = await response.text();
+    let data: unknown;
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      console.error(
+        `[agent-proxy] model "${model}" returned status ${response.status} with a non-JSON body:`,
+        rawText.slice(0, 500)
+      );
+      sawUnreachable = true;
+      continue;
+    }
+
     return { kind: "response", status: response.status, data };
   }
 

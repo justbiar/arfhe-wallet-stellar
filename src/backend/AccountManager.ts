@@ -153,11 +153,36 @@ export default class AccountManager {
     if (this.linkedStorageManager.isUnlocked()) {
       await this.linkedStorageManager.encryptAndStore("active", this.active);
       await this.linkedStorageManager.encryptAndStore("accounts", serializableAccounts);
-    } else {
-      // Fallback to plaintext until encryption is set up
-      this.linkedStorageManager.setLocal("active", this.active);
-      this.linkedStorageManager.setLocal("accounts", serializableAccounts);
+      return;
     }
+
+    // Locked, which during onboarding means "no password chosen yet". This used to write
+    // the mnemonic and private key to plaintext localStorage as a stopgap, cleared later
+    // when the password was set. Anyone who abandoned onboarding before that — closing the
+    // tab on the recovery-phrase screen — left their seed sitting unencrypted on disk
+    // indefinitely.
+    //
+    // Nothing sensitive is written before there is a key to protect it. The account stays
+    // in memory and is committed by {@link persistToEncryptedStorage} once the password
+    // exists; abandoning now leaves nothing behind, which is the correct outcome for a
+    // wallet the user never finished creating.
+  }
+
+  /**
+   * Write the in-memory accounts to encrypted storage.
+   *
+   * Called once the password has been set, because until then there is deliberately no
+   * persisted copy. Without this the freshly created account would live only in the
+   * onboarding tab and vanish when it closed.
+   *
+   * @returns Whether anything was written.
+   */
+  async persistToEncryptedStorage(): Promise<boolean> {
+    if (!this.linkedStorageManager.isUnlocked()) return false;
+    if (this.accounts.length === 0) return false;
+
+    await this.updateStorage();
+    return true;
   }
 
   CreateAccount(name?: string): number {

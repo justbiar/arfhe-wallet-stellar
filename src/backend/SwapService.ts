@@ -220,6 +220,55 @@ export default class SwapService {
     return NETWORK_TOKENS[networkId] ?? [];
   }
 
+  /**
+   * The curated list plus whatever else the wallet holds.
+   *
+   * The curated entries carry hand-checked decimals and a colour; a held token that is not
+   * on that list is still perfectly swappable if a pool exists, and refusing to show it
+   * meant "swap" only ever worked for a handful of assets.
+   *
+   * Confidential wrappers are excluded on purpose. Their balance lives in the encrypted
+   * ledger — a router would pull the ERC-20 side, which is the ~7984 activity counter, not
+   * a holding. Unshield first, then swap.
+   *
+   * @param held Tokens the wallet actually has, from the balance cache.
+   * @param isConfidential Predicate identifying confidential wrappers.
+   */
+  getSwappableTokens(
+    networkId: NetworkId,
+    held: { contractAddress: string; symbol?: string; decimals?: number; isNative?: boolean }[],
+    isConfidential: (address: string) => boolean = () => false,
+  ): SwapToken[] {
+    const curated = this.getTokens(networkId);
+    const seen = new Set(curated.map((t) => t.address.toLowerCase()));
+
+    const extras: SwapToken[] = [];
+    for (const token of held) {
+      const address = token.contractAddress;
+      if (!address || token.isNative || address === "ETH") continue;
+      if (!address.startsWith("0x")) continue;
+
+      const key = address.toLowerCase();
+      if (seen.has(key)) continue;
+      if (isConfidential(key)) continue;
+
+      // Decimals decide the amount that leaves the wallet. Without a known value there is
+      // nothing safe to encode, so the token is left out rather than guessed at.
+      if (typeof token.decimals !== "number") continue;
+
+      seen.add(key);
+      extras.push({
+        symbol: token.symbol || "TOKEN",
+        name: token.symbol || address,
+        address,
+        decimals: token.decimals,
+        logoColor: "#6b7280",
+      });
+    }
+
+    return [...curated, ...extras];
+  }
+
   getContracts(networkId: NetworkId): SwapContracts | undefined {
     return SWAP_CONTRACTS[networkId];
   }

@@ -17,6 +17,7 @@ import {
     DialogContent,
     DialogActions,
     TextField,
+    CircularProgress,
     Alert,
     IconButton,
     InputAdornment,
@@ -40,6 +41,7 @@ import { useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { WalletContext } from '../AppContext';
 import ConnectedSites from "../components/ConnectedSites.js";
+import HiddenTokens from "../components/HiddenTokens.js";
 import { useToast } from '../components/ToastProvider';
 
 export default function SettingsSecurity() {
@@ -64,6 +66,8 @@ export default function SettingsSecurity() {
     } | null>(null);
 
     const [showPrivateKey, setShowPrivateKey] = useState(false);
+    const [resetOpen, setResetOpen] = useState(false);
+    const [resetting, setResetting] = useState(false);
     const [showMnemonic, setShowMnemonic] = useState(false);
 
     // Auto Lock State
@@ -148,6 +152,8 @@ export default function SettingsSecurity() {
 
                 <ConnectedSites />
 
+                <HiddenTokens />
+
                 <Typography variant="h6" fontWeight={700} gutterBottom sx={{ px: 1 }}>
                     {t('security.yourAccounts')}
                 </Typography>
@@ -210,7 +216,74 @@ export default function SettingsSecurity() {
                     </Stack>
                 </Paper>
 
+                {/* ── Danger zone ──
+                    The wallet is non-custodial, so this is the only remedy for a forgotten
+                    password and the only way to remove it from the device. Kept apart from
+                    the settings above and behind a confirmation, because it is final. */}
+                <Typography variant="h6" fontWeight={700} gutterBottom sx={{ px: 1, mt: 4, color: 'error.main' }}>
+                    {t('security.dangerZone')}
+                </Typography>
+
+                <Paper
+                    elevation={0}
+                    sx={{ borderRadius: 4, p: 2.5, bgcolor: 'background.paper', border: '1px solid', borderColor: 'error.main' }}
+                >
+                    <Typography variant="body2" fontWeight={700} gutterBottom>
+                        {t('security.resetWallet')}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
+                        {t('security.resetWalletDesc')}
+                    </Typography>
+                    <Button
+                        fullWidth
+                        color="error"
+                        variant="outlined"
+                        onClick={() => setResetOpen(true)}
+                        sx={{ borderRadius: 3, py: 1.1, fontWeight: 700 }}
+                    >
+                        {t('security.resetWalletAction')}
+                    </Button>
+                </Paper>
+
             </Container>
+
+            {/* Reset confirmation */}
+            <Dialog open={resetOpen} onClose={() => !resetting && setResetOpen(false)} maxWidth="xs" fullWidth>
+                <DialogTitle fontWeight={800}>{t('auth.resetWalletTitle')}</DialogTitle>
+                <DialogContent>
+                    <Alert severity="error" sx={{ mb: 2, borderRadius: 3 }}>
+                        {t('auth.resetWalletWarning')}
+                    </Alert>
+                    <Typography variant="body2" color="text.secondary">
+                        {t('auth.resetWalletExplain')}
+                    </Typography>
+                </DialogContent>
+                <DialogActions sx={{ p: 3, pt: 0 }}>
+                    <Button onClick={() => setResetOpen(false)} disabled={resetting}>
+                        {t('common.cancel')}
+                    </Button>
+                    <Button
+                        color="error"
+                        variant="contained"
+                        disabled={resetting}
+                        onClick={async () => {
+                            setResetting(true);
+                            try {
+                                await storageManager?.resetWallet();
+                                // Full reload: every in-memory service still holds state
+                                // belonging to a wallet that no longer exists.
+                                window.location.hash = '#/';
+                                window.location.reload();
+                            } catch {
+                                setResetting(false);
+                                setResetOpen(false);
+                            }
+                        }}
+                    >
+                        {resetting ? <CircularProgress size={20} color="inherit" /> : t('auth.resetWalletConfirm')}
+                    </Button>
+                </DialogActions>
+            </Dialog>
 
             {/* Password Dialog */}
             <Dialog open={passwordDialogOpen} onClose={() => setPasswordDialogOpen(false)} maxWidth="xs" fullWidth aria-labelledby="password-dialog-title">

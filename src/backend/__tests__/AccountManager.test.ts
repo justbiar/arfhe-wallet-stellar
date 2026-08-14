@@ -83,9 +83,31 @@ describe('AccountManager', () => {
       expect(manager.GetAll()).toHaveLength(3);
     });
 
-    it('oluşturma sonrası storage güncellenir', () => {
+    it('parola belirlenmeden hiçbir gizli veri diske yazılmaz', () => {
+      // The mock reports the wallet as locked, which is the onboarding state: the user has
+      // a recovery phrase on screen but has not chosen a password yet. Writing the mnemonic
+      // to plaintext storage here used to leave it on disk forever if they walked away.
       manager.CreateAccount();
-      expect(mockStorage.setLocal).toHaveBeenCalled();
+
+      expect(mockStorage.setLocal).not.toHaveBeenCalled();
+      expect(mockStorage.encryptAndStore).not.toHaveBeenCalled();
+    });
+
+    it('kilit açıldığında hesaplar şifreli olarak yazılır', async () => {
+      manager.CreateAccount();
+      (mockStorage.isUnlocked as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+      await expect(manager.persistToEncryptedStorage()).resolves.toBe(true);
+
+      expect(mockStorage.encryptAndStore).toHaveBeenCalledWith('accounts', expect.any(Array));
+      // Never the plaintext path, even now that a key exists.
+      expect(mockStorage.setLocal).not.toHaveBeenCalled();
+    });
+
+    it('kilitliyken kalıcı yazma denenmez', async () => {
+      manager.CreateAccount();
+      await expect(manager.persistToEncryptedStorage()).resolves.toBe(false);
+      expect(mockStorage.encryptAndStore).not.toHaveBeenCalled();
     });
   });
 

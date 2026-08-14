@@ -149,3 +149,111 @@ describe('StorageManager', () => {
     });
   });
 });
+
+/**
+ * Session restore — the gate that decides whether a reopened popup needs the password.
+ *
+ * This is the only thing protecting a wallet whose popup was closed: the in-page auto-lock
+ * timer dies with the page, so on reopen the age of `arfhe_last_active` is the whole
+ * decision. It defeated itself twice — first WalletProvider stamped the timestamp on
+ * mount before Auth read it, then a mouse move over the freshly opened popup did the same.
+ * The value is now frozen when the module loads, so these tests reload the module after
+ * planting a timestamp, which is exactly what a real popup open does.
+ */
+describe('StorageManager — session restore', () => {
+  const PASSWORD = 'correct horse battery staple';
+  const FIVE_MINUTES = 5 * 60 * 1000;
+
+  /**
+   * Simulate opening the popup: plant the last-activity time, reload the module so it is
+   * captured at import, and return a fresh instance with no key in memory.
+   */
+  const reopenWith = async (lastActiveAgoMs: number | null) => {
+    if (lastActiveAgoMs === null) localStorage.removeItem('arfhe_last_active');
+    else localStorage.setItem('arfhe_last_active', String(Date.now() - lastActiveAgoMs));
+
+    vi.resetModules();
+    const { default: Reloaded } = await import('../StorageManager');
+    return new Reloaded();
+  };
+
+  /** Establish a real encrypted wallet and a stored session key. */
+  const createWallet = async () => {
+    vi.resetModules();
+    const { default: Fresh } = await import('../StorageManager');
+    const sm = new Fresh();
+    await sm.initEncryption(PASSWORD);
+    return sm;
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  it('yakın zamanda aktifse oturumu geri yükler', async () => {
+    await createWallet();
+    const reopened = await reopenWith(30_000);
+
+    await expect(reopened.restoreSession(FIVE_MINUTES)).resolves.toBe(true);
+    expect(reopened.isUnlocked()).toBe(true);
+  });
+
+  it('süre dolduysa oturumu geri yüklemez ve şifre ister', async () => {
+    // The reported bug: wallet left for hours, reopened without a password.
+    await createWallet();
+    const reopened = await reopenWith(3 * 60 * 60 * 1000);
+
+    await expect(reopened.restoreSession(FIVE_MINUTES)).resolves.toBe(false);
+    expect(reopened.isUnlocked()).toBe(false);
+  });
+
+  it('açılıştan sonraki aktivite damgası kararı etkilemez', async () => {
+    // The second regression: a mouse move over the opening popup refreshed the stamp
+    // before the check ran. The frozen value must ignore anything written after load.
+    await createWallet();
+    const reopened = await reopenWith(20 * 60 * 1000);
+
+    localStorage.setItem('arfhe_last_active', String(Date.now()));
+
+    await expect(reopened.restoreSession(FIVE_MINUTES)).resolves.toBe(false);
+    expect(reopened.isUnlocked()).toBe(false);
+  });
+
+  it('süresi dolan oturumun anahtarını da siler', async () => {
+    await createWallet();
+    const reopened = await reopenWith(3 * 60 * 60 * 1000);
+    await reopened.restoreSession(FIVE_MINUTES);
+
+    // A later open must not succeed either — the key is gone, not merely refused.
+    const again = await reopenWith(1_000);
+    await expect(again.restoreSession(FIVE_MINUTES)).resolves.toBe(false);
+  });
+
+  it('sınırın hemen dışındaki oturum reddedilir', async () => {
+    await createWallet();
+    const reopened = await reopenWith(FIVE_MINUTES + 5_000);
+    await expect(reopened.restoreSession(FIVE_MINUTES)).resolves.toBe(false);
+  });
+
+  it('hiç aktivite damgası yoksa geri yüklemez', async () => {
+    await createWallet();
+    const reopened = await reopenWith(null);
+    await expect(reopened.restoreSession(FIVE_MINUTES)).resolves.toBe(false);
+  });
+
+  it('kilitleme oturum anahtarını temizler', async () => {
+    const sm = await createWallet();
+    sm.lock();
+
+    const reopened = await reopenWith(1_000);
+    await expect(reopened.restoreSession(FIVE_MINUTES)).resolves.toBe(false);
+  });
+
+  it('"asla kilitleme" seçiliyse yaş kontrolü uygulanmaz', async () => {
+    // 0 is the explicit "never" setting; the browser session still ends it.
+    await createWallet();
+    const reopened = await reopenWith(24 * 60 * 60 * 1000);
+    await expect(reopened.restoreSession(0)).resolves.toBe(true);
+  });
+});

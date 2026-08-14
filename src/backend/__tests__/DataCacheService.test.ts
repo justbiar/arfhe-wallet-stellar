@@ -1,140 +1,189 @@
-/// <reference types="vitest/globals" />
-import DataCacheService from '../DataCacheService';
-
 /**
- * DataCacheService testleri
+ * Tests for the balance cache.
  *
- * In-memory TTL cache test edilir.
- * Dış bağımlılık yoktur, pure in-memory.
+ * The contract this guards is a UX one that kept regressing: whatever was fetched last is
+ * served immediately, however old, and a refresh replaces it without ever handing back
+ * nothing. A cache that returns null once a timer lapses is what put a spinner on every
+ * navigation and an empty token list on every reopen.
+ *
+ * The persistence side matters for a different reason: the snapshot holds what an address
+ * owns — including decrypted confidential balances on FHE networks — so it must go to
+ * encrypted storage and must leave memory when the wallet locks.
  */
-describe('DataCacheService', () => {
+
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import DataCacheService from "../DataCacheService.js";
+import type StorageManager from "../StorageManager.js";
+
+const ALICE = "0xAbCdEf0000000000000000000000000000000001";
+const SEPOLIA = 11155111;
+const BASE = 84532;
+
+function snapshot(totalUsd = 100) {
+  return {
+    balances: {
+      ETH: { contractAddress: "ETH", tokenBalance: "1.5", isNative: true },
+      "0xtoken": { contractAddress: "0xtoken", tokenBalance: "42", isNative: false },
+    } as never,
+    tokens: [{ name: "Ether", symbol: "ETH", logoSrc: "", contractAddress: "ETH", decimals: 18 }],
+    prices: { ETH: 2000 },
+    totalUsd,
+  };
+}
+
+/** Storage stand-in that records what was written and can pretend to be locked. */
+function makeStorage(unlocked = true) {
+  const vault = new Map<string, unknown>();
+  return {
+    isUnlocked: () => unlocked,
+    encryptAndStore: vi.fn(async (key: string, value: unknown) => { vault.set(key, value); return true; }),
+    decryptAndRetrieve: vi.fn(async (key: string) => vault.get(key) ?? null),
+    _vault: vault,
+    _setUnlocked: (v: boolean) => { unlocked = v; },
+  };
+}
+
+describe("DataCacheService", () => {
   let cache: DataCacheService;
 
-  const sampleData = {
-    balances: {
-      ETH: { contractAddress: 'ETH', tokenBalance: '1.5', isNative: true }
-    },
-    tokens: [{ name: 'USD Coin', symbol: 'USDC', logoSrc: '', contractAddress: '0x1', decimals: 6 }],
-    prices: { ETH: 3500, USDC: 1.0 },
-    totalUsd: 5350,
-  };
-
   beforeEach(() => {
+    vi.useRealTimers();
     cache = new DataCacheService();
   });
 
-  // ─── set / get ─────────────────────────────────────────────────
-  describe('set / get', () => {
-    it('veri kaydeder ve geri alır', () => {
-      cache.set('0xUser', 1, sampleData);
-      const result = cache.get('0xUser', 1);
-      expect(result).not.toBeNull();
-      expect(result!.totalUsd).toBe(5350);
-      expect(result!.balances.ETH.tokenBalance).toBe('1.5');
-    });
-
-    it('adres case-insensitive çalışır', () => {
-      cache.set('0xABCD', 1, sampleData);
-      const result = cache.get('0xabcd', 1);
-      expect(result).not.toBeNull();
-    });
-
-    it('farklı network farklı cache döner', () => {
-      cache.set('0xUser', 1, sampleData);
-      const result = cache.get('0xUser', 42161);
-      expect(result).toBeNull();
-    });
-
-    it('mevcut olmayan veri null döner', () => {
-      expect(cache.get('0xNonExistent', 1)).toBeNull();
-    });
+  it("yazılan anlık görüntüyü hemen geri verir", () => {
+    cache.set(ALICE, SEPOLIA, snapshot());
+    expect(cache.getAllowStale(ALICE, SEPOLIA)?.data.totalUsd).toBe(100);
   });
 
-  // ─── TTL Expiry ────────────────────────────────────────────────
-  describe('TTL Expiry', () => {
-    it('süresi dolmuş cache null döner', () => {
-      cache.set('0xUser', 1, sampleData);
+  it("süresi geçse bile veriyi verir, bayat olarak işaretler", () => {
+    vi.useFakeTimers();
+    cache.set(ALICE, SEPOLIA, snapshot());
 
-      // balanceTimestamp'ı geriye çek (60s+ önce)
-      const key = '0xuser:1';
-      // Internal state'e erişmek için hack — private alanı test etmek zor
-      // Bu yüzden getAge kullanarak dolaylı test yapıyoruz
-      const age = cache.getAge('0xUser', 1);
-      expect(age).not.toBeNull();
-      expect(age!).toBeLessThan(1000); // Az önce eklendi, < 1s olmalı
-    });
+    // The whole point: an expired entry is still rendered, never withheld.
+    vi.advanceTimersByTime(120_000);
+
+    const entry = cache.getAllowStale(ALICE, SEPOLIA);
+    expect(entry?.data.totalUsd).toBe(100);
+    expect(entry?.isStale).toBe(true);
+    expect(cache.needsRefresh(ALICE, SEPOLIA)).toBe(true);
+    vi.useRealTimers();
   });
 
-  // ─── arePricesFresh ────────────────────────────────────────────
-  describe('arePricesFresh', () => {
-    it('yeni eklenen veri için true döner', () => {
-      cache.set('0xUser', 1, sampleData);
-      expect(cache.arePricesFresh('0xUser', 1)).toBe(true);
-    });
-
-    it('mevcut olmayan veri için false döner', () => {
-      expect(cache.arePricesFresh('0xNonExistent', 1)).toBe(false);
-    });
+  it("taze veride yenileme istemez", () => {
+    cache.set(ALICE, SEPOLIA, snapshot());
+    expect(cache.needsRefresh(ALICE, SEPOLIA)).toBe(false);
+    expect(cache.getAllowStale(ALICE, SEPOLIA)?.isStale).toBe(false);
   });
 
-  // ─── invalidate ────────────────────────────────────────────────
-  describe('invalidate', () => {
-    it('belirli adres ve network cache\'ini siler', () => {
-      cache.set('0xUser', 1, sampleData);
-      cache.set('0xUser', 42161, sampleData);
-
-      cache.invalidate('0xUser', 1);
-
-      expect(cache.get('0xUser', 1)).toBeNull();
-      expect(cache.get('0xUser', 42161)).not.toBeNull();
-    });
-
-    it('parametresiz tüm cache\'i temizler', () => {
-      cache.set('0xUser1', 1, sampleData);
-      cache.set('0xUser2', 42161, sampleData);
-
-      cache.invalidate();
-
-      expect(cache.get('0xUser1', 1)).toBeNull();
-      expect(cache.get('0xUser2', 42161)).toBeNull();
-    });
+  it("hiç veri yoksa yenileme ister", () => {
+    expect(cache.needsRefresh(ALICE, SEPOLIA)).toBe(true);
+    expect(cache.getAllowStale(ALICE, SEPOLIA)).toBeNull();
   });
 
-  // ─── getAge ────────────────────────────────────────────────────
-  describe('getAge', () => {
-    it('yeni eklenen veri için düşük yaş döner', () => {
-      cache.set('0xUser', 1, sampleData);
-      const age = cache.getAge('0xUser', 1);
-      expect(age).not.toBeNull();
-      expect(age!).toBeLessThan(1000); // < 1 saniye
-    });
+  it("ağlar birbirinin verisini görmez", () => {
+    cache.set(ALICE, SEPOLIA, snapshot(100));
+    cache.set(ALICE, BASE, snapshot(500));
 
-    it('mevcut olmayan veri için null döner', () => {
-      expect(cache.getAge('0xNonExistent', 1)).toBeNull();
-    });
-
-    it('aynı key güncellenir', () => {
-      cache.set('0xUser', 1, sampleData);
-      const age1 = cache.getAge('0xUser', 1);
-
-      // Tekrar set
-      cache.set('0xUser', 1, { ...sampleData, totalUsd: 9999 });
-      const age2 = cache.getAge('0xUser', 1);
-
-      // İkisi de çok küçük olmalı (az önce eklendi)
-      expect(age1).not.toBeNull();
-      expect(age2).not.toBeNull();
-    });
+    expect(cache.getAllowStale(ALICE, SEPOLIA)?.data.totalUsd).toBe(100);
+    expect(cache.getAllowStale(ALICE, BASE)?.data.totalUsd).toBe(500);
   });
 
-  // ─── Overwrite Behavior ────────────────────────────────────────
-  describe('Overwrite', () => {
-    it('aynı key tekrar set edilir', () => {
-      cache.set('0xUser', 1, sampleData);
-      cache.set('0xUser', 1, { ...sampleData, totalUsd: 9999 });
+  it("panellere hazır bakiye listesi verir", () => {
+    cache.set(ALICE, SEPOLIA, snapshot());
+    const rows = cache.getTokenBalances(ALICE, SEPOLIA);
+    expect(rows).toHaveLength(2);
+    expect(cache.getTokenBalances(ALICE, BASE)).toBeNull();
+  });
 
-      const result = cache.get('0xUser', 1);
-      expect(result!.totalUsd).toBe(9999);
-    });
+  it("yenileme eskisini değiştirir", () => {
+    cache.set(ALICE, SEPOLIA, snapshot(100));
+    cache.set(ALICE, SEPOLIA, snapshot(250));
+    expect(cache.getAllowStale(ALICE, SEPOLIA)?.data.totalUsd).toBe(250);
+  });
+
+  // ─── Persistence ────────────────────────────────────────────────
+
+  it("anlık görüntüyü şifreli depoya yazar", async () => {
+    const storage = makeStorage();
+    cache.attachStorage(storage as unknown as StorageManager);
+
+    cache.set(ALICE, SEPOLIA, snapshot());
+    // The write is debounced so a burst of updates costs one encrypt.
+    await new Promise((r) => setTimeout(r, 600));
+
+    expect(storage.encryptAndStore).toHaveBeenCalledWith("portfolio_cache", expect.any(Object));
+  });
+
+  it("kilit açılınca diskteki veriyi geri yükler", async () => {
+    const storage = makeStorage();
+
+    const first = new DataCacheService();
+    first.attachStorage(storage as unknown as StorageManager);
+    first.set(ALICE, SEPOLIA, snapshot(777));
+    await new Promise((r) => setTimeout(r, 600));
+
+    // A fresh instance stands in for reopening the popup.
+    const reopened = new DataCacheService();
+    reopened.attachStorage(storage as unknown as StorageManager);
+    expect(reopened.getAllowStale(ALICE, SEPOLIA)).toBeNull();
+
+    await reopened.hydrate();
+    expect(reopened.getAllowStale(ALICE, SEPOLIA)?.data.totalUsd).toBe(777);
+  });
+
+  it("kilitliyken hiçbir şey yazmaz", async () => {
+    const storage = makeStorage(false);
+    cache.attachStorage(storage as unknown as StorageManager);
+
+    cache.set(ALICE, SEPOLIA, snapshot());
+    await new Promise((r) => setTimeout(r, 600));
+
+    expect(storage.encryptAndStore).not.toHaveBeenCalled();
+  });
+
+  it("clearMemory bellekten siler ama diski korur", async () => {
+    const storage = makeStorage();
+    cache.attachStorage(storage as unknown as StorageManager);
+    cache.set(ALICE, SEPOLIA, snapshot(321));
+    await new Promise((r) => setTimeout(r, 600));
+
+    cache.clearMemory();
+    expect(cache.getAllowStale(ALICE, SEPOLIA)).toBeNull();
+
+    // Locking must not cost the user the spinner-free unlock.
+    await cache.hydrate();
+    expect(cache.getAllowStale(ALICE, SEPOLIA)?.data.totalUsd).toBe(321);
+  });
+
+  it("hydrate canlı veriyi eski diskle ezmez", async () => {
+    const storage = makeStorage();
+    cache.attachStorage(storage as unknown as StorageManager);
+    cache.set(ALICE, SEPOLIA, snapshot(100));
+    await new Promise((r) => setTimeout(r, 600));
+
+    cache.set(ALICE, SEPOLIA, snapshot(999));
+    await cache.hydrate();
+
+    expect(cache.getAllowStale(ALICE, SEPOLIA)?.data.totalUsd).toBe(999);
+  });
+
+  it("bozuk disk verisi çökertmez", async () => {
+    const storage = makeStorage();
+    storage._vault.set("portfolio_cache", "not an object");
+    cache.attachStorage(storage as unknown as StorageManager);
+
+    await expect(cache.hydrate()).resolves.toBeUndefined();
+    expect(cache.getAllowStale(ALICE, SEPOLIA)).toBeNull();
+  });
+
+  it("invalidate yalnızca hedef ağı düşürür", () => {
+    cache.set(ALICE, SEPOLIA, snapshot(100));
+    cache.set(ALICE, BASE, snapshot(500));
+
+    cache.invalidate(ALICE, SEPOLIA);
+
+    expect(cache.getAllowStale(ALICE, SEPOLIA)).toBeNull();
+    expect(cache.getAllowStale(ALICE, BASE)?.data.totalUsd).toBe(500);
   });
 });

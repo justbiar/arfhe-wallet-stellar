@@ -26,9 +26,11 @@ export default function ArfBottomMenu() {
         const tab = detail.tab;
         if (tab <= 2) setValue(tab);
       }
-      // Prefill send token if provided
+      // Prefill send token if provided, along with whether it is a confidential one.
       if (detail?.token) {
-        window.dispatchEvent(new CustomEvent('arf-send-prefill', { detail: { token: detail.token } }));
+        window.dispatchEvent(new CustomEvent('arf-send-prefill', {
+          detail: { token: detail.token, confidential: !!detail.confidential },
+        }));
       }
     };
     window.addEventListener('arf-menu-set-tab', handleSetTab);

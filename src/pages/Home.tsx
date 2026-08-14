@@ -55,7 +55,7 @@ import { useToast } from "../components/ToastProvider.js";
 import { classifyError, NetworkError, NetworkErrorType, getErrorFallbackMessage } from "../backend/NetworkErrorHandler.js";
 import { getCoinGeckoBase } from "../backend/Network.js";
 import { usePersistedState } from "../hooks/usePersistedState.js";
-import { getHiddenTokenAddresses } from "../components/panels/shared.js";
+import { getHiddenTokenAddresses, getNftMarketplaceUrl } from "../components/panels/shared.js";
 
 const KNOWN_LOGOS: Record<string, string> = {
   "ETH": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png",
@@ -171,13 +171,10 @@ function Home() {
       return cached.map(t => ({ ...t, isShielded: false, isSpam: false, isSuspicious: false, isHidden: false, spamScore: 0 }));
     } catch { return []; }
   });
-  const [nfts, setNfts] = useState<NFTDisplayItem[]>(() => {
-    try {
-      const initialNetId = wallet_context?.networkProvider?.getActiveNetworkId() ?? NetworkId.Ethereum_Mainnet;
-      const cached = wallet_context?.nftCache?.getAllNFTs(initialNetId) ?? [];
-      return cached.map(n => ({ ...n, balance: 0 }));
-    } catch { return []; }
-  });
+  // NFTs come from the indexer, which is the only thing that knows which token ids this
+  // address holds. The metadata cache stores contracts without ids, so it cannot seed a
+  // renderable card — starting empty is honest and the fetch below fills it.
+  const [nfts, setNfts] = useState<NFTDisplayItem[]>([]);
   const [totalBalanceUsd, setTotalBalanceUsd] = useState(0.00);
   const [prices, setPrices] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(false);
@@ -227,13 +224,20 @@ function Home() {
     const address = active_context.activeAccount?.GetAddress();
     if (!address) return;
 
-    // ── Cache check: skip API calls if data is fresh ──
+    // ── Serve the cache first, then decide whether to refresh ──
+    //
+    // Stale-while-revalidate. Whatever was last fetched is painted immediately, however
+    // old; only then does the network get involved. Waiting for the fetch before showing
+    // anything is what emptied the token list and put a spinner in its place on every
+    // navigation, every network switch and every reopen.
     const dataCache = wallet_context.dataCacheService;
-    if (!forceRefresh && dataCache) {
-      const cached = dataCache.get(address, activeNetworkId);
-      if (cached) {
-        setBalances(cached.balances);
-        setTokens(cached.tokens.map(t => ({
+    let servedFromCache = false;
+
+    if (dataCache) {
+      const entry = dataCache.getAllowStale(address, activeNetworkId);
+      if (entry) {
+        setBalances(entry.data.balances);
+        setTokens(entry.data.tokens.map(t => ({
           name: t.name,
           symbol: t.symbol,
           logoSrc: t.logoSrc,
@@ -245,13 +249,18 @@ function Home() {
           isHidden: false,
           spamScore: 0,
         })));
-        setPrices(cached.prices);
-        setTotalBalanceUsd(cached.totalUsd);
-        return;
+        setPrices(entry.data.prices);
+        setTotalBalanceUsd(entry.data.totalUsd);
+        servedFromCache = true;
+
+        // Fresh and nobody asked for a refresh — nothing left to do.
+        if (!forceRefresh && !entry.isStale) return;
       }
     }
 
-    setLoading(true);
+    // The skeleton is only for a genuinely empty screen. With figures already on it, the
+    // refresh happens quietly underneath and the numbers change when they change.
+    if (!servedFromCache) setLoading(true);
 
     try {
 
@@ -597,20 +606,24 @@ function Home() {
 
       setTokens(displayTokens);
 
-      // Fetch NFTs balances manually from the cache list
+      // ── NFTs ──
+      // Ask the indexer what this address actually owns. The previous approach walked a
+      // list of manually-imported contracts and called `balanceOf`, which yields a count
+      // but no token id — so every card guessed at token #1, showed a broken image and
+      // had nothing to link to.
       try {
-        const cachedNfts = wallet_context.nftCache.getAllNFTs(activeNetworkId) || [];
-        const nftWithBalances = await Promise.all(
-          cachedNfts.map(async (nft) => {
-            const balStr = await net.getNftBalance(nft.contractAddress, address);
-            return {
-              ...nft,
-              balance: parseInt(balStr) || 0
-            };
-          })
-        );
-        setNfts(nftWithBalances);
-      } catch (err) {
+        const owned = await net.getOwnedNfts(address);
+        setNfts(owned.map((nft) => ({
+          contractAddress: nft.contractAddress,
+          tokenId: nft.tokenId,
+          name: nft.name,
+          symbol: nft.symbol,
+          logoSrc: nft.imageUrl,
+          imageUrl: nft.imageUrl,
+          balance: parseInt(nft.balance, 10) || 1,
+        })));
+      } catch {
+        // No NFT indexing on this network; the gallery stays empty rather than guessing.
       }
 
       // ── Persist to cache for next mount ──
@@ -1110,15 +1123,17 @@ function Home() {
                   pb: 2,
                 }}
               >
-                {nfts.map((nft, idx: number) => (
+                {nfts.map((nft) => (
                   <NftGalleryCard
-                    key={`${nft.contractAddress}-${idx}`}
+                    key={`${nft.contractAddress}-${nft.tokenId}`}
                     contractAddress={nft.contractAddress}
+                    tokenId={nft.tokenId}
                     symbol={nft.symbol}
                     name={nft.name}
+                    imageUrl={nft.imageUrl}
                     balance={nft.balance ?? 1}
                     isShielded={false}
-                    rpcUrl={wallet_context?.networkProvider?.getActiveNetwork()?.rpc_url}
+                    marketplaceUrl={getNftMarketplaceUrl(activeNetworkId, nft.contractAddress, nft.tokenId)}
                   />
                 ))}
               </Box>

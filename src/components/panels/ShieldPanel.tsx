@@ -142,7 +142,10 @@ export default function ShieldPanel() {
 
     // ERC-20s are a best-effort addition on top.
     try {
-      const balances = await network.getTokenBalances(context?.tokenCache, address);
+      // Reuse what Home already fetched. Going to the network here is why this panel
+      // sat on a spinner every time it opened, re-fetching a list the wallet had.
+      const balances = context?.dataCacheService?.getTokenBalances(address, network.network_id)
+        ?? await network.getTokenBalances(context?.tokenCache, address);
       const held = balances.filter((b) => !b.isNative && parseFloat(b.tokenBalance) > 0);
 
       // A wrapper is not itself shieldable — offering "shield your aeUSDC" is nonsense,

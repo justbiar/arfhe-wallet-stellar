@@ -130,10 +130,20 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
-    const resetTimer = () => {
+    /**
+     * Arm the in-page lock timer. Deliberately does NOT stamp activity.
+     *
+     * `arfhe_last_active` is how a *closed* popup is judged on reopen: Auth compares it
+     * against the auto-lock timeout and refuses to restore a stale session. This provider
+     * wraps the router, so it mounts before Auth runs that check — stamping here overwrote
+     * the timestamp with "now" every single time, and the staleness test could never fail.
+     * A wallet left for hours reopened unlocked.
+     *
+     * So the stamp belongs to real user activity and to unlock, nothing else.
+     */
+    const scheduleLock = () => {
       clearTimeout(timeoutId);
       const currentTimeout = getTimeout();
-      localStorage.setItem('arfhe_last_active', Date.now().toString());
 
       if (currentTimeout <= 0) return; // 0 or negative means never lock
 
@@ -143,7 +153,13 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
-    const handleStorageUpdate = () => resetTimer();
+    /** The user did something. Refresh the stamp and restart the countdown. */
+    const markActivity = () => {
+      localStorage.setItem('arfhe_last_active', Date.now().toString());
+      scheduleLock();
+    };
+
+    const handleStorageUpdate = () => scheduleLock();
 
     // ── Tab Visibility Change ──
     // Lock wallet when user switches away from the tab
@@ -176,30 +192,51 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       } else {
         // Tab visible again — cancel pending lock
         clearTimeout(visibilityTimeoutId);
-        resetTimer(); // Reset normal activity timer
+        markActivity(); // Coming back to the wallet is the user being present
       }
     };
 
     // Listeners for user activity
-    window.addEventListener('mousemove', resetTimer);
-    window.addEventListener('keydown', resetTimer);
-    window.addEventListener('click', resetTimer);
-    window.addEventListener('scroll', resetTimer);
-    window.addEventListener('touchstart', resetTimer);
+    window.addEventListener('mousemove', markActivity);
+    window.addEventListener('keydown', markActivity);
+    window.addEventListener('click', markActivity);
+    window.addEventListener('scroll', markActivity);
+    window.addEventListener('touchstart', markActivity);
     window.addEventListener('autolock_updated', handleStorageUpdate);
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // Initial set
-    resetTimer();
+    // Arm the countdown, but do not claim the user was just active — that decision
+    // belongs to the reopen check in Auth, which runs after this.
+    scheduleLock();
+
+    // A second, independent check against the wall clock.
+    //
+    // The timer above is a single `setTimeout`, and it is not trustworthy on its own: this
+    // effect re-runs on every navigation and re-arms it with a full timeout, and Chrome
+    // throttles timers in backgrounded pages. Either can silently postpone the lock
+    // indefinitely. Comparing the stored activity time against the clock cannot drift —
+    // if the wallet has been idle past the limit, it locks on the next tick regardless of
+    // what happened to the timer.
+    const expiryCheck = setInterval(() => {
+      const currentTimeout = getTimeout();
+      if (currentTimeout <= 0) return; // "Never" is an explicit choice
+
+      const raw = localStorage.getItem('arfhe_last_active');
+      const lastActive = raw ? parseInt(raw, 10) : NaN;
+      if (!Number.isFinite(lastActive)) return;
+
+      if (Date.now() - lastActive > currentTimeout) performLock();
+    }, 15_000);
 
     return () => {
       clearTimeout(timeoutId);
       clearTimeout(visibilityTimeoutId);
-      window.removeEventListener('mousemove', resetTimer);
-      window.removeEventListener('keydown', resetTimer);
-      window.removeEventListener('click', resetTimer);
-      window.removeEventListener('scroll', resetTimer);
-      window.removeEventListener('touchstart', resetTimer);
+      clearInterval(expiryCheck);
+      window.removeEventListener('mousemove', markActivity);
+      window.removeEventListener('keydown', markActivity);
+      window.removeEventListener('click', markActivity);
+      window.removeEventListener('scroll', markActivity);
+      window.removeEventListener('touchstart', markActivity);
       window.removeEventListener('autolock_updated', handleStorageUpdate);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };

@@ -189,3 +189,43 @@ export const ctaButtonSx = {
   },
   transition: 'all 0.2s ease',
 };
+
+/**
+ * Marketplace link for a specific NFT, or "" when the chain has none.
+ *
+ * OpenSea uses a different slug per chain and runs a separate testnet site. Returning ""
+ * rather than a guessed URL keeps the card from offering a link that 404s.
+ */
+export function getNftMarketplaceUrl(
+    networkId: NetworkId | number,
+    contractAddress: string,
+    tokenId: string,
+): string {
+    if (!contractAddress || !tokenId) return "";
+
+    const MAINNET_SLUGS: Record<number, string> = {
+        [NetworkId.Ethereum_Mainnet]: "ethereum",
+        [NetworkId.Arbitrum_One]: "arbitrum",
+        [NetworkId.Base_Mainnet]: "base",
+        [NetworkId.Optimism]: "optimism",
+        [NetworkId.Polygon]: "matic",
+        [NetworkId.Avalanche]: "avalanche",
+        [NetworkId.BNB_Chain]: "bsc",
+    };
+
+    const TESTNET_SLUGS: Record<number, string> = {
+        [NetworkId.Ethereum_Sepolia]: "sepolia",
+        [NetworkId.Arbitrum_Sepolia]: "arbitrum-sepolia",
+        [NetworkId.Base_Sepolia]: "base-sepolia",
+    };
+
+    const id = Number(networkId);
+
+    if (MAINNET_SLUGS[id]) {
+        return `https://opensea.io/assets/${MAINNET_SLUGS[id]}/${contractAddress}/${tokenId}`;
+    }
+    if (TESTNET_SLUGS[id]) {
+        return `https://testnets.opensea.io/assets/${TESTNET_SLUGS[id]}/${contractAddress}/${tokenId}`;
+    }
+    return "";
+}

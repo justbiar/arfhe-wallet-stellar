@@ -1,4 +1,14 @@
 import * as React from 'react';
+
+/**
+ * The extension version, baked in at build time from `extension/manifest.json`.
+ *
+ * Not read from `chrome.runtime.getManifest()`: that reports whatever manifest Chrome has
+ * loaded, so a rebuild that has not been reloaded keeps showing the old number, and the
+ * dev server has no runtime at all. This value belongs to the build itself.
+ */
+declare const __APP_VERSION__: string;
+const APP_VERSION: string = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "dev";
 import { useContext, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Box, Typography, Container, Paper, List, ListItem, ListItemButton, ListItemText, ListItemIcon, Switch, Chip, IconButton, alpha, useTheme, Stack, Divider, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Button, CircularProgress } from '@mui/material';
@@ -99,7 +109,7 @@ export default function Settings() {
                             <ListItemText primary={t('settings.darkMode')} secondary={t('settings.toggleTheme')} />
                             <Switch checked={mode === 'dark'} onChange={toggleColorMode} />
                         </ListItem>
-                        <ListItemButton>
+                        <ListItemButton onClick={() => navigate('/settings/notifications')}>
                             <ListItemIcon><Notifications /></ListItemIcon>
                             <ListItemText primary={t('settings.notifications')} secondary={t('settings.manageAlerts')} />
                         </ListItemButton>
@@ -247,7 +257,7 @@ export default function Settings() {
                 {/* Version info */}
                 <Box sx={{ textAlign: 'center', mt: 2.5, mb: 1.5 }}>
                     <Typography variant="caption" color="text.disabled">
-                        Arfhe Wallet {t('settings.version')} 1.0.0
+                        Arfhe Wallet {t('settings.version')} {APP_VERSION}
                     </Typography>
                 </Box>
             </Container>

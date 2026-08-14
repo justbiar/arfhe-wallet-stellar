@@ -357,12 +357,17 @@ export default function TokenDetail() {
     ? `${contractAddr.slice(0, 6)}...${contractAddr.slice(-4)}`
     : "";
 
-  // Navigate to home and open the bottom menu with the correct tab + token prefilled
+  // Navigate to home and open the bottom menu with the correct tab + token prefilled.
+  //
+  // A confidential token can only be sent confidentially — its balance lives in the
+  // encrypted ledger, and the public send path has nothing to move. Carrying that fact
+  // along means the panel opens in the right mode instead of preselecting a token the
+  // public form cannot spend.
   const openMenuWithTab = (tab: number) => {
     navigate("/home");
     setTimeout(() => {
       window.dispatchEvent(new CustomEvent('open-arf-menu', {
-        detail: { tab, token: contractAddr || "ETH" }
+        detail: { tab, token: contractAddr || "ETH", confidential: isShielded }
       }));
     }, 150);
   };

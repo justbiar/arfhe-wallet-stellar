@@ -13,6 +13,7 @@
 import { AGENT_TOOLS } from "./agentTools.js";
 import { executeToolCall, type ToolExecutionContext } from "./AgentToolRunner.js";
 import { findLeakedInternalReference } from "./internalLeakGuard.js";
+import { PROPOSAL_TOOLS } from "./AgentPolicyEngine.js";
 
 // ─── Wire types (OpenAI-compatible chat-completion shape) ──────────
 
@@ -86,13 +87,27 @@ export function buildSystemPrompt(): string {
     "Senin adın Arfio. ArfheWallet'ın cüzdan içi AI asistanısın. Kendini tanıtırken veya " +
       "birinci ağızdan konuşurken Arfio ismini kullan. ArfheWallet, FHE (Fully Homomorphic " +
       "Encryption) tabanlı, gizli (confidential) bakiye ve transfer destekleyen bir kripto cüzdanıdır.",
+    "DİL: Kullanıcı hangi dilde yazdıysa SEN DE HER ZAMAN o dilde yanıtla — tool-call " +
+      "sonrası otomatik devam eden turlarda bile bu kuraldan sapma.",
     "",
     "YETKİ SINIRLARIN:",
-    "- Hiçbir işlemi (transaction) imzalama, gönderme veya onaylama yetkin YOKTUR.",
-    "- Yalnızca salt-okunur (read-only) araçları çağırabilirsin: get_balance, get_shielded_balance, " +
-      "get_shielded_portfolio, get_pending_claims. Kullanıcı adına fon hareket ettiren hiçbir işlem yapamazsın.",
-    "- Kullanıcı bir transfer/shield/unshield/onay işlemi yapmak isterse, bunu senin " +
-      "gerçekleştiremeyeceğini belirt ve ilgili panel/ekranı kullanmasını öner.",
+    "- Hiçbir işlemi (transaction) SEN imzalayamaz, zincire gönderemez veya onaylayamazsın " +
+      "— bunu yapan tek şey, kullanıcının kartta Approve'a bastığı andaki koddur, sen değilsin.",
+    "- propose_send, propose_shield, propose_unshield ile başlayan araçları çağırabilirsin " +
+      "ama bunlar HİÇBİR ZAMAN gerçek bir işlem yapmaz — yalnızca kullanıcıya onay için bir " +
+      "önizleme (kart) sunar. Bu araçlardan biri requiresConfirmation: true içeren bir sonuç " +
+      "döndürdüğünde SENİN görevin orada BİTMİŞTİR:",
+    "    1) Varsa önerdiğin işlemi tek cümlelik doğal bir özetle söyle (örn. \"Tamam, 0.01 " +
+      "ETH gönderme işlemini hazırladım, onayını bekliyor.\").",
+    "    2) DUR. Başka hiçbir şey söyleme, başka hiçbir araç çağırma.",
+    "    3) Kullanıcı HENÜZ onaylamadı. Asla \"işlem gönderildi\", \"tamamlandı\", \"onaylandı\" " +
+      "gibi bir şey söyleme ve ASLA bir işlem hash'i (tx hash) uydurma — elinde gerçek bir " +
+      "hash yoksa, olmayan bir hash yazman her zaman yanlıştır.",
+    "    4) Gerçek sonuç (başarılı mı başarısız mı, gerçek hash ne) kullanıcı karttaki " +
+      "Approve/Reject'e bastıktan SONRA, sana ayrı bir sistem mesajıyla bildirilecek — o " +
+      "mesaj gelmeden bir sonuç olduğunu varsayma.",
+    "- Kullanıcı bir transfer/shield/unshield işlemi yapmak isterse ve ilgili propose_* aracı " +
+      "mevcut değilse veya başarısız olursa, ilgili panel/ekranı kullanmasını öner.",
     "- Bir aracın sonucunu almadan bakiye, adres veya miktar UYDURMA. Emin değilsen ilgili " +
       "aracı çağır ya da bilmediğini söyle.",
     "",
@@ -133,6 +148,9 @@ export function buildSystemPrompt(): string {
     "  İyi: \"Bekleyen bir talebiniz görünmüyor.\"",
     "  Kötü: \"propose_shield fonksiyonu çalıştırıldı, onayınızı bekliyorum.\"",
     "  İyi: \"Shield işlemini hazırladım, onayınızı bekliyorum.\"",
+    "",
+    "SON HATIRLATMA: Yanıtını kullanıcının kendi dilinde yaz (yukarıdaki DİL kuralı). Bunu " +
+      "unutma, özellikle bir araç sonucunu değerlendirdiğin otomatik devam turlarında.",
   ].join("\n");
 }
 
@@ -344,6 +362,24 @@ async function runOneToolCall(call: AgentToolCall, context: ToolExecutionContext
   };
 }
 
+/**
+ * True when `toolMessage` is a PROPOSAL_TOOLS call that produced a pending confirmation
+ * card (`{ result: { requiresConfirmation: true, ... } }` — see AgentToolRunner.ts's
+ * ProposalPreview). The tool loop must stop dead here: continuing would hand the model a
+ * "here's a preview" result with nothing telling it the action hasn't happened yet, which
+ * is exactly how it ends up hallucinating a completed transfer and a fabricated tx hash
+ * (see buildSystemPrompt's YETKİ SINIRLARIN — this is the code-side half of that fix).
+ */
+function isAwaitingConfirmation(toolName: string, toolMessage: ChatMessage): boolean {
+  if (!(PROPOSAL_TOOLS as readonly string[]).includes(toolName)) return false;
+  try {
+    const parsed = JSON.parse(toolMessage.content) as { result?: { requiresConfirmation?: unknown } };
+    return parsed.result?.requiresConfirmation === true;
+  } catch {
+    return false;
+  }
+}
+
 // ─── Entry point ─────────────────────────────────────────────────────
 
 /**
@@ -390,6 +426,17 @@ export async function runAgentTurn(
       const toolMessage = await runOneToolCall(call, context);
       workingMessages.push(toolMessage);
       newMessages.push(toolMessage);
+
+      // A confirmation card is now pending — stop before another proxy round trip can hand
+      // the model this "here's a preview" result and let it hallucinate a completed
+      // transfer. Returned directly (not via finishTurn) because finishTurn's dedup check
+      // looks at the LAST message in newMessages, which by now is the tool message, not the
+      // assistant one — it would wrongly re-append assistantMessage.content as a second,
+      // duplicate bubble. The assistant's own summary (if any) is already in newMessages
+      // from the push above; nothing more belongs after it until the card resolves.
+      if (isAwaitingConfirmation(call.function.name, toolMessage)) {
+        return { reply: assistantMessage.content, updatedHistory: [...conversationHistory, ...newMessages] };
+      }
     }
   }
 

@@ -79,6 +79,10 @@
     "confirmationCardAccountChangedCancelled": "Aktif hesap değişti, bu yüzden bu öneri iptal edildi — yeni hesapla hâlâ yapmak istiyorsanız tekrar isteyin.",
     "confirmationCardOutcomeConfirmed": "Kullanıcı önerilen işlemi ({{toolName}}) onayladı ve işlem gönderildi (tx: {{txHash}}).",
     "confirmationCardOutcomeFailed": "Kullanıcı önerilen işlemi ({{toolName}}) onayladı, ancak başarısız oldu: {{message}}",
+    "txResultPendingTitle": "İşlem gönderildi, onay bekleniyor...",
+    "txResultFailedTitle": "İşlem başarısız oldu",
+    "txResultRetrySuggestion": "Tekrar deneyebilirsiniz.",
+    "txResultNewBalance": "Yeni bakiye: {{amount}} {{symbol}}",
     "toastAccountSwitched": "Hesap değişti: {{account}}",
     "systemNoteAccountSwitched": "— {{account}} hesabına geçildi —"
   },

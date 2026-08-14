@@ -263,6 +263,47 @@ describe('ConfirmationCard', () => {
       const call = onResolved.mock.calls[0][0] as ConfirmationOutcome;
       expect(call.status).toBe('failed');
       expect(mockNetwork.waitForTransaction).not.toHaveBeenCalled();
+      expect(screen.getByText('Transaction failed')).toBeInTheDocument();
+      expect(screen.getByText(call.status === 'failed' ? call.message : '')).toBeInTheDocument();
+      expect(screen.getByText(/you can try again/i)).toBeInTheDocument();
+    });
+
+    // ─── TransactionResultCard entegrasyonu: gerçek Network.ts verisinden render ────
+    it('broadcast anında (waitForTransaction henüz dönmeden) hash+Explorer linki gerçek veriden gösterilir', async () => {
+      let resolveWait!: () => void;
+      mockNetwork.waitForTransaction.mockReturnValue(new Promise<void>((resolve) => { resolveWait = resolve; }));
+      // Gerçek Network.sendTransaction, işlem zincire yayınlanır yayınlanmaz (henüz teyit
+      // edilmeden) onBroadcast callback'ini çağırır — mock bunu taklit etmeli, aksi halde bu
+      // test sadece kendi varsayımını test eder.
+      mockNetwork.sendTransaction.mockImplementation(
+        async (_account: unknown, _params: unknown, onBroadcast: (hash: string) => void) => {
+          onBroadcast('0xsendhash');
+          return '0xsendhash';
+        }
+      );
+      renderCard(makePreview());
+
+      fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+      // sendTransaction'ın onBroadcast callback'i tetiklenince (waitForTransaction hâlâ
+      // bekliyorken) hash ve Explorer linki görünmeli — model hiç devrede değil.
+      const link = await screen.findByRole('link', { name: /view on explorer/i });
+      expect(link).toHaveAttribute('href', expect.stringContaining('0xsendhash'));
+      expect(screen.queryByText('Confirmed')).not.toBeInTheDocument();
+
+      resolveWait();
+      expect(await screen.findByText('Confirmed')).toBeInTheDocument();
+    });
+
+    it('onay sonrası yeni bakiye gerçek getBalance çağrısından render edilir', async () => {
+      renderCard(makePreview());
+      fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+      await screen.findByText('Confirmed');
+
+      // mockNetwork.getBalance 1 ETH döndürüyor (beforeBalance ile aynı mock) — bu satırın
+      // component state'inden (loadNewBalance → network.getBalance) geldiğini doğrular.
+      expect(await screen.findByText(/new balance/i)).toHaveTextContent('New balance: 1.0 ETH');
     });
   });
 

@@ -86,8 +86,21 @@ describe('AgentOrchestrator', () => {
 
     it('işlem imzalama yetkisi olmadığını belirtir', () => {
       const prompt = buildSystemPrompt();
-      expect(prompt).toContain('imzalama');
-      expect(prompt).toMatch(/yetki.*YOK/i);
+      expect(prompt).toContain('imzalayamaz');
+    });
+
+    it('propose_* araçlarının gerçek işlem yapmadığını ve requiresConfirmation sonrası durması gerektiğini belirtir', () => {
+      const prompt = buildSystemPrompt();
+      expect(prompt).toContain('propose_send');
+      expect(prompt).toContain('requiresConfirmation');
+      expect(prompt).toMatch(/HİÇBİR ZAMAN gerçek bir işlem yapmaz/);
+      expect(prompt).toMatch(/DUR\./);
+    });
+
+    it('gerçek sonuç gelmeden "işlem gönderildi/tamamlandı" dememesi ve tx hash uydurmaması gerektiğini belirtir', () => {
+      const prompt = buildSystemPrompt();
+      expect(prompt).toMatch(/ASLA.*tx hash.*uydurma|uydurman.*yanlış/i);
+      expect(prompt).toContain('Kullanıcı HENÜZ onaylamadı');
     });
 
     it('unshield işleminin iki aşamalı olduğunu belirtir', () => {
@@ -102,6 +115,16 @@ describe('AgentOrchestrator', () => {
       expect(prompt.toLowerCase()).toContain('shield');
       expect(prompt.toLowerCase()).toContain('confidential transfer');
       expect(prompt).toContain('tutamaç');
+    });
+
+    it('dil kuralını hem başta hem sonda tekrarlar (otomatik devam turlarında sapma riskine karşı)', () => {
+      const prompt = buildSystemPrompt();
+      const lines = prompt.split('\n');
+      const languageLines = lines.filter((l) => /DİL:|SON HATIRLATMA/.test(l));
+      expect(languageLines.length).toBeGreaterThanOrEqual(2);
+      // "başta" — ilk birkaç satır içinde; "sonda" — son birkaç satır içinde.
+      expect(lines.slice(0, 5).some((l) => l.includes('DİL:'))).toBe(true);
+      expect(lines.slice(-3).some((l) => l.includes('SON HATIRLATMA'))).toBe(true);
     });
   });
 
@@ -353,6 +376,105 @@ describe('AgentOrchestrator', () => {
       const [, secondInit] = chatCalls(fetchSpy)[1];
       const toolMessage = JSON.parse(secondInit.body).messages.find((m: ChatMessage) => m.role === 'tool');
       expect(JSON.parse(toolMessage.content)).toEqual({ error: '"tokenSymbol" parametresi zorunludur.' });
+    });
+  });
+
+  // ─── PROPOSAL_TOOLS sonrası döngü kırılması ─────────────────────
+  describe('PROPOSAL_TOOLS onay bekleyen sonuç sonrası döngü kırılması', () => {
+    it('propose_send requiresConfirmation:true dönerse ikinci bir /agent/chat isteği ASLA atılmaz', async () => {
+      const proposalResponse = proxyResponse(
+        200,
+        assistantChoice({
+          content: 'Tamam, 0.01 ETH gönderme işlemini hazırladım.',
+          tool_calls: [
+            {
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'propose_send', arguments: '{"to":"0xabc","amount":"0.01"}' },
+            },
+          ],
+        })
+      );
+      // Kuyrukta yalnızca TEK yanıt var — döngü ikinci bir istek atarsa
+      // stubFetchRouter "unexpected extra /agent/chat call" fırlatır.
+      const fetchSpy = stubFetchRouter([proposalResponse]);
+      vi.mocked(executeToolCall).mockResolvedValueOnce({
+        result: { requiresConfirmation: true, toolName: 'propose_send', originalArgs: {}, simulation: {} },
+      });
+
+      const res = await runAgentTurn('0.01 ETH gönder', [], context);
+
+      expect(chatCalls(fetchSpy)).toHaveLength(1);
+      expect(res.reply).toBe('Tamam, 0.01 ETH gönderme işlemini hazırladım.');
+
+      // updatedHistory: user, assistant(tool_calls + özet), tool(requiresConfirmation) —
+      // ekstra bir assistant "tamamlandı" mesajı ASLA eklenmemeli.
+      expect(res.updatedHistory).toHaveLength(3);
+      expect(res.updatedHistory[1].tool_calls).toBeDefined();
+      expect(res.updatedHistory[2].role).toBe('tool');
+      const toolResult = JSON.parse(res.updatedHistory[2].content);
+      expect(toolResult.result.requiresConfirmation).toBe(true);
+    });
+
+    it('modelin tool_call ile birlikte özeti yoksa (content boş), boş bir final mesaj eklenir, halüsinasyon metni eklenmez', async () => {
+      const proposalResponse = proxyResponse(
+        200,
+        assistantChoice({
+          content: '',
+          tool_calls: [
+            { id: 'call_1', type: 'function', function: { name: 'propose_send', arguments: '{}' } },
+          ],
+        })
+      );
+      const fetchSpy = stubFetchRouter([proposalResponse]);
+      vi.mocked(executeToolCall).mockResolvedValueOnce({
+        result: { requiresConfirmation: true, toolName: 'propose_send', originalArgs: {}, simulation: {} },
+      });
+
+      const res = await runAgentTurn('0.01 ETH gönder', [], context);
+
+      expect(chatCalls(fetchSpy)).toHaveLength(1);
+      expect(res.reply).toBe('');
+    });
+
+    it('propose_send hata dönerse (requiresConfirmation yok), döngü normal şekilde devam eder', async () => {
+      const errorToolCallResponse = proxyResponse(
+        200,
+        assistantChoice({
+          content: '',
+          tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'propose_send', arguments: '{}' } }],
+        })
+      );
+      const finalResponse = proxyResponse(200, assistantChoice({ content: 'Hedef adres eksik, tekrar dener misiniz?' }));
+      const fetchSpy = stubFetchRouter([errorToolCallResponse, finalResponse]);
+      vi.mocked(executeToolCall).mockResolvedValueOnce({ error: '"to" parametresi zorunludur.' });
+
+      const res = await runAgentTurn('eth gönder', [], context);
+
+      expect(chatCalls(fetchSpy)).toHaveLength(2);
+      expect(res.reply).toBe('Hedef adres eksik, tekrar dener misiniz?');
+    });
+
+    it('READ_ONLY_TOOLS (ör. get_balance) requiresConfirmation benzeri bir alan dönse bile döngüyü kırmaz', async () => {
+      const toolCallResponse = proxyResponse(
+        200,
+        assistantChoice({
+          content: '',
+          tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'get_balance', arguments: '{}' } }],
+        })
+      );
+      const finalResponse = proxyResponse(200, assistantChoice({ content: 'Bakiyeniz 1 ETH.' }));
+      const fetchSpy = stubFetchRouter([toolCallResponse, finalResponse]);
+      // get_balance normalde requiresConfirmation döndürmez ama döngü kırma mantığının
+      // PROPOSAL_TOOLS listesine göre çalıştığını (alan varlığına göre değil) doğrulamak için.
+      vi.mocked(executeToolCall).mockResolvedValueOnce({
+        result: { requiresConfirmation: true, balanceWei: '0' },
+      });
+
+      const res = await runAgentTurn('bakiyem ne kadar', [], context);
+
+      expect(chatCalls(fetchSpy)).toHaveLength(2);
+      expect(res.reply).toBe('Bakiyeniz 1 ETH.');
     });
   });
 

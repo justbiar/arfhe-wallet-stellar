@@ -124,9 +124,16 @@ function Harness({ withAccount = true, withWallet = true }: { withAccount?: bool
           setConversationHistory={setConversationHistory}
           setProposalHistory={setProposalHistory}
         />
-        <div data-testid="debug-proposal-history" style={{ display: 'none' }}>
+        {/* script tags are excluded from Testing Library's getByText by default (unlike a
+            plain div), so this JSON dump can never collide with a getByText query elsewhere
+            in the suite just because it happens to contain the same substring as a real
+            message bubble. */}
+        <script type="application/json" data-testid="debug-proposal-history">
           {JSON.stringify(proposalHistory)}
-        </div>
+        </script>
+        <script type="application/json" data-testid="debug-conversation-history">
+          {JSON.stringify(conversationHistory)}
+        </script>
       </ActiveAccountContext.Provider>
     </WalletContext.Provider>
   );
@@ -139,6 +146,10 @@ function renderPanel(opts: { withAccount?: boolean; withWallet?: boolean } = {})
 
 function readDebugProposalHistory(): ProposalRecord[] {
   return JSON.parse(screen.getByTestId('debug-proposal-history').textContent || '[]');
+}
+
+function readDebugConversationHistory(): ChatMessage[] {
+  return JSON.parse(screen.getByTestId('debug-conversation-history').textContent || '[]');
 }
 
 describe('AgentChatPanel', () => {
@@ -345,7 +356,7 @@ describe('AgentChatPanel', () => {
       expect(screen.getByRole('button', { name: /new chat/i })).toBeDisabled();
     });
 
-    it('onaylama: tool mesajı özetle güncellenir, runAgentTurn boş userMessage ile yeni history üzerinden tekrar çağrılır', async () => {
+    it('onaylama: tool mesajı settled özetiyle senkron güncellenir, runAgentTurn TEKRAR ÇAĞRILMAZ (model bir sonraki cevabı üretmez)', async () => {
       const preview = makeProposalPreview();
       const historyWithProposal = makeProposalHistory('call_1', preview);
       vi.mocked(runAgentTurn).mockResolvedValueOnce({ reply: '', updatedHistory: historyWithProposal });
@@ -355,24 +366,36 @@ describe('AgentChatPanel', () => {
       fireEvent.click(screen.getByRole('button', { name: /send message/i }));
       await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
 
-      vi.mocked(runAgentTurn).mockResolvedValueOnce({
-        reply: 'İşleminiz onaylandı, tebrikler.',
-        updatedHistory: [
-          ...historyWithProposal.map((m) =>
-            m.role === 'tool' ? { ...m, content: JSON.stringify({ result: 'user approved' }) } : m
-          ),
-          { role: 'assistant', content: 'İşleminiz onaylandı, tebrikler.' },
-        ],
-      });
-
       fireEvent.click(screen.getByText('mock-approve'));
 
-      await waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(2));
-      const [userMessageArg, historyArg, contextArg] = vi.mocked(runAgentTurn).mock.calls[1];
-      expect(userMessageArg).toBe('');
-      expect(contextArg).toEqual({ account: TEST_ADDRESS, networkId: '11155111' });
+      // Kart hemen kapanmalı ve giriş alanı hemen serbest kalmalı — hiçbir proxy/model
+      // round-trip'i beklenmiyor, çünkü sonuç zaten senkron olarak history'ye yazıldı.
+      await waitFor(() => expect(screen.queryByTestId('confirmation-card')).not.toBeInTheDocument());
+      expect(screen.getByPlaceholderText(/Ask Arfio about your balance/i)).toBeEnabled();
+      expect(screen.getByText('propose_send completed')).toBeInTheDocument();
 
-      const toolMessage = (historyArg as ChatMessage[]).find((m) => m.tool_call_id === 'call_1');
+      // runAgentTurn yalnızca ilk (kullanıcının "send 0.1 eth" mesajını gönderdiği) turdan
+      // geliyor — onay sonrası İKİNCİ bir çağrı ASLA yapılmamalı.
+      expect(runAgentTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it('onaylanan tool mesajı, gerçek settled özetiyle (durum/toolName/txHash) senkron güncellenir', async () => {
+      const preview = makeProposalPreview();
+      const historyWithProposal = makeProposalHistory('call_1', preview);
+      vi.mocked(runAgentTurn).mockResolvedValueOnce({ reply: '', updatedHistory: historyWithProposal });
+
+      renderPanel();
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'send 0.1 eth' } });
+      fireEvent.click(screen.getByRole('button', { name: /send message/i }));
+      await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByText('mock-approve'));
+      await waitFor(() => expect(screen.queryByTestId('confirmation-card')).not.toBeInTheDocument());
+
+      // handleConfirmationResolved artık runAgentTurn'ün dönüşünü değil, kendi senkron
+      // state güncellemesini yazıyor — Harness'in gerçek conversationHistory state'inden okuyoruz.
+      const finalHistory = readDebugConversationHistory();
+      const toolMessage = finalHistory.find((m) => m.tool_call_id === 'call_1');
       expect(toolMessage).toBeDefined();
       const parsedContent = JSON.parse(toolMessage!.content) as {
         result: { settled: true; status: string; toolName: string; summary: string };
@@ -382,13 +405,9 @@ describe('AgentChatPanel', () => {
       expect(parsedContent.result.toolName).toBe('propose_send');
       expect(parsedContent.result.summary).toContain('propose_send');
       expect(parsedContent.result.summary.toLowerCase()).toContain('approved');
-
-      await waitFor(() => expect(screen.getByText('İşleminiz onaylandı, tebrikler.')).toBeInTheDocument());
-      expect(screen.queryByTestId('confirmation-card')).not.toBeInTheDocument();
-      expect(screen.getByPlaceholderText(/Ask Arfio about your balance/i)).toBeEnabled();
     });
 
-    it('reddetme: benzer akış çalışır — tool mesajı "rejected" özetiyle güncellenir, kart kapanır', async () => {
+    it('onaydan SONRA kullanıcı yeni bir mesaj gönderirse, model settled bilgisini history üzerinden görür (proaktif değil, yalnızca sorulunca)', async () => {
       const preview = makeProposalPreview();
       const historyWithProposal = makeProposalHistory('call_1', preview);
       vi.mocked(runAgentTurn).mockResolvedValueOnce({ reply: '', updatedHistory: historyWithProposal });
@@ -398,31 +417,69 @@ describe('AgentChatPanel', () => {
       fireEvent.click(screen.getByRole('button', { name: /send message/i }));
       await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
 
+      fireEvent.click(screen.getByText('mock-approve'));
+      await waitFor(() => expect(screen.queryByTestId('confirmation-card')).not.toBeInTheDocument());
+      expect(runAgentTurn).toHaveBeenCalledTimes(1); // onay tek başına ikinci bir çağrı yapmadı
+
+      const historyAfterApprove = readDebugConversationHistory();
+
+      // Kullanıcı kendi isteğiyle yeni bir mesaj gönderir — işte BURADA modelin cevap
+      // üretmesi meşrudur, çünkü bu kullanıcı tetiklemeli bir tur, otomatik devam değil.
       vi.mocked(runAgentTurn).mockResolvedValueOnce({
-        reply: 'Anladım, iptal ettiniz.',
+        reply: 'Evet, 0.1 ETH gönderiminiz onaylanmıştı.',
         updatedHistory: [
-          ...historyWithProposal.map((m) =>
-            m.role === 'tool' ? { ...m, content: JSON.stringify({ result: 'user rejected' }) } : m
-          ),
-          { role: 'assistant', content: 'Anladım, iptal ettiniz.' },
+          ...historyAfterApprove,
+          { role: 'user', content: 'az önceki gönderim onaylandı mı?' },
+          { role: 'assistant', content: 'Evet, 0.1 ETH gönderiminiz onaylanmıştı.' },
         ],
       });
-
-      fireEvent.click(screen.getByText('mock-reject'));
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), {
+        target: { value: 'az önceki gönderim onaylandı mı?' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 
       await waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(2));
       const [userMessageArg, historyArg] = vi.mocked(runAgentTurn).mock.calls[1];
-      expect(userMessageArg).toBe('');
+      expect(userMessageArg).toBe('az önceki gönderim onaylandı mı?');
 
+      // Bu ikinci çağrıya giden history'de call_1'in tool mesajı settled:true olarak
+      // görünmeli — yani model, proaktif bir cevap üretmese de, kendisine sorulduğunda
+      // gerçek sonucu (kod tarafından yazılmış veriden) doğru şekilde bilir.
       const toolMessage = (historyArg as ChatMessage[]).find((m) => m.tool_call_id === 'call_1');
+      expect(toolMessage).toBeDefined();
+      const parsedToolContent = JSON.parse(toolMessage!.content) as {
+        result: { settled: true; status: string; toolName: string; summary: string };
+      };
+      expect(parsedToolContent.result.settled).toBe(true);
+      expect(parsedToolContent.result.status).toBe('confirmed');
+      expect(parsedToolContent.result.toolName).toBe('propose_send');
+
+      await waitFor(() => expect(screen.getByText('Evet, 0.1 ETH gönderiminiz onaylanmıştı.')).toBeInTheDocument());
+    });
+
+    it('reddetme: tool mesajı "rejected" özetiyle senkron güncellenir, kart kapanır, runAgentTurn tekrar çağrılmaz', async () => {
+      const preview = makeProposalPreview();
+      const historyWithProposal = makeProposalHistory('call_1', preview);
+      vi.mocked(runAgentTurn).mockResolvedValueOnce({ reply: '', updatedHistory: historyWithProposal });
+
+      renderPanel();
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'send 0.1 eth' } });
+      fireEvent.click(screen.getByRole('button', { name: /send message/i }));
+      await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByText('mock-reject'));
+
+      await waitFor(() => expect(screen.queryByTestId('confirmation-card')).not.toBeInTheDocument());
+
+      const finalHistory = readDebugConversationHistory();
+      const toolMessage = finalHistory.find((m) => m.tool_call_id === 'call_1');
       const parsedContent = JSON.parse(toolMessage!.content) as {
         result: { settled: true; status: string; toolName: string; summary: string };
       };
       expect(parsedContent.result.status).toBe('rejected');
       expect(parsedContent.result.summary.toLowerCase()).toContain('rejected');
 
-      await waitFor(() => expect(screen.getByText('Anladım, iptal ettiniz.')).toBeInTheDocument());
-      expect(screen.queryByTestId('confirmation-card')).not.toBeInTheDocument();
+      expect(runAgentTurn).toHaveBeenCalledTimes(1);
     });
 
     it('birden fazla çözülmemiş öneri varsa yalnızca ilki gösterilir', async () => {
@@ -444,21 +501,14 @@ describe('AgentChatPanel', () => {
       await waitFor(() => expect(screen.getAllByTestId('confirmation-card')).toHaveLength(1));
       expect(screen.getByTestId('confirmation-tool')).toHaveTextContent('propose_send');
 
-      // İlkini onayladıktan sonra ikincisi görünür hale gelmeli
-      vi.mocked(runAgentTurn).mockResolvedValueOnce({
-        reply: '',
-        updatedHistory: [
-          ...makeProposalHistory('call_1', firstPreview).map((m) =>
-            m.role === 'tool' ? { ...m, content: JSON.stringify({ result: 'user approved' }) } : m
-          ),
-          ...makeProposalHistory('call_2', secondPreview, 'and also shield 0.2 eth'),
-        ],
-      });
-
+      // İlkini onaylamak artık senkron — call_1'in tool mesajı yerinde settled ile
+      // güncellenir, call_2'nin tool mesajı hiç dokunulmadığı için zaten pending kalır ve
+      // hemen görünür hale gelir. runAgentTurn tekrar çağrılmadan.
       fireEvent.click(screen.getByText('mock-approve'));
 
       await waitFor(() => expect(screen.getAllByTestId('confirmation-card')).toHaveLength(1));
       expect(screen.getByTestId('confirmation-tool')).toHaveTextContent('propose_shield');
+      expect(runAgentTurn).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -583,13 +633,9 @@ describe('AgentChatPanel', () => {
       fireEvent.click(screen.getByRole('button', { name: /send message/i }));
       await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
 
-      vi.mocked(runAgentTurn).mockResolvedValueOnce({
-        reply: 'Onaylandı.',
-        updatedHistory: [...historyWithProposal, { role: 'assistant', content: 'Onaylandı.' }],
-      });
       fireEvent.click(screen.getByText('mock-approve'));
 
-      await waitFor(() => expect(screen.getByText('Onaylandı.')).toBeInTheDocument());
+      await waitFor(() => expect(screen.queryByTestId('confirmation-card')).not.toBeInTheDocument());
 
       await waitFor(() => {
         const records = readDebugProposalHistory();

@@ -79,6 +79,10 @@
     "confirmationCardAccountChangedCancelled": "The active account changed, so this proposal was cancelled — ask again if you'd still like to do this with the new account.",
     "confirmationCardOutcomeConfirmed": "The user approved the proposed action ({{toolName}}) and the transaction was submitted (tx: {{txHash}}).",
     "confirmationCardOutcomeFailed": "The user approved the proposed action ({{toolName}}), but it failed: {{message}}",
+    "txResultPendingTitle": "Transaction submitted, waiting for confirmation...",
+    "txResultFailedTitle": "Transaction failed",
+    "txResultRetrySuggestion": "You can try again.",
+    "txResultNewBalance": "New balance: {{amount}} {{symbol}}",
     "toastAccountSwitched": "Account switched: {{account}}",
     "systemNoteAccountSwitched": "— Switched to {{account}} —"
   },

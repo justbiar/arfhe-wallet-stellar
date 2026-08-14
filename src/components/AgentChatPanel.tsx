@@ -242,9 +242,16 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
    * Resolving a card never appends a second tool-message for the same tool_call_id — the
    * tool-calling protocol allows exactly one answer per call, and that call was already
    * answered (with the preview) the moment AgentToolRunner produced it. Instead, that
-   * message's content is rewritten in place with the outcome, then runAgentTurn is called
-   * again with no new user text (just "continue given this outcome") so the model reacts
-   * naturally to what the user decided.
+   * message's content is rewritten in place with the outcome (see isSettledMarker /
+   * buildChatItems) — TransactionResultCard (rendered inside ConfirmationCard itself) is
+   * what shows the user what actually happened, from real Network.ts data. This deliberately
+   * does NOT call runAgentTurn again: doing so used to trigger an immediate model-authored
+   * reply narrating the outcome in its own words (including transcribing the tx hash) right
+   * after approval, with no user action in between — the same class of bug as a model
+   * hallucinating a completion, just one step later in the flow. The settled marker written
+   * here is real, code-produced data that simply becomes part of `conversationHistory`; the
+   * model only sees and reacts to it the next time the user actually sends a message (see
+   * handleSend), not proactively.
    */
   /**
    * Fires the instant the user hits Approve, before the transaction has signed/broadcast.
@@ -263,11 +270,7 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
     );
   };
 
-  const handleConfirmationResolved = async (
-    toolCallId: string,
-    preview: ProposalPreview,
-    outcome: ConfirmationOutcome
-  ) => {
+  const handleConfirmationResolved = (toolCallId: string, preview: ProposalPreview, outcome: ConfirmationOutcome) => {
     const summary = buildConfirmationOutcomeSummary(outcome, t);
     const historyWithOutcome = conversationHistory.map((m) =>
       m.role === "tool" && m.tool_call_id === toolCallId
@@ -277,22 +280,6 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
     setConversationHistory(historyWithOutcome);
     if (address) {
       setProposalHistory((prev) => appendProposalRecords(prev, [buildRecordFromOutcome(toolCallId, preview, outcome, address)]));
-    }
-
-    if (!address || networkId === undefined) return;
-    setSending(true);
-
-    try {
-      const { updatedHistory } = await runAgentTurn("", historyWithOutcome, {
-        account: address,
-        networkId: String(networkId),
-      });
-      setConversationHistory(updatedHistory);
-      recordPolicyDenials(historyWithOutcome, updatedHistory, address);
-    } catch {
-      setConversationHistory((prev) => [...prev, { role: "assistant", content: t("agent.panelUnexpectedError") }]);
-    } finally {
-      setSending(false);
     }
   };
 

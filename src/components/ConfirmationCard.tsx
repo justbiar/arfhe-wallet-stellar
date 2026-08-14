@@ -25,14 +25,14 @@
  */
 
 import * as React from "react";
-import { Box, Typography, Button, Stack, Chip, CircularProgress, Link } from "@mui/material";
-import { CheckCircle, Cancel, ErrorOutline, OpenInNew, LockOutlined } from "@mui/icons-material";
+import { Box, Typography, Button, Stack, Chip } from "@mui/material";
+import { Cancel, CheckCircle, LockOutlined } from "@mui/icons-material";
 import { useTranslation } from "react-i18next";
 import { WalletContext } from "../AppContext.js";
 import { useActiveAccount } from "../ActiveAccountProvider.js";
 import { isDomainName, resolveDomain } from "../backend/DomainResolver.js";
 import { toUserMessage } from "../backend/UserFacingError.js";
-import { getExplorerBaseForNetwork } from "./panels/shared.js";
+import TransactionResultCard from "./TransactionResultCard.js";
 import type { ProposalPreview } from "../backend/AgentToolRunner.js";
 import type { BalanceChange } from "../backend/TransactionSimulator.js";
 
@@ -113,6 +113,7 @@ export default function ConfirmationCard({ preview, onResolved, onApproveStarted
   const [txHash, setTxHash] = React.useState("");
   const [errorMessage, setErrorMessage] = React.useState("");
   const [beforeBalance, setBeforeBalance] = React.useState<number | null>(null);
+  const [newBalance, setNewBalance] = React.useState<{ amount: string; symbol: string } | null>(null);
 
   const { toolName, originalArgs, simulation } = preview;
 
@@ -188,6 +189,29 @@ export default function ConfirmationCard({ preview, onResolved, onApproveStarted
     beforeBalance !== null && Number.isFinite(Number(displayAmount))
       ? Math.max(0, beforeBalance - Number(displayAmount))
       : null;
+
+  /**
+   * Refreshes the balance TransactionResultCard shows after a confirmed transaction — real
+   * Network.ts data, read the same way beforeBalance above was. Never throws: an unavailable
+   * network/account here just means the success state renders without a balance line.
+   */
+  async function loadNewBalance(): Promise<void> {
+    if (!network || !activeAccount) return;
+    try {
+      if (toolName === "propose_unshield") {
+        const tokenSymbol = String(originalArgs.tokenSymbol ?? "").toLowerCase();
+        const portfolio = await network.getShieldedPortfolio(activeAccount);
+        const holding = portfolio.find((h) => h.symbol.toLowerCase() === tokenSymbol);
+        if (holding) setNewBalance({ amount: holding.balance, symbol: holding.symbol });
+      } else {
+        const balanceWei = await network.getBalance(activeAccount.GetAddress());
+        const { formatEther } = await import("ethers");
+        setNewBalance({ amount: formatEther(balanceWei), symbol: network.currency_symbol });
+      }
+    } catch {
+      // Leave newBalance null — TransactionResultCard simply omits the line.
+    }
+  }
 
   // ── Approve: the only place that ever signs/broadcasts. ──────────────
   async function resolveRecipient(rawTo: string): Promise<string> {
@@ -283,6 +307,9 @@ export default function ConfirmationCard({ preview, onResolved, onApproveStarted
 
       setCardPhase("success");
       onResolved({ status: "confirmed", toolName, txHash: hash });
+      // Fire-and-forget: the success state above is already fully valid without this — a
+      // failed balance refresh must never turn a confirmed transaction into an error state.
+      void loadNewBalance();
     } catch (err) {
       const message = toUserMessage(err, t);
       setErrorMessage(message);
@@ -382,42 +409,16 @@ export default function ConfirmationCard({ preview, onResolved, onApproveStarted
             </Stack>
           )}
 
-          {/* Working / success / error states */}
-          {cardPhase === "working" && (
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <CircularProgress size={14} />
-              <Typography variant="caption">{workingLabel}</Typography>
-            </Stack>
-          )}
-
-          {cardPhase === "success" && (
-            <Stack spacing={0.5}>
-              <Stack direction="row" alignItems="center" spacing={0.5}>
-                <CheckCircle color="success" sx={{ fontSize: 16 }} />
-                <Typography variant="caption" fontWeight={700} color="success.main">
-                  {t("agent.confirmationCardSuccessTitle")}
-                </Typography>
-              </Stack>
-              {txHash && network && (
-                <Link
-                  href={`${getExplorerBaseForNetwork(network)}/tx/${txHash}`}
-                  target="_blank"
-                  rel="noopener"
-                  sx={{ fontSize: "0.7rem", display: "inline-flex", alignItems: "center", gap: 0.5 }}
-                >
-                  {t("agent.confirmationCardViewExplorer")} <OpenInNew sx={{ fontSize: 12 }} />
-                </Link>
-              )}
-            </Stack>
-          )}
-
-          {cardPhase === "error" && (
-            <Stack direction="row" spacing={0.5} alignItems="flex-start">
-              <ErrorOutline color="error" sx={{ fontSize: 16, mt: 0.2 }} />
-              <Typography variant="caption" color="error.main">
-                {errorMessage}
-              </Typography>
-            </Stack>
+          {/* Working / success / error states — real Network.ts data only, see TransactionResultCard. */}
+          {(cardPhase === "working" || cardPhase === "success" || cardPhase === "error") && (
+            <TransactionResultCard
+              phase={cardPhase === "working" ? "pending" : cardPhase === "success" ? "success" : "failed"}
+              txHash={txHash || undefined}
+              errorMessage={errorMessage || undefined}
+              newBalance={cardPhase === "success" ? newBalance : null}
+              network={network}
+              pendingLabel={workingLabel}
+            />
           )}
 
           {cardPhase === "cancelled" && (

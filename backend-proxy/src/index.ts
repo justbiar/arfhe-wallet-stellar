@@ -14,6 +14,7 @@
 
 import { MODEL_CHAIN } from "./modelConfig";
 import { checkRateLimit } from "./rateLimiter";
+import { retrieveContext } from "./knowledge/retrieveContext";
 
 export interface Env {
   /** Cloudflare Worker secret — set via `wrangler secret put OPENROUTER_API_KEY`, never a var. */
@@ -23,6 +24,8 @@ export interface Env {
   /** Requests allowed per IP per 60s. Optional; defaults to 20 if unset/unparseable. */
   RATE_LIMIT_PER_MINUTE?: string;
   RATE_LIMIT_KV: KVNamespace;
+  /** Workers AI binding, used only to embed the query for RAG context retrieval. */
+  AI: Ai;
 }
 
 const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
@@ -188,6 +191,42 @@ async function callModelChain(body: AgentChatRequestBody, apiKey: string): Promi
   return { kind: "unreachable", attemptedModels };
 }
 
+// ─── RAG context retrieval ──────────────────────────────────────────
+
+interface RetrieveContextRequestBody {
+  query: string;
+}
+
+function parseRetrieveContextBody(raw: unknown): RetrieveContextRequestBody {
+  if (typeof raw !== "object" || raw === null || typeof (raw as { query?: unknown }).query !== "string") {
+    throw new Error('"query" must be a string.');
+  }
+  return { query: (raw as { query: string }).query };
+}
+
+/**
+ * Embeds the caller's message and returns the RAG chunks worth splicing into the agent's
+ * context — read-only enrichment, never a source of new tool-call authority (see
+ * AgentPolicyEngine on the extension side, which this endpoint never touches). Any
+ * retrieval failure degrades to an empty chunk list with a 200, not an error status —
+ * AgentOrchestrator treats "no context available" as a normal outcome, not a chat failure.
+ */
+async function handleRetrieveContext(request: Request, env: Env, cors: HeadersInit): Promise<Response> {
+  let body: RetrieveContextRequestBody;
+  try {
+    body = parseRetrieveContextBody(await request.json());
+  } catch (err) {
+    return jsonResponse({ error: err instanceof Error ? err.message : "Invalid request body." }, 400, cors);
+  }
+
+  const scoredChunks = await retrieveContext(env.AI, body.query);
+  return jsonResponse(
+    { chunks: scoredChunks.map((s) => ({ title: s.chunk.title, text: s.chunk.text, score: s.score })) },
+    200,
+    cors
+  );
+}
+
 // ─── Worker entrypoint ──────────────────────────────────────────────
 
 export default {
@@ -202,16 +241,12 @@ export default {
       return new Response(null, { status: cors ? 204 : 403, headers: cors ?? undefined });
     }
 
-    if (url.pathname !== "/agent/chat" || request.method !== "POST") {
+    if (request.method !== "POST" || (url.pathname !== "/agent/chat" && url.pathname !== "/agent/retrieve-context")) {
       return jsonResponse({ error: "Not found." }, 404, cors ?? undefined);
     }
 
     if (!cors) {
       return jsonResponse({ error: "Origin not allowed." }, 403);
-    }
-
-    if (!env.OPENROUTER_API_KEY) {
-      return jsonResponse({ error: "Server misconfigured: missing OPENROUTER_API_KEY." }, 500, cors);
     }
 
     const clientIp = request.headers.get("CF-Connecting-IP") ?? "unknown";
@@ -223,6 +258,14 @@ export default {
         429,
         { ...cors, "Retry-After": String(rate.retryAfterSeconds ?? 60) }
       );
+    }
+
+    if (url.pathname === "/agent/retrieve-context") {
+      return handleRetrieveContext(request, env, cors);
+    }
+
+    if (!env.OPENROUTER_API_KEY) {
+      return jsonResponse({ error: "Server misconfigured: missing OPENROUTER_API_KEY." }, 500, cors);
     }
 
     let body: AgentChatRequestBody;

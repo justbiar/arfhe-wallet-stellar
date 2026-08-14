@@ -12,6 +12,7 @@
 
 import { AGENT_TOOLS } from "./agentTools.js";
 import { executeToolCall, type ToolExecutionContext } from "./AgentToolRunner.js";
+import { findLeakedInternalReference } from "./internalLeakGuard.js";
 
 // ─── Wire types (OpenAI-compatible chat-completion shape) ──────────
 
@@ -111,7 +112,80 @@ export function buildSystemPrompt(): string {
       "bekleyen talebini tamamlamak için claim adımını atması gerektiğini mutlaka hatırlat.",
     "",
     "Kısa, net ve doğru cevaplar ver. Kullanıcı hangi dilde yazarsa o dilde yanıtla.",
+    "",
+    "HER ZAMAN GÜNDELİK, İNSAN DİLİYLE KONUŞ — KOD DİLİYLE DEĞİL:",
+    "- Kullanıcıya asla fonksiyon/araç (tool) ismi, değişken ismi, dosya/sınıf ismi ya da " +
+      "başka bir iç kod/mimari referansı söyleme (get_balance, propose_send, " +
+      "get_shielded_portfolio, get_pending_claims, propose_shield, propose_unshield vb. " +
+      "hiçbir zaman kullanıcıya görünen metinde geçmemeli).",
+    "- \"X aracını/fonksiyonunu çağırıyorum\", \"X tool'unu çalıştırıyorum\" gibi mekanizma " +
+      "anlatan mekanik ifadeler kullanma. Ne yaptığını bir insana anlatır gibi anlat.",
+    "- Bu, bilgi saklamak anlamına gelmez — tam tersine kullanıcı ne olup bittiğini net " +
+      "anlamalı (bakiyeni kontrol ediyorum, göndermek için hedef adres lazım, vb.). Sadece " +
+      "bunu her zaman doğal cümlelerle anlat, iç isimlerle değil.",
+    "- Bu kural yalnızca araç çağırdığın anlar için değil, TÜM cevapların için geçerlidir: " +
+      "hata mesajları, onay öncesi açıklamalar, geçmiş/durum sorularına verdiğin cevaplar " +
+      "dahil hiçbirinde iç kod terimi geçmemeli.",
+    "  Kötü: \"propose_send aracını çağırıyorum, hedef adres gerekiyor.\"",
+    "  İyi: \"ETH göndermek için önce hedef adresi öğrenmem gerekiyor, nereye göndermek " +
+      "istiyorsun?\"",
+    "  Kötü: \"get_pending_claims sonucu boş döndü, bekleyen talebiniz yok.\"",
+    "  İyi: \"Bekleyen bir talebiniz görünmüyor.\"",
+    "  Kötü: \"propose_shield fonksiyonu çalıştırıldı, onayınızı bekliyorum.\"",
+    "  İyi: \"Shield işlemini hazırladım, onayınızı bekliyorum.\"",
   ].join("\n");
+}
+
+// ─── RAG context retrieval ────────────────────────────────────────────
+
+interface RetrievedChunk {
+  title: string;
+  text: string;
+}
+
+/**
+ * Asks the proxy's /agent/retrieve-context to embed the user's message and return the
+ * FHE_COMPLETE_GUIDE.md excerpts most relevant to it (empty when nothing clears the
+ * relevance threshold, e.g. small talk unrelated to the wallet). Never throws — mirrors
+ * callProxy's degrade-safely contract, except here "safely" means "send the turn with no
+ * extra context" rather than a user-facing error, since this step is a pure enrichment
+ * with no bearing on whether the turn can proceed.
+ */
+async function fetchRetrievedContext(userMessage: string): Promise<RetrievedChunk[]> {
+  if (!config.proxyBaseUrl || !userMessage.trim()) return [];
+
+  const url = `${config.proxyBaseUrl.replace(/\/+$/, "")}/agent/retrieve-context`;
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: userMessage }),
+    });
+    if (!response.ok) return [];
+
+    const body = (await response.json()) as { chunks?: unknown };
+    if (!Array.isArray(body.chunks)) return [];
+
+    return body.chunks.filter(
+      (c): c is RetrievedChunk =>
+        typeof c === "object" && c !== null && typeof (c as RetrievedChunk).title === "string" &&
+        typeof (c as RetrievedChunk).text === "string"
+    );
+  } catch (err) {
+    console.error("[AgentOrchestrator] context retrieval failed:", err);
+    return [];
+  }
+}
+
+function buildContextMessage(chunks: RetrievedChunk[]): ChatMessage | null {
+  if (chunks.length === 0) return null;
+  const body = chunks.map((c) => `### ${c.title}\n${c.text}`).join("\n\n");
+  return {
+    role: "system",
+    content:
+      "İLGİLİ BAĞLAM (kullanıcının sorusuyla ilgili olabilecek rehber alıntıları — yalnızca " +
+      "doğruysa ve soruyla alakalıysa kullan, alakasızsa yok say):\n\n" + body,
+  };
 }
 
 // ─── Proxy call ──────────────────────────────────────────────────────
@@ -158,6 +232,29 @@ function extractAssistantMessage(body: unknown): ChatMessage | null {
   };
 }
 
+/** OpenRouter echoes back which model in MODEL_CHAIN actually served the request. */
+function extractModelName(body: unknown): string | null {
+  if (typeof body !== "object" || body === null) return null;
+  const model = (body as Record<string, unknown>).model;
+  return typeof model === "string" ? model : null;
+}
+
+/**
+ * Logs (never blocks or alters the reply) when a model's user-facing text leaks internal
+ * implementation details — see internalLeakGuard.ts. The model name is included so the
+ * fallback chain in backend-proxy/src/modelConfig.ts can be reordered later if one model
+ * turns out to leak far more often than the others.
+ */
+function logIfInternalLeak(content: string, body: unknown): void {
+  const leak = findLeakedInternalReference(content);
+  if (!leak) return;
+  console.warn(
+    `[AgentOrchestrator] reply leaked an internal reference ("${leak}") from model ` +
+      `"${extractModelName(body) ?? "unknown"}":`,
+    content
+  );
+}
+
 async function callProxy(messages: ChatMessage[]): Promise<ProxyOutcome> {
   if (!config.proxyBaseUrl) {
     console.error("[AgentOrchestrator] proxyBaseUrl is not configured (VITE_AGENT_PROXY_URL).");
@@ -196,6 +293,8 @@ async function callProxy(messages: ChatMessage[]): Promise<ProxyOutcome> {
     console.error("[AgentOrchestrator] proxy response missing a valid assistant message:", body);
     return { ok: false, friendlyMessage: GENERIC_ERROR_REPLY };
   }
+
+  if (message.content) logIfInternalLeak(message.content, body);
 
   return { ok: true, message };
 }
@@ -261,9 +360,12 @@ export async function runAgentTurn(
   context: ToolExecutionContext
 ): Promise<RunAgentTurnResult> {
   const systemPrompt = buildSystemPrompt();
+  const retrievedChunks = await fetchRetrievedContext(userMessage);
+  const contextMessage = buildContextMessage(retrievedChunks);
   const newMessages: ChatMessage[] = [{ role: "user", content: userMessage }];
   const workingMessages: ChatMessage[] = [
     { role: "system", content: systemPrompt },
+    ...(contextMessage ? [contextMessage] : []),
     ...conversationHistory,
     ...newMessages,
   ];

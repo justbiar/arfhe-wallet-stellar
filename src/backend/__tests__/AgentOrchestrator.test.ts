@@ -1,6 +1,7 @@
 /// <reference types="vitest/globals" />
 import { runAgentTurn, buildSystemPrompt, configureAgentOrchestrator, type ChatMessage } from '../AgentOrchestrator';
 import { executeToolCall } from '../AgentToolRunner';
+import { findLeakedInternalReference } from '../internalLeakGuard';
 
 /**
  * @vitest-environment node
@@ -9,8 +10,12 @@ import { executeToolCall } from '../AgentToolRunner';
  *
  * Backend proxy fetch ile mock'lanır (Network.callBatch testlerindeki stubFetch pattern'i
  * kullanılır), AgentToolRunner.executeToolCall vi.mock ile taklit edilir. Gerçek ağ/RPC/AI
- * çağrısı yapılmaz. Tek turlu cevap, çok turlu tool-calling akışı, max tur limiti ve proxy
- * hata senaryoları test edilir.
+ * çağrısı yapılmaz. Tek turlu cevap, çok turlu tool-calling akışı, max tur limiti, proxy
+ * hata senaryoları ve RAG bağlam enjeksiyonu test edilir.
+ *
+ * runAgentTurn her kullanıcı turunda /agent/retrieve-context'e bir kez, /agent/chat'e ise
+ * tool-calling döngüsündeki her round-trip için bir kez istek atar — bu yüzden fetch mock'u
+ * URL'e göre yönlendirilir (stubFetchRouter), sabit bir çağrı sayısı varsaymaz.
  */
 
 vi.mock('../AgentToolRunner.js', () => ({
@@ -29,6 +34,36 @@ function proxyResponse(status: number, body: unknown) {
 
 function assistantChoice(message: Record<string, unknown>) {
   return { choices: [{ message: { role: 'assistant', ...message } }] };
+}
+
+/**
+ * Routes /agent/retrieve-context to a default "no context" response (overridable via
+ * `contextResponse`) and /agent/chat calls to the provided queue, in order. Keeps the
+ * existing chat-flow tests oblivious to the extra retrieval round-trip.
+ */
+function stubFetchRouter(
+  chatResponses: unknown[],
+  options: { contextResponse?: unknown } = {}
+) {
+  const queue = [...chatResponses];
+  const fetchSpy = vi.fn(async (url: string) => {
+    if (String(url).includes('/agent/retrieve-context')) {
+      return options.contextResponse ?? proxyResponse(200, { chunks: [] });
+    }
+    const next = queue.shift();
+    if (!next) throw new Error('stubFetchRouter: unexpected extra /agent/chat call');
+    return next;
+  });
+  vi.stubGlobal('fetch', fetchSpy);
+  return fetchSpy;
+}
+
+function chatCalls(fetchSpy: ReturnType<typeof vi.fn>) {
+  return fetchSpy.mock.calls.filter(([url]) => String(url).includes('/agent/chat'));
+}
+
+function contextCalls(fetchSpy: ReturnType<typeof vi.fn>) {
+  return fetchSpy.mock.calls.filter(([url]) => String(url).includes('/agent/retrieve-context'));
 }
 
 describe('AgentOrchestrator', () => {
@@ -73,13 +108,14 @@ describe('AgentOrchestrator', () => {
   // ─── Tek turlu basit cevap ───────────────────────────────────────
   describe('tek turlu akış', () => {
     it('tool_calls yoksa modelin cevabını doğrudan döner', async () => {
-      const fetchSpy = vi.fn().mockResolvedValue(proxyResponse(200, assistantChoice({ content: 'Merhaba! Nasıl yardımcı olabilirim?' })));
-      vi.stubGlobal('fetch', fetchSpy);
+      const fetchSpy = stubFetchRouter([
+        proxyResponse(200, assistantChoice({ content: 'Merhaba! Nasıl yardımcı olabilirim?' })),
+      ]);
 
       const res = await runAgentTurn('Merhaba', [], context);
 
       expect(res.reply).toBe('Merhaba! Nasıl yardımcı olabilirim?');
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(chatCalls(fetchSpy)).toHaveLength(1);
       expect(executeToolCall).not.toHaveBeenCalled();
 
       // updatedHistory: user + assistant, sistem promptu dahil edilmemeli
@@ -89,9 +125,8 @@ describe('AgentOrchestrator', () => {
       expect(res.updatedHistory[1].content).toBe('Merhaba! Nasıl yardımcı olabilirim?');
     });
 
-    it('proxy isteği system + geçmiş + yeni mesajı doğru sırayla gönderir', async () => {
-      const fetchSpy = vi.fn().mockResolvedValue(proxyResponse(200, assistantChoice({ content: 'ok' })));
-      vi.stubGlobal('fetch', fetchSpy);
+    it('proxy isteği system + geçmiş + yeni mesajı doğru sırayla gönderir (context yoksa)', async () => {
+      const fetchSpy = stubFetchRouter([proxyResponse(200, assistantChoice({ content: 'ok' }))]);
 
       const history: ChatMessage[] = [
         { role: 'user', content: 'önceki soru' },
@@ -99,7 +134,7 @@ describe('AgentOrchestrator', () => {
       ];
       await runAgentTurn('yeni soru', history, context);
 
-      const [, init] = fetchSpy.mock.calls[0];
+      const [, init] = chatCalls(fetchSpy)[0];
       const sentBody = JSON.parse(init.body);
       expect(sentBody.messages[0].role).toBe('system');
       expect(sentBody.messages[1]).toEqual(history[0]);
@@ -107,6 +142,159 @@ describe('AgentOrchestrator', () => {
       expect(sentBody.messages[3]).toEqual({ role: 'user', content: 'yeni soru' });
       expect(Array.isArray(sentBody.tools)).toBe(true);
       expect(sentBody.tools.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ─── İç kod detayı sızıntısı (regresyon) ────────────────────────
+  describe('iç kod detayı sızıntısı', () => {
+    it('buildSystemPrompt gündelik dil kuralını ve kötü/iyi örnek çiftini içerir', () => {
+      const prompt = buildSystemPrompt();
+      const lower = prompt.toLocaleLowerCase('tr');
+      expect(lower).toMatch(/gündelik|insan diliyle/);
+      expect(prompt).toContain('propose_send');
+      expect(lower).toContain('kötü');
+      expect(lower).toContain('iyi');
+    });
+
+    it('proxy dönen cevap iç kod referansı sızdırırsa console.warn ile loglanır, cevap yine de kullanıcıya iletilir', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const leakedReply = 'propose_send aracını çağırıyorum. Ancak önce hedef adresi belirtmeniz gerekiyor.';
+      stubFetchRouter([
+        {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            model: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+            ...assistantChoice({ content: leakedReply }),
+          }),
+        },
+      ]);
+
+      const res = await runAgentTurn('eth göndermek istiyorum', [], context);
+
+      expect(res.reply).toBe(leakedReply);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('propose_send'),
+        leakedReply
+      );
+      expect(warnSpy.mock.calls[0][0]).toContain('nvidia/nemotron-3-ultra-550b-a55b:free');
+    });
+
+    it('temiz bir cevapta console.warn hiç çağrılmaz', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      stubFetchRouter([
+        proxyResponse(200, assistantChoice({ content: 'ETH göndermek için hedef adresi lazım, nereye göndermek istiyorsun?' })),
+      ]);
+
+      await runAgentTurn('eth göndermek istiyorum', [], context);
+
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('bilinen tüm tool isimleri ve mekanik kalıplar temiz bir cevapta geçmez (sanity)', () => {
+      const cleanReplies = [
+        'Bakiyeniz 1 ETH.',
+        'ETH göndermek için önce hedef adresi öğrenmem gerekiyor, nereye göndermek istiyorsun?',
+        'Bekleyen bir talebiniz görünmüyor.',
+        'Shield işlemini hazırladım, onayınızı bekliyorum.',
+      ];
+      for (const reply of cleanReplies) {
+        expect(findLeakedInternalReference(reply)).toBeNull();
+      }
+    });
+  });
+
+  // ─── RAG bağlam enjeksiyonu ────────────────────────────────────
+  describe('RAG bağlam enjeksiyonu', () => {
+    it('retrieve-context chunk döndürürse, ekstra bir system mesajı olarak proxy isteğine eklenir', async () => {
+      const fetchSpy = stubFetchRouter(
+        [proxyResponse(200, assistantChoice({ content: 'unshield iki aşamalıdır.' }))],
+        {
+          contextResponse: proxyResponse(200, {
+            chunks: [
+              { title: 'Genel mimari ve unshield neden iki aşamalı', text: 'unshield iki adımdan oluşur...', score: 0.61 },
+            ],
+          }),
+        }
+      );
+
+      const history: ChatMessage[] = [];
+      await runAgentTurn('unshield nasıl çalışır', history, context);
+
+      // /agent/retrieve-context tam olarak bir kez, kullanıcı mesajıyla çağrılmalı
+      const ctxCalls = contextCalls(fetchSpy);
+      expect(ctxCalls).toHaveLength(1);
+      const [, ctxInit] = ctxCalls[0];
+      expect(JSON.parse(ctxInit.body)).toEqual({ query: 'unshield nasıl çalışır' });
+
+      // Proxy'ye giden mesajlarda: system (kimlik) + system (bağlam) + user
+      const [, chatInit] = chatCalls(fetchSpy)[0];
+      const sentBody = JSON.parse(chatInit.body);
+      expect(sentBody.messages[0].role).toBe('system');
+      expect(sentBody.messages[1].role).toBe('system');
+      expect(sentBody.messages[1].content).toContain('Genel mimari ve unshield neden iki aşamalı');
+      expect(sentBody.messages[1].content).toContain('unshield iki adımdan oluşur');
+      expect(sentBody.messages[2]).toEqual({ role: 'user', content: 'unshield nasıl çalışır' });
+    });
+
+    it('retrieve-context boş chunk listesi döndürürse (alakasız sorgu), ekstra system mesajı eklenmez', async () => {
+      const fetchSpy = stubFetchRouter([proxyResponse(200, assistantChoice({ content: 'ok' }))], {
+        contextResponse: proxyResponse(200, { chunks: [] }),
+      });
+
+      await runAgentTurn('bugün hava nasıl', [], context);
+
+      const [, chatInit] = chatCalls(fetchSpy)[0];
+      const sentBody = JSON.parse(chatInit.body);
+      expect(sentBody.messages[0].role).toBe('system');
+      expect(sentBody.messages[1]).toEqual({ role: 'user', content: 'bugün hava nasıl' });
+    });
+
+    it('retrieve-context isteği başarısız olursa (5xx), sohbet yine de context olmadan devam eder', async () => {
+      const fetchSpy = stubFetchRouter([proxyResponse(200, assistantChoice({ content: 'ok' }))], {
+        contextResponse: proxyResponse(500, { error: 'internal' }),
+      });
+
+      const res = await runAgentTurn('unshield nasıl çalışır', [], context);
+
+      expect(res.reply).toBe('ok');
+      const [, chatInit] = chatCalls(fetchSpy)[0];
+      const sentBody = JSON.parse(chatInit.body);
+      expect(sentBody.messages[0].role).toBe('system');
+      expect(sentBody.messages[1]).toEqual({ role: 'user', content: 'unshield nasıl çalışır' });
+    });
+
+    it('retrieve-context isteği network hatası fırlatırsa throw etmez, context olmadan devam eder', async () => {
+      const queue = [proxyResponse(200, assistantChoice({ content: 'ok' }))];
+      const fetchSpy = vi.fn(async (url: string) => {
+        if (String(url).includes('/agent/retrieve-context')) {
+          throw new TypeError('Failed to fetch');
+        }
+        return queue.shift();
+      });
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const res = await runAgentTurn('unshield nasıl çalışır', [], context);
+
+      expect(res.reply).toBe('ok');
+    });
+
+    it('çok turlu tool-calling akışında retrieve-context yalnızca bir kez çağrılır, her round-trip tekrarında değil', async () => {
+      const toolCallResponse = proxyResponse(
+        200,
+        assistantChoice({
+          content: '',
+          tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'get_balance', arguments: '{}' } }],
+        })
+      );
+      const finalResponse = proxyResponse(200, assistantChoice({ content: 'Bakiyeniz 1 ETH.' }));
+      const fetchSpy = stubFetchRouter([toolCallResponse, finalResponse]);
+      vi.mocked(executeToolCall).mockResolvedValueOnce({ result: { balanceWei: '1000000000000000000' } });
+
+      await runAgentTurn('bakiyem ne kadar', [], context);
+
+      expect(contextCalls(fetchSpy)).toHaveLength(1);
+      expect(chatCalls(fetchSpy)).toHaveLength(2);
     });
   });
 
@@ -122,18 +310,17 @@ describe('AgentOrchestrator', () => {
       );
       const finalResponse = proxyResponse(200, assistantChoice({ content: 'Bakiyeniz 1 ETH.' }));
 
-      const fetchSpy = vi.fn().mockResolvedValueOnce(toolCallResponse).mockResolvedValueOnce(finalResponse);
-      vi.stubGlobal('fetch', fetchSpy);
+      const fetchSpy = stubFetchRouter([toolCallResponse, finalResponse]);
       vi.mocked(executeToolCall).mockResolvedValueOnce({ result: { address: context.account, balanceWei: '1000000000000000000' } });
 
       const res = await runAgentTurn('bakiyem ne kadar', [], context);
 
       expect(res.reply).toBe('Bakiyeniz 1 ETH.');
-      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(chatCalls(fetchSpy)).toHaveLength(2);
       expect(executeToolCall).toHaveBeenCalledWith('get_balance', {}, context);
 
       // İkinci proxy isteği, tool sonucunu role:"tool" mesajı olarak içermeli
-      const [, secondInit] = fetchSpy.mock.calls[1];
+      const [, secondInit] = chatCalls(fetchSpy)[1];
       const secondBody = JSON.parse(secondInit.body);
       const toolMessage = secondBody.messages.find((m: ChatMessage) => m.role === 'tool');
       expect(toolMessage).toBeDefined();
@@ -157,14 +344,13 @@ describe('AgentOrchestrator', () => {
       );
       const finalResponse = proxyResponse(200, assistantChoice({ content: 'tokenSymbol belirtmelisiniz.' }));
 
-      const fetchSpy = vi.fn().mockResolvedValueOnce(toolCallResponse).mockResolvedValueOnce(finalResponse);
-      vi.stubGlobal('fetch', fetchSpy);
+      const fetchSpy = stubFetchRouter([toolCallResponse, finalResponse]);
       vi.mocked(executeToolCall).mockResolvedValueOnce({ error: '"tokenSymbol" parametresi zorunludur.' });
 
       const res = await runAgentTurn('gizli bakiyem ne kadar', [], context);
 
       expect(res.reply).toBe('tokenSymbol belirtmelisiniz.');
-      const [, secondInit] = fetchSpy.mock.calls[1];
+      const [, secondInit] = chatCalls(fetchSpy)[1];
       const toolMessage = JSON.parse(secondInit.body).messages.find((m: ChatMessage) => m.role === 'tool');
       expect(JSON.parse(toolMessage.content)).toEqual({ error: '"tokenSymbol" parametresi zorunludur.' });
     });
@@ -180,22 +366,21 @@ describe('AgentOrchestrator', () => {
           tool_calls: [{ id: 'call_x', type: 'function', function: { name: 'get_balance', arguments: '{}' } }],
         })
       );
-      const fetchSpy = vi.fn().mockResolvedValue(alwaysToolCall);
-      vi.stubGlobal('fetch', fetchSpy);
+      const fetchSpy = stubFetchRouter(Array(5).fill(alwaysToolCall));
       vi.mocked(executeToolCall).mockResolvedValue({ result: { balanceWei: '0' } });
 
       const res = await runAgentTurn('sürekli tool çağır', [], context);
 
       expect(res.reply).toMatch(/tamamlayamadım/i);
-      expect(fetchSpy).toHaveBeenCalledTimes(5);
+      expect(chatCalls(fetchSpy)).toHaveLength(5);
+      expect(contextCalls(fetchSpy)).toHaveLength(1);
     });
   });
 
   // ─── Proxy hata senaryoları ────────────────────────────────────
   describe('proxy hataları', () => {
     it('429 rate limit hatasında anlaşılır Türkçe mesaj döner, teknik detay sızdırmaz', async () => {
-      const fetchSpy = vi.fn().mockResolvedValue(proxyResponse(429, { error: 'Rate limit exceeded. Try again shortly.' }));
-      vi.stubGlobal('fetch', fetchSpy);
+      stubFetchRouter([proxyResponse(429, { error: 'Rate limit exceeded. Try again shortly.' })]);
 
       const res = await runAgentTurn('merhaba', [], context);
 
@@ -205,10 +390,9 @@ describe('AgentOrchestrator', () => {
     });
 
     it('502/503 (tüm modeller tükendi) durumunda anlaşılır mesaj döner', async () => {
-      const fetchSpy = vi.fn().mockResolvedValue(
-        proxyResponse(503, { error: 'All models in the fallback chain are currently rate limited.', attemptedModels: ['a', 'b'] })
-      );
-      vi.stubGlobal('fetch', fetchSpy);
+      stubFetchRouter([
+        proxyResponse(503, { error: 'All models in the fallback chain are currently rate limited.', attemptedModels: ['a', 'b'] }),
+      ]);
 
       const res = await runAgentTurn('merhaba', [], context);
 
@@ -218,7 +402,12 @@ describe('AgentOrchestrator', () => {
     });
 
     it('fetch network hatası fırlatırsa (proxy erişilemez) anlaşılır mesaj döner, throw etmez', async () => {
-      const fetchSpy = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+      const fetchSpy = vi.fn(async (url: string) => {
+        if (String(url).includes('/agent/retrieve-context')) {
+          return proxyResponse(200, { chunks: [] });
+        }
+        throw new TypeError('Failed to fetch');
+      });
       vi.stubGlobal('fetch', fetchSpy);
 
       const result = await runAgentTurn('merhaba', [], context);

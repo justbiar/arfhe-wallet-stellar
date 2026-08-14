@@ -20,3 +20,9 @@ preview_id = "e0bdca44a58d419494524c41f0d5ef4a"
 
 # OPENROUTER_API_KEY is NOT set here — it's a secret, not a var:
 #   wrangler secret put OPENROUTER_API_KEY
+
+# Workers AI binding used to embed the user's message for RAG context retrieval
+# (src/knowledge/). No separate resource to create — this binding is available on any
+# Worker on the account as soon as it's declared here.
+[ai]
+binding = "AI"

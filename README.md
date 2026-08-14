@@ -141,6 +141,8 @@ VITE_ALCHEMY_API_KEY=your_alchemy_key
 VITE_WALLETCONNECT_PROJECT_ID=your_wc_project_id
 ```
 
+`VITE_AGENT_PROXY_URL` is the one exception: it's set per Vite mode, not in `.env` — see `.env.development` (`pnpm dev`, local `wrangler dev`) vs. `.env.production` (`pnpm build`, deployed Worker).
+
 ## Development
 
 ### Scripts
@@ -188,6 +190,17 @@ pnpm test -- src/backend/__tests__/AccountManager.test.ts
 ### Smart Contract Deployment
 
 See `deploy/` directory and [FHE_COMPLETE_GUIDE.md](./FHE_COMPLETE_GUIDE.md) for detailed deployment instructions.
+
+### Backend Proxy & Agent RAG Knowledge Base
+
+`backend-proxy/` is a Cloudflare Worker that fronts OpenRouter for the in-wallet AI agent
+(Arfio) and also serves `POST /agent/retrieve-context`, which embeds the user's message
+(Workers AI, `@cf/baai/bge-m3`) and returns the most relevant excerpts of
+[FHE_COMPLETE_GUIDE.md](./FHE_COMPLETE_GUIDE.md) for `AgentOrchestrator` to splice into the
+system prompt. See `backend-proxy/README.md` for how to run its tests and, importantly,
+**how to regenerate the committed chunk embeddings after editing
+`backend-proxy/src/knowledge/chunks.ts`** — the JSON file of vectors is derived data, not
+hand-written, and gets silently out of sync with the chunk text otherwise.
 
 ## Security
 

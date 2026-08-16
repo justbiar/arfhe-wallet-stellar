@@ -1,20 +1,28 @@
 /**
  * index.ts — ArfheWallet agent proxy.
  *
- * A single endpoint, POST /agent/chat, that forwards the extension's in-wallet agent
- * requests to OpenRouter. Exists so the OpenRouter API key never ships inside the
- * extension bundle (anyone could unpack a Chrome extension and read it); the key lives
- * only as a Cloudflare Worker secret (`wrangler secret put OPENROUTER_API_KEY`), never in
- * this repo or in a `.env` file read at runtime.
+ * POST /agent/chat forwards the extension's in-wallet agent requests to OpenRouter. Exists so
+ * the OpenRouter API key never ships inside the extension bundle (anyone could unpack a Chrome
+ * extension and read it); the key lives only as a Cloudflare Worker secret
+ * (`wrangler secret put OPENROUTER_API_KEY`), never in this repo or in a `.env` file read at
+ * runtime.
  *
  * Request:  { messages: ChatMessage[], tools?: ToolDefinition[] }
  * Response: the raw OpenRouter chat-completion JSON, status forwarded as-is once a model
  *           in MODEL_CHAIN answers with something other than 429/5xx.
+ *
+ * POST /agent/retrieve-context — RAG context lookup, see handleRetrieveContext below.
+ *
+ * POST /agent/x402/payment-required, POST /agent/x402/settle — ⚠️ STUB endpoints for Faz 3's
+ * x402 micro-payments (see x402Stub.ts). Neither talks to a real resource server or facilitator
+ * yet; both return fixed, clearly-marked fake data so the extension side can be built and
+ * tested against a stable shape before the real integration exists.
  */
 
 import { MODEL_CHAIN } from "./modelConfig";
 import { checkRateLimit } from "./rateLimiter";
 import { retrieveContext } from "./knowledge/retrieveContext";
+import { buildStubPaymentRequirements, buildStubSettlement } from "./x402Stub";
 
 export interface Env {
   /** Cloudflare Worker secret — set via `wrangler secret put OPENROUTER_API_KEY`, never a var. */
@@ -227,7 +235,84 @@ async function handleRetrieveContext(request: Request, env: Env, cors: HeadersIn
   );
 }
 
+// ─── x402 (Faz 3) — ⚠️ STUB, see x402Stub.ts ⚠️ ─────────────────────
+//
+// These two routes exist so the extension's auto-pay flow can be built and tested end-to-end
+// before a real x402 facilitator integration exists. Every response comes straight out of
+// x402Stub.ts's canned data — no resource server or facilitator is ever contacted from here.
+// The real integration (a later Faz 3 turn) replaces both handler bodies; the request/response
+// SHAPES below are meant to already match what that real integration will need, so extension
+// code written against this stub keeps working once it's swapped for the real thing.
+
+interface X402PaymentRequiredRequestBody {
+  resource: string;
+}
+
+function parseX402PaymentRequiredBody(raw: unknown): X402PaymentRequiredRequestBody {
+  if (typeof raw !== "object" || raw === null || typeof (raw as { resource?: unknown }).resource !== "string" || !(raw as { resource: string }).resource.trim()) {
+    throw new Error('"resource" must be a non-empty string.');
+  }
+  return { resource: (raw as { resource: string }).resource };
+}
+
+/**
+ * STUB: pretends to have just relayed a request to a paid resource server and received a real
+ * HTTP 402 back. Always returns the same canned payment requirements — see x402Stub.ts.
+ */
+async function handleX402PaymentRequired(request: Request, cors: HeadersInit): Promise<Response> {
+  let body: X402PaymentRequiredRequestBody;
+  try {
+    body = parseX402PaymentRequiredBody(await request.json());
+  } catch (err) {
+    return jsonResponse({ error: err instanceof Error ? err.message : "Invalid request body." }, 400, cors);
+  }
+
+  return jsonResponse(buildStubPaymentRequirements(body.resource), 402, cors);
+}
+
+interface X402SettleRequestBody {
+  resource: string;
+  paymentPayload: unknown;
+}
+
+function parseX402SettleBody(raw: unknown): X402SettleRequestBody {
+  if (typeof raw !== "object" || raw === null) {
+    throw new Error("Request body must be a JSON object.");
+  }
+  const body = raw as Record<string, unknown>;
+  if (typeof body.resource !== "string" || !body.resource.trim()) {
+    throw new Error('"resource" must be a non-empty string.');
+  }
+  if (!("paymentPayload" in body)) {
+    throw new Error('"paymentPayload" is required.');
+  }
+  return { resource: body.resource, paymentPayload: body.paymentPayload };
+}
+
+/**
+ * STUB: pretends to have just verified a signed payment with a real x402 facilitator and
+ * gotten back a successful settlement. Never checks the signature, never contacts a
+ * facilitator, never touches a chain — see x402Stub.ts.
+ */
+async function handleX402Settle(request: Request, cors: HeadersInit): Promise<Response> {
+  let body: X402SettleRequestBody;
+  try {
+    body = parseX402SettleBody(await request.json());
+  } catch (err) {
+    return jsonResponse({ error: err instanceof Error ? err.message : "Invalid request body." }, 400, cors);
+  }
+
+  return jsonResponse(buildStubSettlement(body.resource), 200, cors);
+}
+
 // ─── Worker entrypoint ──────────────────────────────────────────────
+
+const KNOWN_PATHS = new Set([
+  "/agent/chat",
+  "/agent/retrieve-context",
+  "/agent/x402/payment-required",
+  "/agent/x402/settle",
+]);
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -241,7 +326,7 @@ export default {
       return new Response(null, { status: cors ? 204 : 403, headers: cors ?? undefined });
     }
 
-    if (request.method !== "POST" || (url.pathname !== "/agent/chat" && url.pathname !== "/agent/retrieve-context")) {
+    if (request.method !== "POST" || !KNOWN_PATHS.has(url.pathname)) {
       return jsonResponse({ error: "Not found." }, 404, cors ?? undefined);
     }
 
@@ -262,6 +347,14 @@ export default {
 
     if (url.pathname === "/agent/retrieve-context") {
       return handleRetrieveContext(request, env, cors);
+    }
+
+    if (url.pathname === "/agent/x402/payment-required") {
+      return handleX402PaymentRequired(request, cors);
+    }
+
+    if (url.pathname === "/agent/x402/settle") {
+      return handleX402Settle(request, cors);
     }
 
     if (!env.OPENROUTER_API_KEY) {

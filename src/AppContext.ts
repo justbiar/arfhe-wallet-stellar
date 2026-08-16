@@ -13,6 +13,8 @@ import SpamFilter from "./backend/SpamFilter.js";
 import PendingClaimQueue from "./backend/PendingClaimQueue.js";
 import SitePermissionService from "./backend/SitePermissionService.js";
 import { configureAgentToolRunner } from "./backend/AgentToolRunner.js";
+import { NetworkId } from "./backend/NetworkTypes.js";
+import { CONTRACTS_BASE_SEPOLIA } from "./components/panels/shared.js";
 
 export const WalletContext = createContext<AppContext | undefined>(undefined);
 
@@ -90,6 +92,17 @@ export class AppContext {
       getAccount: (address) => {
         const target = address.toLowerCase();
         return this.accountManager.GetAll().find((a) => a.GetAddress()?.toLowerCase() === target);
+      },
+      // x402 (Faz 3) only targets Base Sepolia for now — any other network means "not
+      // supported here", handled by AgentToolRunner as a normal tool error, not a crash.
+      getUsdcTokenIdentity: (networkId) => {
+        if (Number(networkId) !== NetworkId.Base_Sepolia) return undefined;
+        return {
+          address: CONTRACTS_BASE_SEPOLIA.USDC.public,
+          name: "USD Coin",
+          version: "2",
+          chainId: NetworkId.Base_Sepolia,
+        };
       },
     });
   }

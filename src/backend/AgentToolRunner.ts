@@ -36,11 +36,21 @@ import {
   AgentPolicyEngine,
   READ_ONLY_TOOLS,
   PROPOSAL_TOOLS,
+  X402_TOOLS,
   type ReadOnlyTool,
   type ProposalTool,
   type AgentToolArgs,
 } from "./AgentPolicyEngine.js";
 import type { ShieldedHolding, UnshieldClaim } from "../types/fhe.js";
+import { X402SettingsService } from "./X402SettingsService.js";
+import { X402SpendingLedger } from "./X402SpendingLedger.js";
+import { fetchX402PaymentRequirement, settleX402Payment, type X402PaymentRequirement } from "./X402ProxyClient.js";
+import {
+  signTransferWithAuthorization,
+  generateAuthorizationNonce,
+  type Eip3009Authorization,
+  type Eip3009TokenIdentity,
+} from "./X402PaymentService.js";
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -74,6 +84,15 @@ export interface AgentToolRunnerDeps {
    * gracefully rather than throwing.
    */
   getAccount(address: string): Account | undefined;
+  /**
+   * Resolves the USDC contract's EIP-712 domain identity for x402 payments on the given
+   * networkId, or undefined if x402 isn't supported there yet (Faz 3 only targets Base
+   * Sepolia — see AppContext.ts's wiring). Deliberately a caller-supplied resolver rather than
+   * this module importing contract addresses itself: those addresses live in
+   * components/panels/shared.tsx (CONTRACTS_BASE_SEPOLIA), and backend/ modules never import
+   * from components/ — same layering AgentProposalHistory.ts's docs already call out.
+   */
+  getUsdcTokenIdentity(networkId: string): Eip3009TokenIdentity | undefined;
 }
 
 /** Raised for a malformed/unsupported tool_call argument — caught alongside Network.ts errors below. */
@@ -89,6 +108,8 @@ export function configureAgentToolRunner(newDeps: AgentToolRunnerDeps): void {
 }
 
 const policyEngine = new AgentPolicyEngine();
+/** x402 spending record — chrome.storage.local-backed, see X402SpendingLedger.ts's own docs for why. */
+const spendingLedger = new X402SpendingLedger();
 
 /** Test-only escape hatch to reset configuration (and accumulated policy state) between test cases. */
 export function resetAgentToolRunner(): void {
@@ -438,6 +459,129 @@ async function prepareProposal(
   }
 }
 
+// ─── x402 payment tool (Faz 3) ───────────────────────────────────────
+//
+// pay_for_resource is NOT a PROPOSAL_TOOLS call — see AgentPolicyEngine.X402_TOOLS's own docs.
+// Its confirmation decision comes from evaluateX402Payment() (budget/ceiling check), not
+// evaluate() (balance-ratio/session-count). Two shapes can come back:
+//   - requiresConfirmation:true — a ConfirmationCard-compatible ProposalPreview (see below),
+//     same as any propose_* tool. No signing has happened.
+//   - autoPaid:true — the payment already happened (signed + settled + recorded to the
+//     ledger) before this function returns. The model/agent never decided this; it only sees
+//     the outcome, same as it only ever sees a settled propose_send's outcome after the fact.
+
+/** USDC has 6 decimals — every amount x402 moves is expressed in USD 1:1 with USDC. */
+const USDC_ATOMIC_UNITS_PER_USD = 1_000_000;
+
+function amountUsdFromAtomicUnits(atomic: string): number {
+  const value = Number(atomic);
+  if (!Number.isFinite(value)) return NaN;
+  return value / USDC_ATOMIC_UNITS_PER_USD;
+}
+
+/**
+ * A structurally-honest, NOT eth_call-simulated SimResult for the ConfirmationCard preview:
+ * the balanceChange really is what will happen (USDC leaves `account` to `requirement.payTo`)
+ * even though — unlike propose_send/shield/unshield — no TransactionSimulator eth_call ever
+ * ran to produce it (there's nothing to eth_call: EIP-3009 is an off-chain signature, not a
+ * transaction). The warning makes that distinction explicit to the user rather than letting the
+ * reused shape imply a simulation that didn't happen.
+ */
+function buildX402SimResult(requirement: X402PaymentRequirement, amountUsd: number, account: string): SimResult {
+  return {
+    success: true,
+    balanceChanges: [
+      {
+        tokenAddress: requirement.asset,
+        symbol: "USDC",
+        decimals: 6,
+        amountWei: requirement.maxAmountRequired,
+        amountFormatted: amountUsd.toFixed(2),
+        from: account,
+        to: requirement.payTo,
+        type: "ERC20",
+      },
+    ],
+    warnings: [
+      `Bu bir x402 mikro-ödeme yetkilendirmesidir ("${requirement.resource}" için) — normal bir işlem ` +
+        "simülasyonu değildir. EIP-3009 ile imzalanır, gaz ücreti alınmaz; bir facilitator imzayı " +
+        "zincire gönderip ödemeyi sonuçlandırır.",
+    ],
+    riskLevel: "LOW",
+    operationType: "transfer",
+  };
+}
+
+async function handlePayForResource(
+  context: ToolExecutionContext,
+  args: Record<string, unknown>
+): Promise<unknown> {
+  const resource = requireNonEmptyString(args, "resource");
+
+  const requirement = await fetchX402PaymentRequirement(resource);
+  const amountUsd = amountUsdFromAtomicUnits(requirement.maxAmountRequired);
+  if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+    throw new ToolArgumentError("x402 proxy geçersiz bir ödeme tutarı döndürdü.");
+  }
+
+  const settings = await X402SettingsService.getSettings();
+  const spentToday = await spendingLedger.getSpentToday(context.account);
+  const decision = policyEngine.evaluateX402Payment(amountUsd, settings, spentToday);
+
+  if (!decision.allowed) {
+    throw new ToolArgumentError(decision.reason);
+  }
+
+  if (decision.requiresConfirmation) {
+    return {
+      requiresConfirmation: true,
+      toolName: "pay_for_resource",
+      originalArgs: args,
+      simulation: buildX402SimResult(requirement, amountUsd, context.account),
+    };
+  }
+
+  // ── Auto-pay: no ConfirmationCard, no human in the loop — evaluateX402Payment() already
+  //    established this is within budget. Sign, settle, record; only then return. ──
+  const tokenIdentity = deps!.getUsdcTokenIdentity(context.networkId);
+  if (!tokenIdentity) {
+    throw new ToolArgumentError(`x402 ödemeleri bu ağda ("${context.networkId}") desteklenmiyor.`);
+  }
+  const account = requireAccount(context);
+  if (!account.ethers_wallet) {
+    throw new ToolArgumentError("Hesap kilitli veya imza için kullanılamıyor.");
+  }
+
+  const authorization: Eip3009Authorization = {
+    from: context.account,
+    to: requirement.payTo,
+    value: requirement.maxAmountRequired,
+    validAfter: 0,
+    validBefore: Math.floor(Date.now() / 1000) + requirement.maxTimeoutSeconds,
+    nonce: generateAuthorizationNonce(),
+  };
+
+  const signed = await signTransferWithAuthorization(account.ethers_wallet, tokenIdentity, authorization);
+  const settlement = await settleX402Payment(resource, signed);
+
+  await spendingLedger.recordPayment({
+    id: settlement.txHash,
+    accountAddress: context.account,
+    amountUsd,
+    service: resource,
+    txHash: settlement.txHash,
+  });
+
+  return {
+    autoPaid: true,
+    toolName: "pay_for_resource",
+    resource,
+    amountUsd,
+    txHash: settlement.txHash,
+    remainingBudgetUsd: decision.remainingBudgetUsd,
+  };
+}
+
 // ─── Entry point ────────────────────────────────────────────────────
 
 function errorMessage(err: unknown): string {
@@ -496,6 +640,12 @@ export async function executeToolCall(
       if (!decision.allowed) return { error: decision.reason };
 
       return { result: await prepared.buildPreview() };
+    }
+
+    // ── x402 payment tool: its own decision path (evaluateX402Payment), not evaluate() —
+    //    see handlePayForResource's own docs for why this is a separate branch entirely. ──
+    if ((X402_TOOLS as readonly string[]).includes(toolName)) {
+      return { result: await handlePayForResource(context, args) };
     }
 
     // Forbidden or genuinely unrecognized — evaluate() supplies the precise reason

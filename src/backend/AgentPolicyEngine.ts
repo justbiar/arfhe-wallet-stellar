@@ -78,10 +78,22 @@ export const FORBIDDEN_TOOLS = [
   "remove_account",
 ] as const;
 
+/**
+ * Tools that trigger an x402 micro-payment (Faz 3). Deliberately its own list, not folded into
+ * PROPOSAL_TOOLS: these never go through `evaluate()` — the auto-pay/confirm decision is
+ * `evaluateX402Payment()`'s job, using a budget/ceiling check that has nothing to do with
+ * `evaluate()`'s balance-ratio or session-count logic (a payment here might execute with NO
+ * confirmation at all, which no PROPOSAL_TOOLS call is ever allowed to do). Kept as a named
+ * list purely so callers (AgentToolRunner, agentTools.ts) classify a tool name by referencing
+ * this constant rather than hardcoding "pay_for_resource" as a string literal more than once.
+ */
+export const X402_TOOLS = ["pay_for_resource"] as const;
+
 export type ReadOnlyTool = (typeof READ_ONLY_TOOLS)[number];
 export type ProposalTool = (typeof PROPOSAL_TOOLS)[number];
 export type ForbiddenTool = (typeof FORBIDDEN_TOOLS)[number];
-export type KnownTool = ReadOnlyTool | ProposalTool | ForbiddenTool;
+export type X402Tool = (typeof X402_TOOLS)[number];
+export type KnownTool = ReadOnlyTool | ProposalTool | ForbiddenTool | X402Tool;
 
 export interface AgentPolicyConfig {
   /** Max fraction of the relevant balance a single proposal may move. Default 0.5 (50%). */
@@ -94,6 +106,42 @@ export const DEFAULT_AGENT_POLICY_CONFIG: AgentPolicyConfig = {
   maxProposalRatio: 0.5,
   maxProposalsPerSession: 10,
 };
+
+/**
+ * x402 micro-payment hard ceilings (Faz 3).
+ *
+ * These are the ONE place the absolute limit is defined — X402SettingsService clamps whatever
+ * the user configures against these before persisting, and (once written) AgentPolicyEngine's
+ * evaluateX402Payment() clamps again at evaluation time, so a lowered ceiling in a future
+ * release retroactively tightens even a setting saved under a higher one. No user-supplied
+ * number, however it reached storage, can ever push a decision past these values — unlike
+ * `maxProposalRatio`/`maxProposalsPerSession` above (session-only guardrails on a flow that
+ * always ends in a human clicking Approve), x402 payments settle with NO confirmation dialog
+ * when they're within budget, so the ceiling here is the last line of defense, not a first one.
+ *
+ * Amounts are USD, 1:1 with the USDC the "exact" x402 scheme moves — deliberately conservative
+ * for a first integration (micro-payments, not meant to cover a real invoice), tunable later
+ * once the facilitator integration (Faz 3, sonraki tur) has real-world usage to calibrate against.
+ */
+export interface X402AbsoluteCaps {
+  /** Hard ceiling on a single x402 payment, regardless of what the user configured. */
+  maxPerTransactionUsd: number;
+  /** Hard ceiling on total x402 spend within one rolling day, regardless of what the user configured. */
+  maxDailyBudgetUsd: number;
+}
+
+export const X402_ABSOLUTE_CAPS: X402AbsoluteCaps = {
+  maxPerTransactionUsd: 1,
+  maxDailyBudgetUsd: 10,
+};
+
+/**
+ * Tolerance for USD floating-point comparisons in evaluateX402Payment() — far below the
+ * smallest amount x402 actually moves (fractions of a cent), so it only absorbs IEEE 754
+ * representation error at an exact budget boundary (e.g. `5 - 4.95 !== 0.05`), never a real
+ * over-budget amount.
+ */
+const FLOAT_EPSILON_USD = 1e-9;
 
 /** Arguments a proposed tool call may carry. Only the fields the engine reasons about. */
 export interface AgentToolArgs {
@@ -114,7 +162,11 @@ export type PolicyDecisionReasonCode =
   | "exceeds_balance_ratio"
   | "session_proposal_limit_reached"
   | "allowed_read_only"
-  | "allowed_proposal";
+  | "allowed_proposal"
+  | "x402_disabled"
+  | "x402_invalid_amount"
+  | "x402_auto_paid"
+  | "x402_requires_confirmation";
 
 export interface PolicyDecision {
   allowed: boolean;
@@ -122,6 +174,27 @@ export interface PolicyDecision {
   requiresConfirmation: boolean;
   reasonCode: PolicyDecisionReasonCode;
   reason: string;
+  /**
+   * Set only by evaluateX402Payment(): budget left for the rest of the day AFTER this payment,
+   * using the same (re-clamped) daily cap the decision itself was made against. The auto-paid
+   * informational card (Faz 3, later step) reads this to show "kalan bütçe" without re-deriving
+   * it from settings + ledger a second time.
+   */
+  remainingBudgetUsd?: number;
+}
+
+/**
+ * Structurally compatible with X402Settings (X402SettingsService.ts) — redeclared rather than
+ * imported, same reasoning as AgentProposalHistory.ts's ResolvedProposalOutcome: this module
+ * must not gain a dependency on a settings-storage module, and the caller is free to hand in a
+ * value that did NOT come from X402SettingsService.getSettings() (a stub in a test, or — the
+ * exact case evaluateX402Payment() has to defend against — some future code path that read
+ * chrome.storage.local directly and skipped X402SettingsService's own clamp).
+ */
+export interface X402PaymentSettings {
+  enabled: boolean;
+  perTransactionCapUsd: number;
+  dailyBudgetCapUsd: number;
 }
 
 function isReadOnlyTool(toolName: string): toolName is ReadOnlyTool {
@@ -222,6 +295,86 @@ export class AgentPolicyEngine {
       requiresConfirmation: true,
       reasonCode: "allowed_proposal",
       reason: `"${toolName}" requires user confirmation before it can execute.`,
+    };
+  }
+
+  /**
+   * Evaluate one x402 micro-payment. Unlike evaluate() above, "allowed" here does NOT always
+   * mean "the model may propose this and a human still has to click Approve" — when the
+   * payment is fully within budget, `requiresConfirmation` comes back false and the caller is
+   * meant to pay immediately, with no ConfirmationCard at all (see Faz 3's design: the model
+   * never decides this, and neither does the user for an in-budget payment — the code does).
+   * A payment outside the user's own configured budget still comes back `allowed: true`
+   * (`requiresConfirmation: true`) and falls through to the ordinary ConfirmationCard flow,
+   * same as any PROPOSAL_TOOLS proposal — being over budget for auto-pay doesn't mean the user
+   * can never approve it themselves, it only means the code won't do it unattended.
+   *
+   * `settings` and `spentTodayUsd` are supplied by the caller (X402SettingsService.getSettings()
+   * / X402SpendingLedger.getSpentToday()) rather than read from storage here — same pattern as
+   * `evaluate()`'s `walletContext` parameter: this class does no I/O of its own, which is also
+   * what keeps it synchronous and trivially testable.
+   *
+   * SECURITY: `settings.perTransactionCapUsd`/`dailyBudgetCapUsd` are clamped AGAIN here against
+   * X402_ABSOLUTE_CAPS, even though X402SettingsService already clamps before persisting. This
+   * is deliberate defense-in-depth, not redundancy — if `settings` ever arrives here having
+   * bypassed that service (a bug, a future code path that writes `arfhe_x402_settings` directly,
+   * a manually edited storage blob), the `Math.min` below still makes it structurally impossible
+   * for this method to return an auto-pay (`requiresConfirmation: false`) decision for an amount
+   * exceeding the hard ceiling — there is no code path from "amount above X402_ABSOLUTE_CAPS" to
+   * "allowed with no confirmation" that skips this clamp, because auto-pay eligibility is checked
+   * against the clamped value, never against `settings`'s raw one.
+   */
+  evaluateX402Payment(amountUsd: number, settings: X402PaymentSettings, spentTodayUsd: number): PolicyDecision {
+    if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+      return {
+        allowed: false,
+        requiresConfirmation: false,
+        reasonCode: "x402_invalid_amount",
+        reason: `x402 payment amount must be a positive number (got ${amountUsd}).`,
+      };
+    }
+
+    if (!settings.enabled) {
+      return {
+        allowed: false,
+        requiresConfirmation: false,
+        reasonCode: "x402_disabled",
+        reason: "x402 payments are disabled in settings.",
+      };
+    }
+
+    // Defense-in-depth clamp — see this method's own JSDoc. Never trust settings' raw numbers,
+    // however they got here.
+    const effectivePerTxCap = Math.min(settings.perTransactionCapUsd, X402_ABSOLUTE_CAPS.maxPerTransactionUsd);
+    const effectiveDailyBudget = Math.min(settings.dailyBudgetCapUsd, X402_ABSOLUTE_CAPS.maxDailyBudgetUsd);
+    const remainingBudgetBeforePayment = Math.max(0, effectiveDailyBudget - spentTodayUsd);
+
+    // USD amounts arrive as floats (e.g. a daily budget of 5 minus 4.95 already spent isn't
+    // exactly 0.05 in IEEE 754), so an at-the-limit payment must not get bounced by rounding
+    // noise a fraction of a cent below the true boundary. FLOAT_EPSILON is far smaller than
+    // any amount x402 actually moves, so it can never let a genuinely-over-budget payment
+    // through — it only forgives binary floating-point representation error at the boundary.
+    const withinPerTxCap = amountUsd <= effectivePerTxCap + FLOAT_EPSILON_USD;
+    const withinDailyBudget = amountUsd <= remainingBudgetBeforePayment + FLOAT_EPSILON_USD;
+
+    if (withinPerTxCap && withinDailyBudget) {
+      return {
+        allowed: true,
+        requiresConfirmation: false,
+        reasonCode: "x402_auto_paid",
+        reason: `Payment of $${amountUsd} is within the per-payment cap ($${effectivePerTxCap}) and remaining daily budget ($${remainingBudgetBeforePayment}) — paid automatically.`,
+        remainingBudgetUsd: Math.max(0, remainingBudgetBeforePayment - amountUsd),
+      };
+    }
+
+    return {
+      allowed: true,
+      requiresConfirmation: true,
+      reasonCode: "x402_requires_confirmation",
+      reason: withinPerTxCap
+        ? `Payment of $${amountUsd} would exceed today's remaining budget ($${remainingBudgetBeforePayment}) — requires user confirmation.`
+        : `Payment of $${amountUsd} exceeds the per-payment cap ($${effectivePerTxCap}) — requires user confirmation.`,
+      remainingBudgetUsd: remainingBudgetBeforePayment,
     };
   }
 }

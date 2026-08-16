@@ -1,324 +1,307 @@
 # ArfheWallet — AI Agent Entegrasyonu: Bağlam Dosyası
 
 > Devir teslim / hatırlatma dosyası. Bir sonraki oturumda buradan devam edilecek.
-> Son güncelleme: 2026-08-12 (504 test yeşil, build temiz; Sepolia testnet üzerinde
-> gerçek uçtan uca onay testi, AgentChatPanel chat history persistence fix'i,
-> backend-proxy'nin non-JSON upstream body fix'i, ConfirmationCard'ın aktif hesap
-> değişiminde otomatik iptal fix'i, hesap-bazlı sohbet/öneri geçmişi ayrımı ve
-> agent'a "Arfio" kimliği tamamlandı — bkz. bölüm 3, 8-9).
+> Son güncelleme: 2026-08-16 (647 test yeşil; Faz 2 RAG tamamlandı, rewrite-omer
+> merge edildi, tool-ismi sızıntısı + propose_send halüsinasyon bug'ı + dekont UI
+> yeniden tasarımı + Alchemy multichain key sorunu çözüldü, Faz 3 (x402) ilk
+> entegrasyon turu devam ediyor — bkz. bölüm 3, 5, 10-13).
 
 ## 1. Genel Amaç
 
 ArfheWallet'a (FHE tabanlı Chrome extension cüzdan) AI agent entegrasyonu. Kullanıcı
 sohbet ederek bakiyesini sorabilir, işlem önerisi (send/shield/unshield) alabilir,
 onaylarsa gerçek işlem atılır. LLM sağlayıcısı **OpenRouter**, yalnızca ücretsiz
-modeller kullanılıyor — bütçe yok.
+modeller kullanılıyor — bütçe yok. Ajanın adı **Arfio**.
 
-## 2. Mimari Özet
+## 2. Mimari Özet (güncel)
 
 ```
 Extension (AgentChatPanel)
   → AgentOrchestrator
+    → [RAG: retrieve-context, turn başına 1 kez]
     → Backend Proxy (Cloudflare Worker, backend-proxy/)
-      → OpenRouter
+      → OpenRouter (model fallback zinciri)
+      → Workers AI (embedding, RAG için)
+      → [x402: /agent/x402/payment-required, /agent/x402/settle — şu an STUB]
         → tool_calls
           → AgentToolRunner
-            → AgentPolicyEngine
+            → AgentPolicyEngine (propose_* onay kararı + x402 bütçe kararı)
             → Network.ts / TransactionSimulator
-          → ConfirmationCard
-            → gerçek imzalama (SendPanel/ShieldPanel akışıyla aynı Network.ts fonksiyonları)
+            → X402PaymentService (EIP-3009 imza) / X402SpendingLedger
+          → ConfirmationCard (onStatusChange: pending|rejected|confirmed|failed)
+            → gerçek imzalama (Network.ts fonksiyonları)
+            → TransactionResultCard (dekont tasarımı, gerçek zincir verisinden)
 ```
 
 ## 3. Tamamlanan Fazlar
 
 - **Faz 0** — `AgentPolicyEngine.ts`: forbidden tools listesi, öneri/bakiye ratio cap,
   oturum başına öneri sayısı cap.
-- **Faz 1a** — Read-only tool'lar (`get_balance`, `get_shielded_balance`,
-  `get_shielded_portfolio`, `get_pending_claims`). `backend-proxy/` kuruldu ve
-  OpenRouter'a bağlandı. Eski `AgentService.ts`/`Agent.tsx` (Biar'ın sistemi) kaldırılıp
-  yeni sistemle değiştirildi.
-- **Faz 1b** — Proposal tool'lar (`propose_send`, `propose_shield`, `propose_unshield`),
-  `ConfirmationCard`, `AgentChatPanel`'e tam entegrasyon (kart render, onay/red akışı,
-  input kilidi, tek seferde tek kart garantisi).
-- **Faz 1c** — UX/hesap-ayrımı geçişi: chat history + Agent Geçmişi artık hesap bazlı
-  (bkz. bölüm 9), "Yeni Sohbet" butonu, hazır soru butonları, agent'a "Arfio" kimliği
-  (sistem promptu + UI metinleri + 🤖 emoji avatar — bkz. bölüm 4).
+- **Faz 1a/1b/1c** — Read-only + proposal tool'lar, `ConfirmationCard`, hesap-bazlı
+  geçmiş ayrımı, "Arfio" kimliği. (Detaylar bölüm 9-13'te, tarihsel.)
+- **Faz 2 (RAG)** — Tamamlandı. `FHE_COMPLETE_GUIDE.md`'den 6 kavram-bazlı chunk
+  çıkarılıp `bge-m3` ile embed edildi (`backend-proxy/src/knowledge/`), brute-force
+  cosine similarity (Vectorize gerekmedi, 6 vektör için gereksiz). Eşik 0.42, gerçek
+  Türkçe sorgularla kalibre edildi (6 alakalı sorguda 0.42-0.62, 2 alakasız kontrolde
+  en yüksek 0.374 — net ayrım). `AgentOrchestrator.runAgentTurn` turn başına bir kez
+  `/agent/retrieve-context` çağırıyor, dönen chunk'ları statik sistem promptunun
+  ardından ikinci bir system mesajı olarak ekliyor. Retrieval başarısız olursa
+  (5xx/network hatası) sohbet context'siz devam ediyor, hiçbir zaman throw etmiyor.
+  Prod'a deploy edildi: `arfhewallet-agent-proxy.arfhewallet.workers.dev`.
+- **rewrite-omer merge** — Omer'in UI/swap/güvenlik değişiklikleri (yeni Settings
+  sayfaları, SwapService, HiddenTokens, ArfTheme vb.) `mustafa` branch'ine merge
+  edildi (commit `22a90f2`). Agent/RAG dosyaları çakışmadan korundu. Detaylar
+  bölüm 10'da.
 
 ## 4. Önemli Teknik Kararlar
 
 - **Agent ASLA imzalama/gönderme yapmaz.** Sadece `ConfirmationCard`'daki
-  `handleApprove`, gerçek `Network.ts` fonksiyonlarını (`sendTransaction`,
-  `shieldNative`, `unshieldAndClaim`) çağırır. `AgentToolRunner`/`AgentOrchestrator`
-  yalnızca önizleme üretir.
-- **Model fallback zinciri** (`backend-proxy/src/modelConfig.ts`):
-  `openrouter/free` → `nvidia/nemotron-3-ultra-550b-a55b:free` →
-  `google/gemma-4-31b-it:free`. Ücretsiz model listesi rotasyona tabi; model
-  404/429/5xx dönerse otomatik sıradakine geçilir.
+  `handleApprove`, gerçek `Network.ts` fonksiyonlarını çağırır.
+- **Agent asla kendi iç mekanizmasını (tool isimleri, "X aracını çağırıyorum" gibi
+  mekanik ifadeler) kullanıcıya göstermez** — bkz. bölüm 11.
+- **`ConfirmationCard` onay/red/hata durumları tek bir `onStatusChange` union'ından
+  geçer** (`pending | rejected | confirmed | failed`) — üç ayrı callback yerine tek
+  callback, yeni bir durum eklemek bu switch'e girmek zorunda, unutma riski
+  yapısal olarak kapatıldı. Bkz. bölüm 12.
+- **İşlem sonucu asla modelin serbest metninden gelmez** — `TransactionResultCard`
+  gerçek `Network.ts`/ledger verisinden render edilir, model bu veriyi üretmez,
+  sadece bilgilendirilir. Bkz. bölüm 12.
+- **Model fallback zinciri**: `openrouter/free` kendi otomatik router'ıyla geniş bir
+  ücretsiz model havuzundan seçim yapıyor — `modelConfig.ts`'deki isimlendirilmiş
+  fallback'ler (nemotron, gemma) pratikte nadiren devreye giriyor. Fallback sırasını
+  değiştirmek gerçek modeli kontrol etmiyor.
 - **Adresler `ConfirmationCard`'da onay anında yeniden çözülür** — dondurulmuş preview
-  verisine güvenilmez (wrapper/alıcı adresi canlı zincir durumundan taze okunur).
-- **Arbitrary ERC-20 sembol desteği proposal tool'larda yok** — symbol→contract-address
-  registry'ye (TokenCache) erişim yok, sadece native token destekleniyor.
+  verisine güvenilmez. x402 ödeme gereksinimi de aynı ilkeyle onay anında proxy'den
+  yeniden çekiliyor.
+- **x402 mimarisi**: HTTP 402 alışverişi + facilitator doğrulaması backend-proxy'de
+  (extension'ın gelişigüzel URL'lere fetch atmasını önlemek için — SSRF riski).
+  İmzalama (EIP-3009, gassiz) kesinlikle extension'da. Bütçe kararını `model` değil
+  `AgentPolicyEngine` verir. Bkz. bölüm 13.
 
 ## 5. Henüz Yapılmadı / Sıradaki Adımlar
 
-- **Faz 2**: RAG eğitim katmanı — `FHE_COMPLETE_GUIDE.md`/README'den statik sistem
-  promptu yerine gerçek retrieval.
-- **Faz 3**: x402 mikro-ödemeler (opsiyonel, uzak gelecek).
-- **Faz 4**: MCP uyumluluğu (opsiyonel).
-- Model çıktı kalitesi sorunu henüz çözülmedi — bkz. bölüm 9.
+- **Faz 3 (x402)**: İlk tur (5 izole parça) + entegrasyonun bir kısmı tamamlandı.
+  Kalan: `AgentOrchestrator` tool-loop'una `pay_for_resource`'u tanıtmak (koşullu
+  döngü kırma), `X402PaymentCard` UI bileşeni, uçtan uca entegrasyon testleri,
+  gerçek facilitator entegrasyonu (şu an stub). Bkz. bölüm 13 — **sıradaki oturum
+  buradan devam etmeli.**
+- **Faz 4**: MCP uyumluluğu (opsiyonel, uzak gelecek, henüz başlanmadı).
+- **İngilizce başlıklar** (`TransactionResultCard`'da "Transfer successful" gibi
+  bazı kalıntılar olabilir, son elle testte büyük ölçüde düzeltildi ama tam
+  taranmadı) — küçük, ertelenebilir bir temizlik.
+- **GitHub Dependabot uyarısı**: merge sonrası push'ta "113 vulnerabilities (1
+  critical, 48 high, 55 moderate, 9 low)" bildirimi geldi, henüz incelenmedi.
+- **Wrangler güncel değil** (3.114.17, 4.x mevcut) — kritik hata riski uyarısı var,
+  güncellenmedi.
 
 ## 6. Geliştirme Ortamı Notları
 
 - Backend proxy lokal test: `cd backend-proxy && pnpm exec wrangler dev`
-  (localhost:8787).
-- `.env`'de `VITE_AGENT_PROXY_URL=http://localhost:8787` tanımlı olmalı.
-- Extension'ı build etmek için: `pnpm build` (proje kökünde), sonra
-  `chrome://extensions/`'ta yenile.
-- Test cüzdanı ID: `ajfpejolnhgeflhgjmboikiffpdlhngi` (unpacked yükleme, kalıcı
-  olmayabilir).
+  (localhost:8787). Prod logları: `pnpm exec wrangler tail`.
+- **Mode-bazlı env dosyaları** (güncellendi): `.env.development`
+  (`VITE_AGENT_PROXY_URL=http://localhost:8787`) ve `.env.production`
+  (`VITE_AGENT_PROXY_URL=https://arfhewallet-agent-proxy.arfhewallet.workers.dev`).
+  `pnpm dev` → local, `pnpm build` → prod. Eski tek `.env`'deki `VITE_AGENT_PROXY_URL`
+  kaldırıldı. İkisi de secret içermiyor, commit edilebilir.
+- **Alchemy RPC key'leri** `.env`'de `VITE_ALCHEMY_*_API_KEY` olarak tanımlı — her
+  biri **tam URL** formatında olmalı (`https://{network}.g.alchemy.com/v2/{key}`),
+  sadece key değil. Alchemy artık multichain: tek key'i her ağın URL'sine uygun
+  şekilde yapıştırmak yeterli, ağ başına ayrı key gerekmiyor. `YOUR_ALCHEMY_KEY`
+  placeholder'ı kalan bir satır varsa o ağda 401 hatası alınır (bkz. bölüm 10).
+- Extension'ı build etmek için: `pnpm build` (proje kökünde, prod mode), sonra
+  `chrome://extensions/`'ta **tamamen kaldırıp yeniden yükle** (sadece reload değil)
+  — stale build/cache riskine karşı, özellikle büyük değişikliklerden sonra.
+  `rm -rf dist && pnpm build` ile temiz build almak tercih edilmeli.
 - OpenRouter key `.dev.vars`'ta (git'e girmez); production için
   `wrangler secret put OPENROUTER_API_KEY` gerekir.
+- `backend-proxy/package.json`'da hâlâ `test`/`test:run` scripti yok — testler
+  `pnpm exec vitest run` ile çalıştırılıyor.
 
 ## 7. Test Durumu
 
-504 test yeşil, `pnpm build` (vite, tip kontrolü dahil) temiz (bu commit itibarıyla).
-`backend-proxy/` ayrı bir paket — kendi test suite'i yok, `tsc --noEmit` (`npm run
-typecheck`) ile doğrulanıyor.
+**647 test yeşil** (kök proje, 35 dosya) + backend-proxy ayrı paket (kendi Vitest +
+`@cloudflare/vitest-pool-workers` suite'i, 30 test, 4 dosya — `pnpm exec vitest run`
+ile). `pnpm build` temiz.
 
-## 8. Sepolia Testnet Uçtan Uca Onay Testi (2026-08-12)
+## 8-9. (Tarihsel — Faz 0-1 hesap-ayrımı, Arfio kimliği, erken bug fix'leri)
 
-Backend proxy lokal (`wrangler dev`, localhost:8787) + build edilmiş extension
-(`ajfpejolnhgeflhgjmboikiffpdlhngi`, unpacked) ile gerçek Sepolia testnet üzerinde
-uçtan uca akış doğrulandı:
+Bkz. dosyanın önceki versiyonu / git geçmişi: hesap-bazlı chat/geçmiş ayrımı,
+`ConfirmationCard` stale-preview fix'i, ratio-cap sonrası boş ekran fix'i, chat
+history persistence (`chrome.storage.session`), backend-proxy non-JSON upstream
+body fix'i. Bu bölümler önceki `CONTEXT.md` sürümünde eksiksiz duruyor, yer
+kazanmak için burada özetlenmedi — gerekirse git log'dan `CONTEXT.md`'nin önceki
+halini çekmek yeterli.
 
-- **Read-only tool**: `get_balance` çağrısı doğru bakiyeyi döndürdü (0.05 ETH,
-  Google Cloud Web3 faucet'ten alındı).
-- **Proposal + onay + gerçek tx**: `propose_send` (0.001 ETH →ikinci test adresi)
-  ConfirmationCard'da doğru gönderen/alıcı/miktar/gas ile göründü; onaydan sonra
-  gerçek `Network.ts` `sendTransaction` çağrısı tetiklendi. Zincirde doğrulandı:
-  - Tx hash: `0xfcc1b3fa37899c83da132d03c2307420e966194f1273b2aac615fd82310b4bb2`
-  - Status: `0x1` (success), chainId `11155111` (Sepolia), block `11472598`,
-    gasUsed `21000`.
-  - Bakiye 0.05 → ~0.04898 ETH'ye düştü (miktar + gas ile tutarlı).
-- **AgentPolicyEngine ratio cap**: Kalan bakiyenin ~%82'sini (0.04 ETH / ~0.049 ETH,
-  `maxProposalRatio` varsayılanı %50'nin üzerinde) gönderme isteği reddedildi;
-  red mesajı kullanıcıya göründü ("%81.7'sini oluşturuyor... %50'den fazla gönderme
-  limitine takıldınız."). `exceeds_balance_ratio` kararının UI'a kadar doğru
-  ulaştığı doğrulandı (bkz. bölüm 9 — bu test sırasında bir UI bug'ı bulunup
-  düzeltildi).
+### Kısmen çözüldü → tamamen çözüldü: Model çıktı kalitesi sorunu
 
-## 9. Bilinen Sorunlar / Çözülenler
+Önceki sürümde "çözülmedi" olarak işaretlenmişti. Kök neden bulundu: `openrouter/free`
+auto-router'ı geniş bir model havuzundan seçim yapıyor, `MODEL_CHAIN`'deki
+isimlendirilmiş fallback'ler nadiren devreye giriyor — yani fallback sırasını
+değiştirmek gerçek modeli kontrol etmiyor. Asıl kaldıraç **sistem promptu** oldu.
+`internalLeakGuard.ts` eklendi: bilinen tool isimlerini + mekanik kalıpları tespit
+edip `console.warn` ile prod loglarına yazıyor (bloklamıyor, sadece izliyor).
 
-### Çözüldü: Hesap-bazlı ayrım eksikliği — sohbet/Agent Geçmişi tüm hesaplar arasında paylaşılıyordu, agent kimliksizdi
+## 10. rewrite-omer Merge (2026-08-14)
 
-**Bulundu:** `agent_chat_history` ve `agent_proposal_history` tek, hesaptan bağımsız
-bir liste olarak tutuluyordu — hesap değiştirmek chat'i/geçmişi hiç etkilemiyordu
-(hepsi karışık görünüyordu). Ayrıca agent'ın bir kimliği/ismi yoktu ("Wallet
-Assistant" + jenerik robot ikonu).
+Omer'in `rewrite-omer` branch'i (`f7ded2d` — "ui düzenlemeleri, swap backend
+düzenlenmesi, güvenlik düzeltmeleri") `mustafa` branch'ine merge edildi
+(commit `22a90f2`).
 
-**Mimari karar — state `pages/Agent.tsx`'e taşındı:** `usePersistedState`
-örnekleri birbiriyle senkron değil (her biri chrome.storage.session'ı yalnızca
-mount anında okuyor, yazmalar tek yönlü) — hem `AgentChatPanel` hem `Agent.tsx`
-aynı key için ayrı birer örnek tutsaydı, biri diğerinin yazdığını görmeden üstüne
-yazabilirdi (kaybolan güncelleme). Çözüm: `agent_chat_history`
-(`Record<accountAddress, ChatMessage[]>`) ve `agent_proposal_history`
-(`ProposalRecord[]`, her kayıtta `accountAddress` alanı) artık yalnızca
-`Agent.tsx`'te (`/agent` route'unun her zaman mount'lu olan üst bileşeni)
-tutuluyor; `AgentChatPanel`/`AgentProposalHistoryPanel` bunları prop olarak alıyor.
-Bu aynı zamanda hesap-değişimi orkestrasyonunun (aşağıda) hangi sekmede olursa
-olsun çalışmasını garanti ediyor — mantık `AgentChatPanel` içinde olsaydı,
-kullanıcı "Agent Geçmişi" sekmesindeyken hesap değiştirdiğinde hiç tetiklenmezdi.
+**Süreç:** `git merge origin/rewrite-omer --no-commit --no-ff` ile önce gözden
+geçirildi. `AgentOrchestrator.ts`, `AgentPolicyEngine.ts`, `AgentToolRunner.ts`,
+`ConfirmationCard.tsx`, `backend-proxy/` — hiçbiri çakışmadı, otomatik korundu
+(ortak atada bu dosyalar hiç yoktu, sadece `mustafa` tarafında eklenmişti). Eski
+bir kalıntı dosya (`AgentService.ts`, Biar'ın ilk agent denemesi) `rewrite-omer`'de
+hâlâ vardı ama `mustafa`'da zaten silinmişti — Git doğru şekilde "silinsin" dedi,
+kayıp değil.
 
-**Depolama şeması — neden `Record<address, ChatMessage[]>` (hesaba göre değişen
-bir storage key değil):** `usePersistedState`'in `useState` initializer'ı yalnızca
-ilk mount'ta çalışıyor — `agent_chat_history:<address>` gibi hesaba göre değişen
-bir key kullansaydık, hesap değiştiğinde bir an için eski hesabın mesajları
-ekranda kalır, async okuma bitince değişirdi ("flash of stale content"). Tek key
-altında tek bir map tutmak bunu tamamen ortadan kaldırdı — hesap değiştirmek artık
-senkron bir map indexleme.
+**Sonuç:** 504 → 541 test (omer'in yeni testleri dahil: `PhishingDetector`,
+`DomainResolver`, `SpamFilter`, `TokenCache` vb.), backend-proxy 19 test korunuyor.
+Chrome'da elle doğrulandı: Arfio, omer'in yeni Settings sayfalarıyla (`SettingsX402`
+hariç, o sonradan eklendi) birlikte sorunsuz çalışıyor.
 
-**Hesap değişimi orkestrasyonu (`Agent.tsx`, `previousAddressRef` ile):**
-1. OUTGOING hesabın bekleyen bir önerisi varsa (`findPendingConfirmation`, artık
-   `AgentProposalHistory.ts`'te — hem `AgentChatPanel` hem `Agent.tsx` kullanıyor)
-   otomatik iptal edilir: `settled`/`rejected` marker'ı yazılır, `ProposalRecord`
-   (`status: "user_cancelled"`, `reason: "Active account changed before approval"`
-   — `ConfirmationCard.tsx`'in kendi auto-cancel effect'iyle **aynı sabit metin**,
-   oradan export edildi: `ACCOUNT_CHANGED_REASON`) eklenir. `ConfirmationCard`'ın
-   kendi effect'i artık pratikte hiç tetiklenmiyor (hesap değişince
-   `conversationHistory` zaten aynı render'da yeni hesabınkine döndüğü için kart
-   unmount oluyor, re-render değil) ama kod hâlâ orada — zararsız defense-in-depth.
-2. INCOMING hesabın sohbetine bir sistem notu eklenir (`role:"system"`,
-   `AgentChatPanel.tsx`'te yeni bir `"divider"` `ChatItem` kind'i olarak render
-   edilir — modele de gönderiliyor, bilinçli bir basitlik tercihi, filtrelenmedi).
-3. `ToastProvider`'ın `useToast()`'u ile toast gösterilir (uygulama kökünde
-   render edildiği için hangi sekmede olunursa olsun görünür).
-Kilitli→açık geçişi (`undefined` → adres) ve ilk mount bilinçli olarak "gerçek
-hesap değişimi" sayılmıyor — bildirim/iptal tetiklenmiyor.
+**Yan not:** Push sırasında GitHub 113 Dependabot güvenlik uyarısı bildirdi
+(1 critical, 48 high) — henüz incelenmedi, bölüm 5'te açık madde.
 
-**Agent Geçmişi FIFO limiti artık hesap başına (global değil):**
-`appendProposalRecords` yalnızca eklenen kayıtların ait olduğu hesabı trim ediyor
-— az kullanılan bir hesaba geçip yeni bir öneri üretmek, yoğun kullanılan başka
-bir hesabın eski kayıtlarını artık silmiyor.
+## 11. Çözüldü: Tool ismi sızıntısı ("propose_send aracını çağırıyorum" gibi)
 
-**"Arfio" kimliği:** `AgentOrchestrator.buildSystemPrompt()` artık modele "Senin
-adın Arfio" diyor (bu, `backend-proxy/` değil `src/backend/` içinde — proxy sadece
-mesajları OpenRouter'a iletiyor, sistem promptunu extension oluşturuyor).
-`panelTitle`/`panelEmptyState`/`panelPlaceholder`/`panelThinking`/`panelNoAccount`
-Arfio'ya referans veriyor (en.json/tr.json). Gerçek bir illüstrasyon yok — 🤖 emoji
-geçici avatar olarak `AgentChatPanel.tsx`'te `AGENT_AVATAR` sabiti üzerinden
-kullanılıyor (boş ekran ikonu, mesaj/kart avatarları). Alt navigasyon barındaki
-"Agent" sekme etiketi de "Arfio" oldu (`agent.navTabLabel`) — bunu yaparken fark
-edildi: `ArfBottomBar.tsx` hiç i18n kullanmıyordu (Home/Explore/History etiketleri
-hâlâ düz İngilizce literal string), bu tek etiket için `useTranslation` eklendi,
-diğerleri bilinçli olarak dokunulmadan bırakıldı (kapsam dışı, ayrı bir iş).
+**Bulundu:** Elle testte model kullanıcıya "`propose_send` aracını çağırıyorum..."
+gibi iç mekanizma detayları söylüyordu. Güvenlik açığı değil ama ciddi bir UX
+sorunu.
 
-**Test:** `AgentProposalHistory.test.ts` (19), `AgentChatPanel.test.tsx` (20, artık
-prop-tabanlı bir test-harness'le), `AgentProposalHistoryPanel.test.tsx` (7, artık
-`records` prop'uyla, storage'a dokunmadan), yeni `pages/__tests__/Agent.test.tsx`
-(7 — hesap-değişim orkestrasyonu izole test ediliyor, `AgentChatPanel`/
-`AgentProposalHistoryPanel` mock'lanarak). `ArfBottomBar.tsx` için önceden test
-yoktu, hâlâ yok. 504 test yeşil, build temiz.
+**Fix:** `buildSystemPrompt()`'a genel bir kural eklendi: kullanıcıyla HER ZAMAN
+doğal dille konuş, hiçbir zaman fonksiyon/tool ismi, "X aracını çalıştırıyorum"
+gibi mekanik ifade, dosya/sınıf ismi kullanma — 3 kötü→iyi örnek çifti dahil, tüm
+cevap türlerini kapsayacak şekilde (sadece tool-call anları değil). Ayrıca
+`internalLeakGuard.ts` eklendi (bkz. bölüm 9) — izleme amaçlı, bloklamıyor.
 
-### Çözüldü: ConfirmationCard, aktif hesap değişince stale önizlemeyi onaylatabiliyordu
+## 12. Çözüldü: propose_send sonrası halüsinasyon (sahte "işlem gönderildi" mesajı + React batching sorunu)
 
-**Bulundu:** Sorulan bir soru üzerine kod incelemesiyle ortaya çıktı (henüz bir
-testte gözlemlenmiş bir bug değildi): `ConfirmationCard` kendi `useActiveAccount()`'ını
-çağırıyor, `AgentChatPanel`'inkinden bağımsız. Bir öneri kartı ekranda beklerken
-kullanıcı başka bir hesaba geçip sonra Approve'a basarsa, imzalama **yeni aktif
-hesapla** yapılıyordu — ama kartta gösterilen önizleme (simülasyon, risk seviyesi,
-to/amount) `AgentToolRunner`'ın **eski hesap** için ürettiği veriydi, yeniden simüle
-edilmiyordu. Güvenlik açığı değildi (gerçek `Network.ts` çağrıları hâlâ taze state
-okuyordu) ama yanlış hesap/bakiye varsayımıyla onaylamaya açık bir UX riski.
+Bu, üç ayrı ama zincirleme bug'dan oluşan bir seri halinde bulunup çözüldü. Özet:
 
-**Fix:** `ConfirmationCard.tsx`'e `originalAddressRef` eklendi — kartın hangi hesap
-için üretildiğini mount anında sabitliyor. İki katman koruma:
-- Bir `useEffect([activeAccount, cardPhase])`, yalnızca `cardPhase === "review"`
-  iken çalışıp güncel adresi `originalAddressRef`'le karşılaştırıyor; farklıysa
-  kart yeni bir `"cancelled"` faza geçiyor (Approve/Reject butonları otomatik
-  kayboluyor, zaten sadece `"review"`'de render ediliyorlardı) ve
-  `onResolved({status:"rejected", toolName, reason:"Active account changed before
-  approval"})` çağrılıyor.
-- `handleApprove`'un en başına aynı karşılaştırma eklendi (defense-in-depth) —
-  effect'in henüz yetişemediği bir race'i yakalamak için, imzalamaya geçmeden önce.
+**Bug A — Model halüsinasyonu:** `ConfirmationCard` hiç açılmadan/onaylanmadan,
+model kendiliğinden "işlem gönderildi, hash: 0x..." diyordu, hash sahte/geçersiz
+çıkıyordu (Etherscan'de "invalid txn hash"). **Kök neden:** Sistem promptu
+"sadece read-only araçlar çağırabilirsin" diyordu ama tool şemasında `propose_*`
+araçları vardı ve model bunları çağırabiliyordu — çelişkili talimat. Ayrıca
+`runAgentTurn`'ün tool-loop'u, bir `PROPOSAL_TOOLS` sonucundan sonra kullanıcı
+onayı beklemeden otomatik devam ediyordu.
 
-`ConfirmationOutcome`'un `rejected` varyantına opsiyonel `reason?: string` eklendi
-(manuel red hâlâ `reason` taşımıyor, sadece otomatik iptal taşıyor).
-`buildConfirmationOutcomeSummary` reason varsa modele ayrı bir mesaj
-(`confirmationCardOutcomeCancelled`) üretiyor. `AgentProposalHistory.ts`'teki
-`buildRecordFromOutcome` bu `reason`'ı `ProposalRecord.reason`'a taşıyor, yani
-Agent Geçmişi sekmesinde "Cancelled — Active account changed before approval"
-olarak görünüyor, normal kullanıcı redlerinden ayırt edilebiliyor.
+**Fix A:** Sistem promptu netleştirildi (`propose_*` araçları önizleme üretir,
+`requiresConfirmation: true` görünce görev biter, asla "gönderildi" denmez, asla
+hash uydurulmaz). Tool döngüsü `PROPOSAL_TOOLS` + `requiresConfirmation: true`
+sonrası **kırılıyor** (return) — ikinci bir `/agent/chat` isteği hiç atılmıyor.
 
-489 test yeşil (4 yeni `ConfirmationCard` testi + 1 yeni `AgentProposalHistory`
-testi dahil), `pnpm build` temiz. Not: `handleApprove`'daki defense-in-depth dalı,
-React Testing Library'nin effect'leri her `act()`'te senkron flush etmesi nedeniyle
-izole test edilemedi (efekt pratikte her zaman tıklamadan önce yetişiyor) — yine de
-savunma amaçlı kodda duruyor.
+**Bug B — React 18 batching:** Approve'a basınca (Fix A sonrası) hâlâ eski bir
+"WAITING FOR THE SEND TRANSACTION..." breadcrumb'ı (`AgentChatPanel`'de
+`handleConfirmationResolved`) görünüyordu, çünkü bu fonksiyon **hâlâ** ayrı bir
+`runAgentTurn("", ...)` çağrısı yapıyordu — Fix A'nın kapsamı dışında kalmıştı.
 
-### Çözüldü: Ratio-cap reddi / turn-limit sonrası boş chat ekranı
+**Fix B:** `handleConfirmationResolved`'daki otomatik `runAgentTurn` çağrısı
+tamamen kaldırıldı. Ayrıca `ConfirmationCard`'ın üç ayrı callback'i
+(`onApproveStarted`, `onResolved`, `onBroadcast`) tek bir `onStatusChange(status:
+"pending"|"rejected"|"confirmed"|"failed")` union'ında birleştirildi — React'in
+otomatik batching'inin ara state'leri (ör. "pending") ezmesini önlemek için, ve
+gelecekte "birini düzeltip diğerini unutma" riskini yapısal olarak kapatmak için.
 
-**Bulundu:** Adım 6 testi sırasında (ratio cap'i bilinçli aşan bir `propose_send`
-isteği) AgentChatPanel hiçbir şey göstermedi — ne ConfirmationCard, ne red mesajı,
-ne düz metin.
+**Testler:** Kök neden reprodüklenip sonra düzeltilerek doğrulandı (önce hatalı
+halde test yazılıp kırmızı görüldü, sonra düzeltilip yeşile alındı) — varsayımla
+değil kanıtla ilerlendi.
 
-**Kök neden:** `AgentOrchestrator.runAgentTurn()`'ün erken-dönüş yolları (proxy
-hatası → `RATE_LIMIT_REPLY`/`UPSTREAM_UNAVAILABLE_REPLY`/`GENERIC_ERROR_REPLY`/
-`NOT_CONFIGURED_REPLY`, ve `MAX_TOOL_TURNS` (5) aşımı → `MAX_TURNS_EXCEEDED_REPLY`)
-`reply` metnini dönüş değerinde taşıyordu ama bunu `updatedHistory`'ye bir mesaj
-olarak hiç eklemiyordu. `AgentChatPanel.tsx` ise `reply`'yi kullanmıyor, sadece
-`updatedHistory`'yi render ediyor (`buildChatItems`) — bu yüzden bu yollarda ekrana
-hiçbir şey düşmüyordu. Ratio-cap reddi model'e `{error: ...}` tool mesajı olarak
-gidiyor, model bunu görüp `propose_send`'i farklı miktarlarla tekrar deniyor, 5
-tur limitine çarpıyor ve üretilen `MAX_TURNS_EXCEEDED_REPLY` hiçbir yere
-yazılmadığı için kayboluyordu.
+## 13. Çözüldü: TransactionResultCard "dekont" tasarımı + kalan UI/build sorunları
 
-**Fix:** `AgentOrchestrator.ts`'e `finishTurn()` helper'ı eklendi — dönülen
-`reply`, `updatedHistory`'nin son mesajı olarak zaten görünür değilse, orchestrator
-onu bir `assistant` mesajı olarak ekliyor. Üç erken-dönüş noktası da (proxy hatası,
-turn-limit, normal düz-metin cevabı) bu helper'dan geçirildi. `AgentChatPanel.tsx`
-tarafında değişiklik gerekmedi — `buildChatItems` zaten dolu içerikli `assistant`
-mesajlarını render ediyordu.
+**İstek:** Ham "PROPOSE_SEND COMPLETED" gibi etiketler ve "Transfer successful" gibi
+İngilizce/teknik metinler yerine, banka dekontu tarzında, tamamen Türkçe, kullanıcı
+dostu bir sonuç kartı.
 
-Testnet'te doğrulandı: aynı senaryo tekrarlandığında red mesajı artık kullanıcıya
-görünüyor. 461 test hâlâ yeşil, `tsc --noEmit` temiz.
+**Yapılanlar:**
+- Ham durum rozetleri kaldırıldı, `toolActionLabel()` üzerinden çevrilmiş isimler
+  ("Gönder"/"Shield"/"Unshield") kullanılıyor.
+- `TransactionResultCard` dekont formatında yeniden tasarlandı: daire ikon + başlık
+  + tarih üstte, ince ayraç, altında label/value tablo satırları (Tutar, Alıcı,
+  Kalan bakiye, İşlem no). Adres/hash `shortenHex()` ile kısaltılıyor, tıklanınca
+  adres kopyalanıyor / hash Etherscan'e gidiyor. Failed durumunda kullanıcı dostu
+  hata açıklaması + "Tekrar dene" butonu (`AgentToolRunner.executeToolCall`'ı
+  doğrudan çağırıp, model turu atlayarak yeni bir preview üretiyor).
+- `en.json`/`tr.json` simetri testi eklendi (`src/locales/__tests__/locales.test.ts`)
+  — eksik/fazla anahtar, boş değer, `{{param}}` uyuşmazlığını otomatik yakalıyor.
 
-### Çözüldü: Chat history persistence eksikliği (popup kapanınca sohbet siliniyordu)
+**Ayrı bulunan sorunlar (aynı test turunda):**
+- **Stale build**: Chrome'da eski build test ediliyordu (İngilizce metinler
+  görünüyordu ama kaynak kod zaten doğru Türkçe'ydi) — `rm -rf dist && pnpm build`
+  + extension'ı tamamen kaldırıp yeniden yükleme ile çözüldü. Bkz. bölüm 6.
+- **Alchemy key eksikliği**: `.env`'de Arbitrum/Base Sepolia satırlarında hâlâ
+  `YOUR_ALCHEMY_KEY` placeholder'ı vardı → 401 hataları. Alchemy'nin multichain
+  key'i kullanılarak gerçek URL'lerle dolduruldu. Bkz. bölüm 6.
+- **Yan risk**: Extension'ı "Remove" ile kaldırıp yeniden yüklemek `chrome.storage`
+  verisini (cüzdan!) sıfırlayabiliyor — test cüzdanı bu şekilde sıfırlandı (test
+  ETH'i, gerçek değeri yok). **Not düşülmeli:** ileride extension'ı kaldırmadan
+  önce seed phrase yedeklenmeli.
 
-**Bulundu:** `AgentChatPanel.tsx`'te `conversationHistory` düz `React.useState<ChatMessage[]>([])`
-ile tutuluyordu — hiçbir persistence mekanizması yoktu (ne `localStorage`, ne
-`chrome.storage`). MV3 popup'ları kapanınca ayrı document context'i tamamen unmount
-olduğundan, kullanıcı popup'ı her kapatıp açtığında sohbet sıfırdan başlıyordu.
+**Sonuç:** 577 test yeşil (bu turun sonunda).
 
-**Fix:** `conversationHistory` state'i, projede zaten var olan
-`usePersistedState` hook'una (`src/hooks/usePersistedState.ts`, `chrome.storage.session`
-üzerinden — `ThemeContext`/`Home.tsx`'te aynı patern kullanılıyor) taşındı:
-`usePersistedState<ChatMessage[]>("agent_chat_history", [])`. Sohbet artık popup
-kapat/aç arasında korunuyor (tarayıcı yeniden başlatılınca veya extension reload
-olunca temizleniyor — bilinçli tercih, `chrome.storage.local`'a değil `.session`'a
-bağlandı). Temizleme zaten var olan "clear" ikonuyla (`DeleteSweep`) elle yapılıyor;
-ayrı "yeni sohbet" / çoklu oturum kavramı eklenmedi, mesaj sayısı da sınırlanmadı.
+## 14. Faz 3 (x402) — İlerleme (devam ediyor)
 
-Ek olarak bir double-submit riski bulunup aynı işte kapatıldı: kullanıcı
-`ConfirmationCard`'da "Approve"ye bastıktan sonra ama gerçek tx broadcast/settle
-olmadan popup kapanırsa, persist edilen history'de ilgili tool mesajı hâlâ
-"pending preview" olarak duruyordu — popup yeniden açılınca kart tekrar
-onaylanabilir görünüp aynı işlemin ikinci kez gönderilmesine yol açabilirdi.
-`ConfirmationCard`'a `onApproveStarted` callback'i eklendi (approve anında, tx
-broadcast edilmeden hemen önce tetiklenir); `AgentChatPanel` bunu görünce ilgili
-tool mesajını `{ pendingSettlement: true, toolName }` ile işaretliyor —
-`buildChatItems` bunu artık actionable bir kart değil, salt bilgilendirici
-"işlem tamamlanması bekleniyor" satırı (`agent.panelSettlingNote`) olarak
-render ediyor. Gerçek sonuç (`handleConfirmationResolved`) geldiğinde bu işaret
-normal outcome mesajıyla eziliyor.
+**Onaylanan mimari:**
+- `AgentPolicyEngine.evaluateX402Payment()`: bütçe içi → `allowed:true,
+  requiresConfirmation:false` (otomatik öde); dışı → `allowed:true,
+  requiresConfirmation:true` (ConfirmationCard'a düşer); kapalı/geçersiz →
+  `allowed:false`.
+- HTTP 402 + facilitator doğrulaması **backend-proxy'de** (SSRF riskini önlemek
+  için — extension'ın keyfi URL'lere fetch atmasını engelliyor), imzalama
+  (EIP-3009, gassiz) **extension'da**.
+- Otomatik ödemede ayrı bir `X402PaymentCard` (onay istemeyen bilgilendirme kartı),
+  limit dışında mevcut `ConfirmationCard` akışı.
+- Ayrı, kalıcı bir `X402SpendingLedger` (`chrome.storage.local` — `AgentProposalHistory`'nin
+  session-bazlı storage'ından bilinçli olarak ayrı, çünkü periyodik bütçe hesabı
+  kalıcı veri gerektiriyor).
+- Mutlak üst sınır (`X402_ABSOLUTE_CAPS`: $1/işlem, $10/gün) kod içinde sabit,
+  kullanıcı ayarı her zaman `Math.min(userValue, ABSOLUTE_CAP)` ile clamp'leniyor —
+  defense-in-depth: hem kayıt anında hem okuma anında hem policy kararı anında.
+- **EIP-3009 (`transferWithAuthorization`) ile başlandı** (basit `sendTransaction`
+  yolu değil) — gassiz, x402'nin gerçek vaadine sadık, ama daha fazla yeni kod.
 
-461 test hâlâ yeşil (mevcut `AgentChatPanel`/`ConfirmationCard` testleri değişiklik
-olmadan geçti), `pnpm build` temiz.
+**Tamamlanan parçalar (ilk tur, 5+1):**
+1. `X402SettingsService.ts` + `SettingsX402.tsx` (ayarlar sayfası, `NotificationService`
+   deseninde, autosave, defense-in-depth clamp).
+2. `X402SpendingLedger.ts` (`SitePermissionService` deseninde, hesap-bazlı izolasyon,
+   yerel takvim günü + yarım-açık pencere ile periyot hesabı, FIFO 500 kayıt).
+3. `AgentPolicyEngine.evaluateX402Payment()` — mutlak tavan bypass testiyle
+   doğrulandı (settings mock'lanıp tavanın 1000 katı döndürülse bile sonuç yine
+   `requiresConfirmation:true`). Yan bulgu: floating-point sınır hatası
+   (`5 - 4.95 !== 0.05`) bulunup `FLOAT_EPSILON_USD = 1e-9` toleransıyla düzeltildi.
+4. `backend-proxy/src/x402Stub.ts` — `/agent/x402/payment-required` ve
+   `/agent/x402/settle`, üç katmanlı "gerçek değil" işaretiyle (dosya başlığı
+   uyarısı, `_stub: true` alanı, geçersiz hex adresler). **Gerçek facilitator
+   entegrasyonu henüz yok, bu stub'ın yerini alacak.**
+5. `X402PaymentService.ts` — `signTransferWithAuthorization()`, EIP-712/EIP-3009.
+   Testler `ethers.verifyTypedData` ile bağımsız doğrulama yapıyor (kurcalama
+   testi + cross-domain replay testi dahil).
+6. **(Ek parça)** `ConfirmationCard.tsx`'e `pay_for_resource` case'i eklendi —
+   onay anında ödeme gereksinimini yeniden çeker, imzalar, settle eder, ledger'a
+   kaydeder (manuel onaylanan limit-dışı ödemeler de ledger'a giriyor, şeffaflık
+   için). "Kalan bakiye" satırı bilinçli olarak gösterilmiyor (native/shielded
+   bakiye ile USDC harcaması karışmasın diye).
 
-### Çözüldü: backend-proxy, non-JSON upstream body'yi geçerli cevap sanıp zinciri erken kesiyordu
+**Yeni tool:** `pay_for_resource(resource: string)` — `AgentToolRunner`'da
+`handlePayForResource`. `propose_*` isimlendirmesi bilinçli olarak kullanılmadı
+(semantik farklı: bu tool bütçe içindeyse gerçekten öder, sadece önizleme üretmez).
 
-**Bulundu:** Manuel testte agent sürekli "Şu anda isteğinizi işleyemedim..."
-(`GENERIC_ERROR_REPLY`) döndürdü. Extension console'unda gerçek hata görüldü:
-`[AgentOrchestrator] proxy response missing a valid assistant message: {error:
-'Upstream returned a non-JSON response.'}`.
+**Test durumu:** 647 test yeşil (bu bölümün sonunda).
 
-**Kök neden:** `backend-proxy/src/index.ts`'teki `callModelChain()`, bir modelin
-cevabı 429/404/5xx değilse (yani "başarılı" bir status'sa) onu doğrudan geçerli
-cevap sayıp döndürüyordu — body'nin gerçekten JSON parse edilip edilmediğine
-bakmadan. Body JSON değilse (`response.json()` reddediliyorsa) kod bunu sessizce
-`{error: "Upstream returned a non-JSON response."}`'a çeviriyor ve **status 200
-ile birlikte client'a bir "cevap" olarak** forward ediyordu — zincirdeki bir
-sonraki modele hiç geçmeden. `AgentOrchestrator.ts` bunu 200 gördüğü için
-`extractAssistantMessage`'a sokuyor, `choices` alanı olmadığından `null`
-dönüyor, `GENERIC_ERROR_REPLY` tetikleniyordu. Yani fallback zincirinin asıl
-amacı (tek bir modelin geçici bir hıçkırığına karşı dayanıklılık) tam da bu
-senaryoda devre dışı kalıyordu, üstelik ham body hiçbir yerde loglanmadığı için
-hangi modelin/ne tür bir cevabın buna yol açtığı da görünmüyordu.
-
-**Fix:** `callModelChain()`'de non-JSON body artık 429/404/5xx ile aynı
-retry-worthy kategoriye taşındı (`sawUnreachable = true; continue;`) — zincirdeki
-bir sonraki modele geçiliyor, tek bir modelin bozuk cevabı artık tüm isteği
-düşürmüyor. Ayrıca hangi modelin (`model` adı) ve hangi status'la bozuk body
-döndürdüğü, body'nin kesilmiş bir örneğiyle (ilk 500 karakter) birlikte
-`console.error` ile loglanıyor — bir sonraki oluşumda `wrangler tail` / dev
-console'dan doğrudan teşhis edilebilir. İstemci tarafında ayrı bir mesaj
-eklenmedi: zincir artık bu durumu retry ediyor, tamamen tükenirse zaten var olan
-`unreachable` (502, "yapay zeka servisine ulaşılamıyor") yoluna düşüyor — ki bu
-GENERIC_ERROR_REPLY'den daha doğru bir mesaj.
-
-484 test hâlâ yeşil, `backend-proxy`'nin kendi `tsc --noEmit` kontrolü temiz.
-
-### Çözülmedi: Model çıktı kalitesi sorunu (fallback modellerden dil/tutarlılık sızıntısı)
-
-Testler sırasında iki kez gözlemlendi:
-- Bakiye sorgusu cevabında anlamsız yabancı karakter/kelime sızıntısı ("です").
-- Propose_send cevabında anlamsız kelime ("Petici") ve onay-sonrası akışın yanlış
-  anlatılması (sanki onaydan sonra ayrı bir "transaction sirküle etme" adımı
-  gerekiyormuş gibi — oysa tasarımda onay = otomatik gerçek `Network.ts` çağrısı).
-
-Muhtemel neden: `modelConfig.ts`'deki ücretsiz model fallback zincirindeki
-modellerin (örn. `nvidia/nemotron-3-ultra-550b-a55b:free`,
-`google/gemma-4-31b-it:free`) çıktı kalitesi/talimat takibi tutarsız. Şu an bir
-fix uygulanmadı — sıradaki oturumda ele alınmalı. Olası yönler: sistem promptuna
-daha katı dil/format kısıtları eklemek, fallback zincirindeki model sırasını/
-seçimini gözden geçirmek, ya da yanıtı post-process ederek anomali tespiti
-yapmak.
+**KALAN İŞ — sıradaki oturum buradan devam etmeli:**
+1. `AgentOrchestrator`'ın tool-loop'una `pay_for_resource`'u tanıtmak: 
+   `requiresConfirmation:false` ise döngü kırılmadan otomatik devam, `true` ise
+   mevcut `PROPOSAL_TOOLS` gibi döngü kırılıp `ConfirmationCard`'a düşsün.
+2. `X402PaymentCard.tsx` — otomatik ödeme bilgilendirme kartı (dekont diliyle,
+   onay istemez): daire ikon, başlık, tarih, tutar, servis/kaynak, kalan bütçe.
+   `AgentChatPanel.buildChatItems`'a yeni bir `"x402Payment"` `ChatItem` kind'i.
+3. Locale: yeni metinler `en.json`/`tr.json`'a, parity testinin yakaladığını
+   doğrula.
+4. Uçtan uca entegrasyon testleri: limit-içi otomatik akış (kart hiç açılmadan
+   `X402PaymentCard` render edilir, ledger'a kaydedilir) + limit-dışı akış
+   (`ConfirmationCard` açılır, onaylanınca doğru ödeme yapılır).
+5. Bu ilk turun kapsamı dışında bırakılanlar: gerçek facilitator entegrasyonu
+   (stub'ın yerini alacak), Chrome'da elle uçtan uca test (henüz hiç yapılmadı —
+   önceki fazlarda elle test defalarca kod-only testlerin kaçırdığı gerçek
+   bug'ları bulmuştu, bu yüzden entegrasyon bitince mutlaka yapılmalı).

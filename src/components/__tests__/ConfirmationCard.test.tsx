@@ -2,7 +2,11 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import '../../i18n.js';
-import ConfirmationCard, { buildConfirmationOutcomeSummary, type ConfirmationOutcome } from '../ConfirmationCard';
+import ConfirmationCard, {
+  buildConfirmationOutcomeSummary,
+  type ConfirmationCardStatus,
+  type ConfirmationOutcome,
+} from '../ConfirmationCard';
 import { WalletContext } from '../../AppContext';
 import { ActiveAccountContext } from '../../ActiveAccountProvider';
 import type { AppContext } from '../../AppContext';
@@ -18,6 +22,13 @@ import type { SimResult } from '../../backend/TransactionSimulator';
  * DomainResolver mock'lanır. Gerçek i18n kullanılır. Onay/red senaryoları, her 3 propose_*
  * tool'u için doğru Network fonksiyonunun doğru parametrelerle çağrıldığı, simulation
  * gösterimi ve rate/2-aşama notları test edilir.
+ *
+ * `onStatusChange` tek bir callback olduğu için (approve başlangıcı, broadcast, ve terminal
+ * confirmed/failed/rejected — hepsi aynı prop üzerinden) çoğu approve akışında BİRDEN FAZLA kez
+ * çağrılır: önce "pending" (imza bekleniyor), sonra (send/shield'de) tekrar "pending" (hash
+ * bilinir bilinmez), en son terminal durum. Bu yüzden testler genel `toHaveBeenCalled()` yerine
+ * belirli bir status'e `toHaveBeenCalledWith(expect.objectContaining({status: ...}))` ile
+ * `waitFor` içinde bekler — aksi halde ilk "pending" çağrısı testi erken tetikleyip flaky yapar.
  */
 
 vi.mock('../../backend/DomainResolver.js', () => ({
@@ -26,6 +37,29 @@ vi.mock('../../backend/DomainResolver.js', () => ({
 }));
 
 import { isDomainName, resolveDomain } from '../../backend/DomainResolver';
+
+// ─── x402 (Faz 3) mocks ──────────────────────────────────────────────
+const { mockRecordPayment } = vi.hoisted(() => ({ mockRecordPayment: vi.fn() }));
+
+vi.mock('../../backend/X402ProxyClient.js', () => ({
+  fetchX402PaymentRequirement: vi.fn(),
+  settleX402Payment: vi.fn(),
+}));
+vi.mock('../../backend/X402PaymentService.js', () => ({
+  signTransferWithAuthorization: vi.fn(),
+  generateAuthorizationNonce: () => '0x' + 'cd'.repeat(32),
+}));
+vi.mock('../../backend/X402SpendingLedger.js', () => ({
+  // ConfirmationCard.tsx instantiates ONE X402SpendingLedger at module scope — mockRecordPayment
+  // (hoisted, shared) is the only way tests can assert on that single instance's calls.
+  X402SpendingLedger: vi.fn().mockImplementation(function X402SpendingLedgerMock() {
+    return { recordPayment: mockRecordPayment };
+  }),
+}));
+
+import { fetchX402PaymentRequirement, settleX402Payment } from '../../backend/X402ProxyClient';
+import { signTransferWithAuthorization } from '../../backend/X402PaymentService';
+import { NetworkId } from '../../backend/NetworkTypes';
 
 const TEST_ADDRESS = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266';
 const RECIPIENT = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
@@ -68,6 +102,42 @@ function makePreview(overrides: Partial<ProposalPreview> = {}): ProposalPreview 
   };
 }
 
+const X402_PAY_TO = '0x00000000000000000000000000000000000000f1';
+const X402_RESOURCE = 'https://api.example.com/weather';
+
+function makeX402Preview(overrides: Partial<ProposalPreview> = {}): ProposalPreview {
+  return {
+    requiresConfirmation: true,
+    toolName: 'pay_for_resource',
+    originalArgs: { resource: X402_RESOURCE },
+    simulation: makeSimResult({
+      balanceChanges: [
+        {
+          tokenAddress: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+          symbol: 'USDC',
+          decimals: 6,
+          amountWei: '10000',
+          amountFormatted: '0.01',
+          from: TEST_ADDRESS,
+          to: X402_PAY_TO,
+          type: 'ERC20',
+        },
+      ],
+      warnings: ['Bu bir x402 mikro-ödeme yetkilendirmesidir.'],
+    }),
+    ...overrides,
+  };
+}
+
+/** Finds the last call whose status matches — used since onStatusChange fires multiple times. */
+function lastCallWithStatus(
+  mockFn: ReturnType<typeof vi.fn<(status: ConfirmationCardStatus) => void>>,
+  status: ConfirmationCardStatus['status']
+): ConfirmationCardStatus | undefined {
+  const calls = mockFn.mock.calls.filter(([s]) => s.status === status);
+  return calls.length > 0 ? calls[calls.length - 1][0] : undefined;
+}
+
 describe('ConfirmationCard', () => {
   let mockNetwork: {
     getBalance: ReturnType<typeof vi.fn>;
@@ -81,7 +151,7 @@ describe('ConfirmationCard', () => {
   };
   let mockWallet: AppContext;
   let mockAccount: Account;
-  let onResolved: ReturnType<typeof vi.fn<(outcome: ConfirmationOutcome) => void>>;
+  let onStatusChange: ReturnType<typeof vi.fn<(status: ConfirmationCardStatus) => void>>;
 
   beforeEach(() => {
     vi.mocked(isDomainName).mockReset().mockImplementation((input: string) => input.endsWith('.eth'));
@@ -102,15 +172,38 @@ describe('ConfirmationCard', () => {
       pendingClaimQueue: { marker: 'pending-claim-queue' },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal mock for unit tests
     } as any as AppContext;
-    mockAccount = { GetAddress: () => TEST_ADDRESS } as unknown as Account;
-    onResolved = vi.fn();
+    mockAccount = {
+      GetAddress: () => TEST_ADDRESS,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal signer stand-in for x402 tests
+      ethers_wallet: { signTypedData: vi.fn() } as any,
+    } as unknown as Account;
+    onStatusChange = vi.fn();
+
+    mockRecordPayment.mockReset().mockResolvedValue(undefined);
+    vi.mocked(fetchX402PaymentRequirement).mockReset().mockResolvedValue({
+      scheme: 'exact',
+      network: 'base-sepolia',
+      maxAmountRequired: '10000', // $0.01
+      resource: 'https://api.example.com/weather',
+      description: 'Access to weather data',
+      mimeType: 'application/json',
+      payTo: '0x00000000000000000000000000000000000000f1',
+      maxTimeoutSeconds: 60,
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      extra: { name: 'USD Coin', version: '2' },
+    });
+    vi.mocked(settleX402Payment).mockReset().mockResolvedValue({ success: true, txHash: '0xX402SETTLEDHASH' });
+    vi.mocked(signTransferWithAuthorization).mockReset().mockResolvedValue({
+      authorization: { from: TEST_ADDRESS, to: '0x00000000000000000000000000000000000000f1', value: '10000', validAfter: 0, validBefore: 9999999999, nonce: '0x' + 'cd'.repeat(32) },
+      signature: '0xX402SIGNATURE',
+    });
   });
 
   function renderCard(preview: ProposalPreview) {
     return render(
       <WalletContext.Provider value={mockWallet}>
         <ActiveAccountContext.Provider value={{ activeIndex: 0, activeAccount: mockAccount, setActiveIndex: vi.fn() }}>
-          <ConfirmationCard preview={preview} onResolved={onResolved} />
+          <ConfirmationCard preview={preview} onStatusChange={onStatusChange} />
         </ActiveAccountContext.Provider>
       </WalletContext.Provider>
     );
@@ -121,7 +214,7 @@ describe('ConfirmationCard', () => {
     const tree = (acc: Account) => (
       <WalletContext.Provider value={mockWallet}>
         <ActiveAccountContext.Provider value={{ activeIndex: 0, activeAccount: acc, setActiveIndex: vi.fn() }}>
-          <ConfirmationCard preview={preview} onResolved={onResolved} />
+          <ConfirmationCard preview={preview} onStatusChange={onStatusChange} />
         </ActiveAccountContext.Provider>
       </WalletContext.Provider>
     );
@@ -167,12 +260,13 @@ describe('ConfirmationCard', () => {
 
   // ─── Reddet ──────────────────────────────────────────────────────
   describe('reddet', () => {
-    it('Reddet\'e basınca hiçbir Network fonksiyonu çağrılmaz, onResolved rejected ile çağrılır', () => {
+    it("Reddet'e basınca hiçbir Network fonksiyonu çağrılmaz, onStatusChange rejected ile çağrılır", () => {
       renderCard(makePreview());
       fireEvent.click(screen.getByRole('button', { name: /reject/i }));
 
       expect(mockNetwork.sendTransaction).not.toHaveBeenCalled();
-      expect(onResolved).toHaveBeenCalledWith({ status: 'rejected', toolName: 'propose_send' });
+      expect(onStatusChange).toHaveBeenCalledTimes(1);
+      expect(onStatusChange).toHaveBeenCalledWith({ status: 'rejected', toolName: 'propose_send' });
     });
   });
 
@@ -187,13 +281,13 @@ describe('ConfirmationCard', () => {
       rerenderWithAccount(otherAccount);
 
       await waitFor(() =>
-        expect(onResolved).toHaveBeenCalledWith({
+        expect(onStatusChange).toHaveBeenCalledWith({
           status: 'rejected',
           toolName: 'propose_send',
           reason: 'Active account changed before approval',
         })
       );
-      expect(onResolved).toHaveBeenCalledTimes(1);
+      expect(onStatusChange).toHaveBeenCalledTimes(1);
       expect(mockNetwork.sendTransaction).not.toHaveBeenCalled();
       expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
@@ -206,18 +300,19 @@ describe('ConfirmationCard', () => {
 
       rerenderWithAccount(sameAddressDifferentInstance);
 
-      expect(onResolved).not.toHaveBeenCalled();
+      expect(onStatusChange).not.toHaveBeenCalled();
       expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument();
     });
 
-    it('işlem zaten onaylanmış/tamamlanmışken hesap değişimi onResolved\'ı tekrar tetiklemez', async () => {
+    it("işlem zaten onaylanmış/tamamlanmışken hesap değişimi onStatusChange'i terminal durumdan sonra tekrar tetiklemez", async () => {
       const { rerenderWithAccount } = renderCardAs(makePreview(), mockAccount);
       fireEvent.click(screen.getByRole('button', { name: /approve/i }));
-      await waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(lastCallWithStatus(onStatusChange, 'confirmed')).toBeDefined());
 
+      const callsAfterResolve = onStatusChange.mock.calls.length;
       rerenderWithAccount(otherAccount);
 
-      expect(onResolved).toHaveBeenCalledTimes(1);
+      expect(onStatusChange).toHaveBeenCalledTimes(callsAfterResolve);
     });
   });
 
@@ -227,7 +322,7 @@ describe('ConfirmationCard', () => {
       renderCard(makePreview());
       fireEvent.click(screen.getByRole('button', { name: /approve/i }));
 
-      await waitFor(() => expect(onResolved).toHaveBeenCalled());
+      await waitFor(() => expect(lastCallWithStatus(onStatusChange, 'confirmed')).toBeDefined());
 
       expect(mockNetwork.sendTransaction).toHaveBeenCalledWith(
         mockAccount,
@@ -235,8 +330,47 @@ describe('ConfirmationCard', () => {
         expect.any(Function)
       );
       expect(mockNetwork.waitForTransaction).toHaveBeenCalledWith('0xsendhash');
-      expect(onResolved).toHaveBeenCalledWith({ status: 'confirmed', toolName: 'propose_send', txHash: '0xsendhash' });
-      expect(await screen.findByText('Confirmed')).toBeInTheDocument();
+      expect(lastCallWithStatus(onStatusChange, 'confirmed')).toEqual({
+        status: 'confirmed',
+        toolName: 'propose_send',
+        originalArgs: { to: RECIPIENT, amount: '0.1' },
+        txHash: '0xsendhash',
+        newBalance: { amount: '1.0', symbol: 'ETH' },
+      });
+      expect(await screen.findByText('Transfer successful')).toBeInTheDocument();
+    });
+
+    it('approve başlangıcında ve broadcast anında onStatusChange "pending" ile (sonra txHash ile) çağrılır', async () => {
+      let resolveWait!: () => void;
+      mockNetwork.waitForTransaction.mockReturnValue(new Promise<void>((resolve) => { resolveWait = resolve; }));
+      mockNetwork.sendTransaction.mockImplementation(
+        async (_account: unknown, _params: unknown, onBroadcast: (hash: string) => void) => {
+          onBroadcast('0xsendhash');
+          return '0xsendhash';
+        }
+      );
+      renderCard(makePreview());
+      fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+      // İlk çağrı: onay anında, henüz hash yok.
+      expect(onStatusChange.mock.calls[0][0]).toEqual({
+        status: 'pending',
+        toolName: 'propose_send',
+        originalArgs: { to: RECIPIENT, amount: '0.1' },
+      });
+
+      // İkinci çağrı: broadcast anında, artık hash biliniyor.
+      await waitFor(() =>
+        expect(onStatusChange).toHaveBeenCalledWith({
+          status: 'pending',
+          toolName: 'propose_send',
+          originalArgs: { to: RECIPIENT, amount: '0.1' },
+          txHash: '0xsendhash',
+        })
+      );
+
+      resolveWait();
+      await waitFor(() => expect(lastCallWithStatus(onStatusChange, 'confirmed')).toBeDefined());
     });
 
     it('ENS alan adı onay anında yeniden çözümlenip kullanılır', async () => {
@@ -253,19 +387,48 @@ describe('ConfirmationCard', () => {
       );
     });
 
-    it('sendTransaction başarısız olursa hata gösterilir, onResolved failed ile çağrılır', async () => {
+    it('sendTransaction başarısız olursa hata gösterilir, onStatusChange failed ile çağrılır', async () => {
       mockNetwork.sendTransaction.mockRejectedValueOnce(new Error('insufficient funds'));
       renderCard(makePreview());
 
       fireEvent.click(screen.getByRole('button', { name: /approve/i }));
-      await waitFor(() => expect(onResolved).toHaveBeenCalled());
+      await waitFor(() => expect(lastCallWithStatus(onStatusChange, 'failed')).toBeDefined());
 
-      const call = onResolved.mock.calls[0][0] as ConfirmationOutcome;
-      expect(call.status).toBe('failed');
+      const call = lastCallWithStatus(onStatusChange, 'failed') as ConfirmationOutcome & { status: 'failed' };
       expect(mockNetwork.waitForTransaction).not.toHaveBeenCalled();
-      expect(screen.getByText('Transaction failed')).toBeInTheDocument();
-      expect(screen.getByText(call.status === 'failed' ? call.message : '')).toBeInTheDocument();
-      expect(screen.getByText(/you can try again/i)).toBeInTheDocument();
+      expect(screen.getByText('Transfer failed')).toBeInTheDocument();
+      expect(screen.getByText(call.message)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+    });
+
+    it('"Tekrar dene" butonuna tıklamak onRetry\'ı aynı toolName+originalArgs ile tetikler', async () => {
+      mockNetwork.sendTransaction.mockRejectedValueOnce(new Error('insufficient funds'));
+      const preview = makePreview();
+      const onRetry = vi.fn();
+      render(
+        <WalletContext.Provider value={mockWallet}>
+          <ActiveAccountContext.Provider value={{ activeIndex: 0, activeAccount: mockAccount, setActiveIndex: vi.fn() }}>
+            <ConfirmationCard preview={preview} onStatusChange={onStatusChange} onRetry={onRetry} />
+          </ActiveAccountContext.Provider>
+        </WalletContext.Provider>
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+      await waitFor(() => expect(screen.getByRole('button', { name: /try again/i })).toBeEnabled());
+
+      fireEvent.click(screen.getByRole('button', { name: /try again/i }));
+
+      expect(onRetry).toHaveBeenCalledWith('propose_send', preview.originalArgs);
+    });
+
+    it('onRetry sağlanmazsa "Tekrar dene" butonu devre dışıdır', async () => {
+      mockNetwork.sendTransaction.mockRejectedValueOnce(new Error('insufficient funds'));
+      renderCard(makePreview());
+
+      fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+      await waitFor(() => expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument());
+
+      expect(screen.getByRole('button', { name: /try again/i })).toBeDisabled();
     });
 
     // ─── TransactionResultCard entegrasyonu: gerçek Network.ts verisinden render ────
@@ -289,21 +452,22 @@ describe('ConfirmationCard', () => {
       // bekliyorken) hash ve Explorer linki görünmeli — model hiç devrede değil.
       const link = await screen.findByRole('link', { name: /view on explorer/i });
       expect(link).toHaveAttribute('href', expect.stringContaining('0xsendhash'));
-      expect(screen.queryByText('Confirmed')).not.toBeInTheDocument();
+      expect(screen.queryByText('Transfer successful')).not.toBeInTheDocument();
 
       resolveWait();
-      expect(await screen.findByText('Confirmed')).toBeInTheDocument();
+      expect(await screen.findByText('Transfer successful')).toBeInTheDocument();
     });
 
     it('onay sonrası yeni bakiye gerçek getBalance çağrısından render edilir', async () => {
       renderCard(makePreview());
       fireEvent.click(screen.getByRole('button', { name: /approve/i }));
 
-      await screen.findByText('Confirmed');
+      await screen.findByText('Transfer successful');
 
       // mockNetwork.getBalance 1 ETH döndürüyor (beforeBalance ile aynı mock) — bu satırın
       // component state'inden (loadNewBalance → network.getBalance) geldiğini doğrular.
-      expect(await screen.findByText(/new balance/i)).toHaveTextContent('New balance: 1.0 ETH');
+      expect(await screen.findByText(/remaining balance/i)).toBeInTheDocument();
+      expect(screen.getByText('1.0 ETH')).toBeInTheDocument();
     });
   });
 
@@ -317,11 +481,17 @@ describe('ConfirmationCard', () => {
       renderCard(makePreview({ toolName: 'propose_shield', originalArgs: { amount: '0.1', tokenSymbol: 'ETH' } }));
       fireEvent.click(screen.getByRole('button', { name: /approve/i }));
 
-      await waitFor(() => expect(onResolved).toHaveBeenCalled());
+      await waitFor(() => expect(lastCallWithStatus(onStatusChange, 'confirmed')).toBeDefined());
 
       expect(mockNetwork.shieldNative).toHaveBeenCalledWith(mockAccount, WRAPPER, '0.1');
       expect(mockNetwork.waitForTransaction).toHaveBeenCalledWith('0xshieldhash');
-      expect(onResolved).toHaveBeenCalledWith({ status: 'confirmed', toolName: 'propose_shield', txHash: '0xshieldhash' });
+      expect(lastCallWithStatus(onStatusChange, 'confirmed')).toEqual({
+        status: 'confirmed',
+        toolName: 'propose_shield',
+        originalArgs: { amount: '0.1', tokenSymbol: 'ETH' },
+        txHash: '0xshieldhash',
+        newBalance: { amount: '1.0', symbol: 'ETH' },
+      });
     });
 
     it('native wrapper bulunamazsa {error} gösterilir, shieldNative çağrılmaz', async () => {
@@ -329,10 +499,9 @@ describe('ConfirmationCard', () => {
       renderCard(makePreview({ toolName: 'propose_shield', originalArgs: { amount: '0.1', tokenSymbol: 'ETH' } }));
 
       fireEvent.click(screen.getByRole('button', { name: /approve/i }));
-      await waitFor(() => expect(onResolved).toHaveBeenCalled());
+      await waitFor(() => expect(lastCallWithStatus(onStatusChange, 'failed')).toBeDefined());
 
       expect(mockNetwork.shieldNative).not.toHaveBeenCalled();
-      expect((onResolved.mock.calls[0][0] as ConfirmationOutcome).status).toBe('failed');
     });
   });
 
@@ -346,7 +515,7 @@ describe('ConfirmationCard', () => {
       renderCard(makePreview({ toolName: 'propose_unshield', originalArgs: { amount: '0.2', tokenSymbol: 'aeETH' } }));
       fireEvent.click(screen.getByRole('button', { name: /approve/i }));
 
-      await waitFor(() => expect(onResolved).toHaveBeenCalled());
+      await waitFor(() => expect(lastCallWithStatus(onStatusChange, 'confirmed')).toBeDefined());
 
       expect(mockNetwork.unshieldAndClaim).toHaveBeenCalledWith(
         mockAccount,
@@ -357,7 +526,13 @@ describe('ConfirmationCard', () => {
         expect.any(Function)
       );
       expect(mockNetwork.waitForTransaction).not.toHaveBeenCalled();
-      expect(onResolved).toHaveBeenCalledWith({ status: 'confirmed', toolName: 'propose_unshield', txHash: '0xunshieldhash' });
+      expect(lastCallWithStatus(onStatusChange, 'confirmed')).toEqual({
+        status: 'confirmed',
+        toolName: 'propose_unshield',
+        originalArgs: { amount: '0.2', tokenSymbol: 'aeETH' },
+        txHash: '0xunshieldhash',
+        newBalance: { amount: '0.5', symbol: 'aeETH' },
+      });
     });
 
     it('bilinmeyen shielded tokenSymbol için unshieldAndClaim çağrılmaz, failed döner', async () => {
@@ -365,10 +540,9 @@ describe('ConfirmationCard', () => {
       renderCard(makePreview({ toolName: 'propose_unshield', originalArgs: { amount: '0.2', tokenSymbol: 'aeUSDC' } }));
 
       fireEvent.click(screen.getByRole('button', { name: /approve/i }));
-      await waitFor(() => expect(onResolved).toHaveBeenCalled());
+      await waitFor(() => expect(lastCallWithStatus(onStatusChange, 'failed')).toBeDefined());
 
       expect(mockNetwork.unshieldAndClaim).not.toHaveBeenCalled();
-      expect((onResolved.mock.calls[0][0] as ConfirmationOutcome).status).toBe('failed');
     });
   });
 
@@ -400,14 +574,120 @@ describe('ConfirmationCard', () => {
 
     it('confirmed için tx hash içeren mesajı üretir', () => {
       expect(
-        buildConfirmationOutcomeSummary({ status: 'confirmed', toolName: 'propose_shield', txHash: '0xabc' }, t)
+        buildConfirmationOutcomeSummary(
+          { status: 'confirmed', toolName: 'propose_shield', originalArgs: {}, txHash: '0xabc' },
+          t
+        )
       ).toBe('confirmed:propose_shield:0xabc');
     });
 
     it('failed için hata mesajını içeren mesajı üretir', () => {
       expect(
-        buildConfirmationOutcomeSummary({ status: 'failed', toolName: 'propose_unshield', message: 'boom' }, t)
+        buildConfirmationOutcomeSummary(
+          { status: 'failed', toolName: 'propose_unshield', originalArgs: {}, message: 'boom' },
+          t
+        )
       ).toBe('failed:propose_unshield:boom');
+    });
+  });
+
+  // ─── pay_for_resource (x402, Faz 3) onayı ───────────────────────
+  describe('pay_for_resource onayı', () => {
+    /** Base Sepolia network mock — the only network x402 approval currently supports. */
+    function makeBaseSepoliaWallet(): AppContext {
+      const baseSepoliaNetwork = { ...mockNetwork, network_id: NetworkId.Base_Sepolia };
+      return {
+        networkProvider: { getActiveNetwork: () => baseSepoliaNetwork },
+        pendingClaimQueue: { marker: 'pending-claim-queue' },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal mock for unit tests
+      } as any as AppContext;
+    }
+
+    function renderX402Card(preview: ProposalPreview) {
+      return render(
+        <WalletContext.Provider value={makeBaseSepoliaWallet()}>
+          <ActiveAccountContext.Provider value={{ activeIndex: 0, activeAccount: mockAccount, setActiveIndex: vi.fn() }}>
+            <ConfirmationCard preview={preview} onStatusChange={onStatusChange} />
+          </ActiveAccountContext.Provider>
+        </WalletContext.Provider>
+      );
+    }
+
+    it('önizlemede tutar/sembol (USDC) ve kaynak (resource) gösterilir', () => {
+      renderX402Card(makeX402Preview());
+      expect(screen.getByText('0.01 USDC will be paid')).toBeInTheDocument();
+      expect(screen.getByText(X402_RESOURCE)).toBeInTheDocument();
+    });
+
+    it('onaylanınca: gereksinim yeniden çekilir (frozen preview\'a güvenilmez), imzalanır, settle edilir, ledger\'a kaydedilir', async () => {
+      renderX402Card(makeX402Preview());
+      fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+      await waitFor(() => expect(lastCallWithStatus(onStatusChange, 'confirmed')).toBeDefined());
+
+      expect(fetchX402PaymentRequirement).toHaveBeenCalledWith(X402_RESOURCE);
+      expect(signTransferWithAuthorization).toHaveBeenCalledWith(
+        mockAccount.ethers_wallet,
+        { address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', name: 'USD Coin', version: '2', chainId: NetworkId.Base_Sepolia },
+        expect.objectContaining({ from: TEST_ADDRESS, to: X402_PAY_TO, value: '10000' })
+      );
+      expect(settleX402Payment).toHaveBeenCalledWith(X402_RESOURCE, expect.objectContaining({ signature: '0xX402SIGNATURE' }));
+      expect(mockRecordPayment).toHaveBeenCalledWith(
+        expect.objectContaining({ accountAddress: TEST_ADDRESS, amountUsd: 0.01, txHash: '0xX402SETTLEDHASH', service: X402_RESOURCE })
+      );
+
+      expect(lastCallWithStatus(onStatusChange, 'confirmed')).toEqual({
+        status: 'confirmed',
+        toolName: 'pay_for_resource',
+        originalArgs: { resource: X402_RESOURCE },
+        txHash: '0xX402SETTLEDHASH',
+        newBalance: null,
+      });
+    });
+
+    it('Base Sepolia dışındaki bir ağda onaylanmaya çalışılırsa {failed} ile sonuçlanır, hiçbir şey imzalanmaz', async () => {
+      // Varsayılan mockWallet (network_id: 4 — Ethereum Sepolia, x402 için desteklenmiyor).
+      render(
+        <WalletContext.Provider value={mockWallet}>
+          <ActiveAccountContext.Provider value={{ activeIndex: 0, activeAccount: mockAccount, setActiveIndex: vi.fn() }}>
+            <ConfirmationCard preview={makeX402Preview()} onStatusChange={onStatusChange} />
+          </ActiveAccountContext.Provider>
+        </WalletContext.Provider>
+      );
+      fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+      await waitFor(() => expect(lastCallWithStatus(onStatusChange, 'failed')).toBeDefined());
+      expect(signTransferWithAuthorization).not.toHaveBeenCalled();
+      expect(mockRecordPayment).not.toHaveBeenCalled();
+    });
+
+    it('hesabın ethers_wallet\'ı yoksa (kilitli) {failed} ile sonuçlanır', async () => {
+      const lockedAccount = { GetAddress: () => TEST_ADDRESS, ethers_wallet: undefined } as unknown as Account;
+      render(
+        <WalletContext.Provider value={makeBaseSepoliaWallet()}>
+          <ActiveAccountContext.Provider value={{ activeIndex: 0, activeAccount: lockedAccount, setActiveIndex: vi.fn() }}>
+            <ConfirmationCard preview={makeX402Preview()} onStatusChange={onStatusChange} />
+          </ActiveAccountContext.Provider>
+        </WalletContext.Provider>
+      );
+      fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+      await waitFor(() => expect(lastCallWithStatus(onStatusChange, 'failed')).toBeDefined());
+      expect(signTransferWithAuthorization).not.toHaveBeenCalled();
+    });
+
+    it('settle isteği başarısız olursa {failed} ile sonuçlanır, ledger\'a kaydedilmez', async () => {
+      vi.mocked(settleX402Payment).mockRejectedValueOnce(new Error('proxy down'));
+      renderX402Card(makeX402Preview());
+      fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+      await waitFor(() => expect(lastCallWithStatus(onStatusChange, 'failed')).toBeDefined());
+      expect(mockRecordPayment).not.toHaveBeenCalled();
+    });
+
+    it('"Remaining balance" satırı gösterilmez (yanlış varlık — USDC yerine native/shielded olurdu)', () => {
+      renderX402Card(makeX402Preview());
+      expect(screen.queryByText(/will remain afterwards/i)).not.toBeInTheDocument();
     });
   });
 });

@@ -7,6 +7,7 @@ import AgentChatPanel from '../AgentChatPanel';
 import { WalletContext } from '../../AppContext';
 import { ActiveAccountContext } from '../../ActiveAccountProvider';
 import { runAgentTurn } from '../../backend/AgentOrchestrator';
+import { executeToolCall } from '../../backend/AgentToolRunner';
 import type { AppContext } from '../../AppContext';
 import type Account from '../../backend/Account';
 import type { ChatMessage, RunAgentTurnResult } from '../../backend/AgentOrchestrator';
@@ -19,7 +20,7 @@ import type { ProposalRecord } from '../../backend/AgentProposalHistory';
  * runAgentTurn (AgentOrchestrator) mock'lanır — gerçek proxy/ağ çağrısı yapılmaz. ConfirmationCard
  * da mock'lanır (kendi Network/imzalama mantığı zaten ConfirmationCard.test.tsx'te test
  * ediliyor) — burada yalnızca AgentChatPanel'in kendi kablolaması test edilir: kartın doğru
- * anda render edilmesi, onResolved geldiğinde history'nin doğru güncellenip runAgentTurn'ün
+ * anda render edilmesi, onStatusChange geldiğinde history'nin doğru güncellenip runAgentTurn'ün
  * doğru argümanlarla tekrar çağrılması, input kilidi ve "aynı anda tek kart" garantisi. Gerçek
  * i18n (en.json) kullanılır. Mesaj listesi, loading göstergesi ve aktif hesap bulunamama
  * durumu da test edilir.
@@ -43,18 +44,78 @@ vi.mock('../ConfirmationCard.js', async () => {
   const actual = await vi.importActual<typeof import('../ConfirmationCard')>('../ConfirmationCard');
   return {
     ...actual,
-    default: ({ preview, onResolved }: { preview: ProposalPreview; onResolved: (o: unknown) => void }) => (
+    default: ({
+      preview,
+      onStatusChange,
+      onRetry,
+    }: {
+      preview: ProposalPreview;
+      onStatusChange: (status: unknown) => void;
+      onRetry?: (toolName: string, originalArgs: Record<string, unknown>) => void;
+    }) => (
       <div data-testid="confirmation-card">
         <span data-testid="confirmation-tool">{preview.toolName}</span>
-        <button onClick={() => onResolved({ status: 'confirmed', toolName: preview.toolName, txHash: '0xMOCKHASH' })}>
+        <button
+          onClick={() =>
+            onStatusChange({
+              status: 'confirmed',
+              toolName: preview.toolName,
+              originalArgs: preview.originalArgs,
+              txHash: '0xMOCKHASH',
+            })
+          }
+        >
           mock-approve
         </button>
-        <button onClick={() => onResolved({ status: 'rejected', toolName: preview.toolName })}>
+        <button onClick={() => onStatusChange({ status: 'rejected', toolName: preview.toolName })}>
           mock-reject
         </button>
+        <button
+          onClick={() => onStatusChange({ status: 'pending', toolName: preview.toolName, originalArgs: preview.originalArgs })}
+        >
+          mock-pending
+        </button>
+        <button
+          onClick={() =>
+            onStatusChange({
+              status: 'pending',
+              toolName: preview.toolName,
+              originalArgs: preview.originalArgs,
+              txHash: '0xBROADCASTHASH',
+            })
+          }
+        >
+          mock-pending-with-hash
+        </button>
+        <button
+          onClick={() =>
+            onStatusChange({
+              status: 'failed',
+              toolName: preview.toolName,
+              originalArgs: preview.originalArgs,
+              message: 'boom',
+            })
+          }
+        >
+          mock-fail
+        </button>
+        {/* onRetry is only ever wired up by the real ConfirmationCard's own failed-phase
+            TransactionResultCard, which never actually paints once this mock's onStatusChange has
+            fired the terminal status (AgentChatPanel swaps this whole card for its own "result"
+            item in the same React commit — see AgentChatPanel's isSettledMarker docs). This
+            button exists only so a wiring-focused test can assert the prop reaches
+            ConfirmationCard at all. */}
+        <button onClick={() => onRetry?.(preview.toolName, preview.originalArgs)}>mock-retry-prop-wired</button>
       </div>
     ),
   };
+});
+
+vi.mock('../../backend/AgentToolRunner.js', async () => {
+  const actual = await vi.importActual<typeof import('../../backend/AgentToolRunner')>(
+    '../../backend/AgentToolRunner'
+  );
+  return { ...actual, executeToolCall: vi.fn() };
 });
 
 const TEST_ADDRESS = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266';
@@ -89,7 +150,12 @@ function makeProposalHistory(toolCallId: string, preview: ProposalPreview, userT
 
 function makeWallet(overrides: Record<string, unknown> = {}): AppContext {
   return {
-    networkProvider: { getActiveNetworkId: () => 11155111 },
+    networkProvider: {
+      getActiveNetworkId: () => 11155111,
+      // "result" chat items (TransactionResultCard) read this for the Explorer link + native
+      // currency symbol fallback — same object ConfirmationCard itself reads in the real app.
+      getActiveNetwork: () => ({ network_id: 4, currency_symbol: 'ETH' }),
+    },
     ...overrides,
   } as unknown as AppContext;
 }
@@ -155,6 +221,7 @@ function readDebugConversationHistory(): ChatMessage[] {
 describe('AgentChatPanel', () => {
   beforeEach(() => {
     vi.mocked(runAgentTurn).mockReset();
+    vi.mocked(executeToolCall).mockReset();
     sessionStorage.clear();
   });
 
@@ -372,7 +439,10 @@ describe('AgentChatPanel', () => {
       // round-trip'i beklenmiyor, çünkü sonuç zaten senkron olarak history'ye yazıldı.
       await waitFor(() => expect(screen.queryByTestId('confirmation-card')).not.toBeInTheDocument());
       expect(screen.getByPlaceholderText(/Ask Arfio about your balance/i)).toBeEnabled();
-      expect(screen.getByText('propose_send completed')).toBeInTheDocument();
+      // ConfirmationCard'ın mock'u kapandı, yerine gerçek TransactionResultCard (success receipt)
+      // geldi — ham tool adı ("propose_send") asla kullanıcıya gösterilmemeli.
+      expect(screen.getByText('Transfer successful')).toBeInTheDocument();
+      expect(screen.queryByText(/propose_send/)).not.toBeInTheDocument();
 
       // runAgentTurn yalnızca ilk (kullanıcının "send 0.1 eth" mesajını gönderdiği) turdan
       // geliyor — onay sonrası İKİNCİ bir çağrı ASLA yapılmamalı.
@@ -512,6 +582,130 @@ describe('AgentChatPanel', () => {
     });
   });
 
+  // ─── "pending" durumu — Sorun 2 (settling breadcrumb yerine gerçek receipt) ────────
+  describe('pending durumu (onStatusChange "pending")', () => {
+    it('onStatusChange "pending" ile çağrılınca ham/teknik "settling" breadcrumb\'ı DEĞİL, gerçek TransactionResultCard (pending) render edilir', async () => {
+      const preview = makeProposalPreview();
+      vi.mocked(runAgentTurn).mockResolvedValueOnce({ reply: '', updatedHistory: makeProposalHistory('call_1', preview) });
+
+      renderPanel();
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'send 0.1 eth' } });
+      fireEvent.click(screen.getByRole('button', { name: /send message/i }));
+      await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByText('mock-pending'));
+
+      // Mock kart kapanır (buildChatItems artık bu tool_call_id için "confirmation" değil
+      // "result" phase="pending" üretir), yerini gerçek TransactionResultCard'ın receipt'i alır.
+      await waitFor(() => expect(screen.queryByTestId('confirmation-card')).not.toBeInTheDocument());
+      expect(screen.getByText('Transfer confirming...')).toBeInTheDocument();
+      expect(screen.queryByText(/transaction you approved to settle/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/propose_send/)).not.toBeInTheDocument();
+    });
+
+    it('broadcast hash bilinince ("pending" + txHash) receipt Explorer linkini gösterir', async () => {
+      const preview = makeProposalPreview();
+      vi.mocked(runAgentTurn).mockResolvedValueOnce({ reply: '', updatedHistory: makeProposalHistory('call_1', preview) });
+
+      renderPanel();
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'send 0.1 eth' } });
+      fireEvent.click(screen.getByRole('button', { name: /send message/i }));
+      await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByText('mock-pending-with-hash'));
+
+      await waitFor(() => expect(screen.getByRole('link', { name: /view on explorer/i })).toBeInTheDocument());
+      expect(screen.getByRole('link', { name: /view on explorer/i })).toHaveAttribute(
+        'href',
+        expect.stringContaining('0xBROADCASTHASH')
+      );
+    });
+  });
+
+  // ─── "Tekrar dene" (başarısız önerinin yeniden önerilmesi) ────────
+  //
+  // ConfirmationCard mock'lanmış olsa da, bir öneri sonuçlandığında (mock-fail) AgentChatPanel
+  // kendi "result" kalemini (gerçek TransactionResultCard, mock değil) render eder — gerçek
+  // uygulamada da böyle çalışır: ConfirmationCard, onResolved'ı kendi terminal state
+  // güncellemesiyle AYNI tick'te çağırır, React bunları tek commit'te birleştirir, bu yüzden
+  // ConfirmationCard'ın kendi başarısız/başarılı render'ı hiç ekrana basılmadan kaldırılır —
+  // "Tekrar dene" butonuna asıl tıklanan yer burasıdır, mock kartın içi değil.
+  describe('tekrar dene', () => {
+    it('başarısız bir öneride "Tekrar dene", aynı toolName+args ile executeToolCall\'ı çağırır ve yeni bir ConfirmationCard doğurur — runAgentTurn TEKRAR ÇAĞRILMAZ', async () => {
+      const preview = makeProposalPreview();
+      vi.mocked(runAgentTurn).mockResolvedValueOnce({ reply: '', updatedHistory: makeProposalHistory('call_1', preview) });
+
+      renderPanel();
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'send 0.1 eth' } });
+      fireEvent.click(screen.getByRole('button', { name: /send message/i }));
+      await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
+
+      // Onay başarısız oldu — mock kart kapanır, yerine gerçek TransactionResultCard (failed) gelir.
+      fireEvent.click(screen.getByText('mock-fail'));
+      await waitFor(() => expect(screen.queryByTestId('confirmation-card')).not.toBeInTheDocument());
+      const retryButton = await screen.findByRole('button', { name: /try again/i });
+      expect(retryButton).toBeEnabled();
+
+      const retryPreview = makeProposalPreview({ originalArgs: preview.originalArgs });
+      vi.mocked(executeToolCall).mockResolvedValueOnce({ result: retryPreview });
+
+      fireEvent.click(retryButton);
+
+      await waitFor(() =>
+        expect(executeToolCall).toHaveBeenCalledWith('propose_send', preview.originalArgs, {
+          account: TEST_ADDRESS,
+          networkId: '11155111',
+        })
+      );
+
+      // runAgentTurn modelden geçmedi — yalnızca ilk turdan (1 kez) çağrıldı.
+      expect(runAgentTurn).toHaveBeenCalledTimes(1);
+
+      // Yeni preview senkron olarak history'ye yazıldı ve otomatik yeni bir ConfirmationCard render edildi.
+      await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
+      expect(screen.getByTestId('confirmation-tool')).toHaveTextContent('propose_send');
+    });
+
+    it('executeToolCall hata dönerse, yeni bir kart doğmaz ve hata metni asistan mesajı olarak eklenir', async () => {
+      const preview = makeProposalPreview();
+      vi.mocked(runAgentTurn).mockResolvedValueOnce({ reply: '', updatedHistory: makeProposalHistory('call_1', preview) });
+
+      renderPanel();
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'send 0.1 eth' } });
+      fireEvent.click(screen.getByRole('button', { name: /send message/i }));
+      await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByText('mock-fail'));
+      const retryButton = await screen.findByRole('button', { name: /try again/i });
+
+      vi.mocked(executeToolCall).mockResolvedValueOnce({ error: 'Bakiye yetersiz.' });
+      fireEvent.click(retryButton);
+
+      await waitFor(() => expect(screen.getByText('Bakiye yetersiz.')).toBeInTheDocument());
+      expect(screen.queryByTestId('confirmation-card')).not.toBeInTheDocument();
+    });
+
+    it('onRetry prop\'u ConfirmationCard\'a doğru toolName+originalArgs ile geçirilir (kablolama testi)', async () => {
+      const preview = makeProposalPreview();
+      vi.mocked(runAgentTurn).mockResolvedValueOnce({ reply: '', updatedHistory: makeProposalHistory('call_1', preview) });
+      vi.mocked(executeToolCall).mockResolvedValueOnce({ result: makeProposalPreview() });
+
+      renderPanel();
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'send 0.1 eth' } });
+      fireEvent.click(screen.getByRole('button', { name: /send message/i }));
+      await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByText('mock-retry-prop-wired'));
+
+      await waitFor(() =>
+        expect(executeToolCall).toHaveBeenCalledWith('propose_send', preview.originalArgs, {
+          account: TEST_ADDRESS,
+          networkId: '11155111',
+        })
+      );
+    });
+  });
+
   // ─── Hazır sorular (boş ekran) ────────────────────────────────────
   describe('hazır sorular', () => {
     it('boş ekranda hazır soru butonları görünür ve tıklanınca metin gönderilir', async () => {
@@ -568,8 +762,38 @@ describe('AgentChatPanel', () => {
       fireEvent.click(screen.getByRole('button', { name: /send message/i }));
 
       await waitFor(() => expect(screen.getByText('Tamamdır.')).toBeInTheDocument());
-      expect(screen.getByText('propose_send completed')).toBeInTheDocument();
+      // Ham tool adı ("propose_send") asla kullanıcıya gösterilmemeli — çevrilmiş etiket görünür.
+      expect(screen.getByText('Send completed')).toBeInTheDocument();
+      expect(screen.queryByText(/propose_send/)).not.toBeInTheDocument();
       expect(screen.queryByTestId('confirmation-card')).not.toBeInTheDocument();
+    });
+
+    it('originalArgs taşımayan eski format bir pendingSettlement marker\'ı (eski build\'den kalma) "settling" breadcrumb\'ına düşer, çökmez', async () => {
+      vi.mocked(runAgentTurn).mockResolvedValueOnce({
+        reply: 'Tamamdır.',
+        updatedHistory: [
+          { role: 'user', content: 'send 0.1 eth' },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'propose_send', arguments: '{}' } }],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call_1',
+            name: 'propose_send',
+            content: JSON.stringify({ result: { pendingSettlement: true, toolName: 'propose_send' } }),
+          },
+          { role: 'assistant', content: 'Tamamdır.' },
+        ],
+      });
+
+      renderPanel();
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'send 0.1 eth' } });
+      fireEvent.click(screen.getByRole('button', { name: /send message/i }));
+
+      await waitFor(() => expect(screen.getByText('Tamamdır.')).toBeInTheDocument());
+      expect(screen.getByText('Waiting for the Send transaction you approved to settle...')).toBeInTheDocument();
     });
   });
 

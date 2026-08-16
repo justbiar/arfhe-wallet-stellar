@@ -32,20 +32,52 @@ import { WalletContext } from "../AppContext.js";
 import { useActiveAccount } from "../ActiveAccountProvider.js";
 import { isDomainName, resolveDomain } from "../backend/DomainResolver.js";
 import { toUserMessage } from "../backend/UserFacingError.js";
-import TransactionResultCard from "./TransactionResultCard.js";
+import TransactionResultCard, { type TransactionResultToolName } from "./TransactionResultCard.js";
 import type { ProposalPreview } from "../backend/AgentToolRunner.js";
 import type { BalanceChange } from "../backend/TransactionSimulator.js";
+import { fetchX402PaymentRequirement, settleX402Payment } from "../backend/X402ProxyClient.js";
+import {
+  signTransferWithAuthorization,
+  generateAuthorizationNonce,
+  type Eip3009Authorization,
+  type Eip3009TokenIdentity,
+} from "../backend/X402PaymentService.js";
+import { X402SpendingLedger } from "../backend/X402SpendingLedger.js";
+import { NetworkId } from "../backend/NetworkTypes.js";
+import { CONTRACTS_BASE_SEPOLIA } from "./panels/shared.js";
+
+/** Same instance shape as AgentToolRunner's own — both just read/write chrome.storage.local, no shared in-memory state needed. */
+const spendingLedger = new X402SpendingLedger();
 
 // ─── Public types ────────────────────────────────────────────────────
 
+/** The terminal outcomes — what gets summarized back to the model and recorded in Agent Geçmişi. */
 export type ConfirmationOutcome =
   | { status: "rejected"; toolName: string; reason?: string }
-  | { status: "confirmed"; toolName: string; txHash: string }
-  | { status: "failed"; toolName: string; message: string };
+  | {
+      status: "confirmed";
+      toolName: string;
+      originalArgs: Record<string, unknown>;
+      txHash: string;
+      newBalance?: { amount: string; symbol: string } | null;
+    }
+  | { status: "failed"; toolName: string; originalArgs: Record<string, unknown>; message: string };
 
 /**
- * Set as ConfirmationOutcome.reason when the active account changed before approval — see the
- * auto-cancel effect below. Exported so pages/Agent.tsx's own account-switch handling (which
+ * Every user-facing status this card can be in, terminal or not. `originalArgs` rides along on
+ * every variant except "rejected" (which never needs a receipt — see AgentChatPanel's
+ * "result" item) so the one place that persists these — AgentChatPanel — can rebuild a full
+ * TransactionResultCard receipt purely from the status it was just handed, without having to
+ * re-derive anything from this component (which has typically already unmounted by the time
+ * that receipt renders — see onStatusChange's own docs for why).
+ */
+export type ConfirmationCardStatus =
+  | ConfirmationOutcome
+  | { status: "pending"; toolName: string; originalArgs: Record<string, unknown>; txHash?: string };
+
+/**
+ * Set as the "rejected" status's `reason` when the active account changed before approval — see
+ * the auto-cancel effect below. Exported so pages/Agent.tsx's own account-switch handling (which
  * cancels a pending card for the OUTGOING account — this component will already have been
  * unmounted by then, so its own effect never gets a chance to run) uses the exact same reason
  * text, keeping Agent Geçmişi consistent regardless of which mechanism actually fired.
@@ -54,16 +86,20 @@ export const ACCOUNT_CHANGED_REASON = "Active account changed before approval";
 
 export interface ConfirmationCardProps {
   preview: ProposalPreview;
-  /** Called exactly once, when the user has rejected, or the real transaction has settled (success or failure). */
-  onResolved: (outcome: ConfirmationOutcome) => void;
   /**
-   * Called once, synchronously, the instant approval begins signing/broadcasting — before the
-   * transaction has settled. Lets the caller mark the underlying history entry as "in flight"
-   * so that if the popup closes mid-broadcast (chrome.storage.session persistence, see
-   * AgentChatPanel), reopening it never re-renders this card as still-actionable and risks a
-   * double-submit of a transaction that may already be on-chain.
+   * Fired every time this card's user-facing status changes: the instant approval starts
+   * signing/broadcasting ("pending", no hash yet), as soon as a broadcast hash is known
+   * ("pending" again, now with txHash — propose_send/propose_shield only), and exactly once at
+   * the end ("confirmed"/"failed"/"rejected"). One callback for the whole lifecycle rather than
+   * a separate one per transition, so there's exactly one place (AgentChatPanel's
+   * handleCardStatusChange) that decides how to persist each status into conversationHistory —
+   * new transitions can't be added to this component without also being wired into that single
+   * switch, unlike with N separate callbacks where it's easy to add a transition and forget to
+   * thread a new prop for it.
    */
-  onApproveStarted?: (toolName: string) => void;
+  onStatusChange: (status: ConfirmationCardStatus) => void;
+  /** Failed phase only: re-runs this same proposal (same toolName + originalArgs) from scratch. */
+  onRetry?: (toolName: string, originalArgs: Record<string, unknown>) => void;
 }
 
 /**
@@ -102,7 +138,7 @@ function riskColor(risk: string): "success" | "info" | "warning" | "error" {
   return "success";
 }
 
-export default function ConfirmationCard({ preview, onResolved, onApproveStarted }: ConfirmationCardProps) {
+export default function ConfirmationCard({ preview, onStatusChange, onRetry }: ConfirmationCardProps) {
   const { t } = useTranslation();
   const wallet = React.useContext(WalletContext);
   const { activeAccount } = useActiveAccount();
@@ -114,6 +150,7 @@ export default function ConfirmationCard({ preview, onResolved, onApproveStarted
   const [errorMessage, setErrorMessage] = React.useState("");
   const [beforeBalance, setBeforeBalance] = React.useState<number | null>(null);
   const [newBalance, setNewBalance] = React.useState<{ amount: string; symbol: string } | null>(null);
+  const [resultTimestamp, setResultTimestamp] = React.useState<number | null>(null);
 
   const { toolName, originalArgs, simulation } = preview;
 
@@ -127,14 +164,14 @@ export default function ConfirmationCard({ preview, onResolved, onApproveStarted
   // happens to be active later. If the user switches accounts while this card is still
   // reviewable, auto-cancel rather than let a stale preview be approved (and signed/broadcast)
   // against a different account. Only acts in "review" — once approval has started
-  // (cardPhase !== "review"), onResolved has already fired exactly once and there's nothing
+  // (cardPhase !== "review"), the terminal onStatusChange has already fired and there's nothing
   // left to cancel.
   React.useEffect(() => {
     if (cardPhase !== "review") return;
     if (activeAccount?.GetAddress() === originalAddressRef.current) return;
     setCardPhase("cancelled");
-    onResolved({ status: "rejected", toolName, reason: ACCOUNT_CHANGED_REASON });
-  }, [activeAccount, cardPhase, onResolved, toolName]);
+    onStatusChange({ status: "rejected", toolName, reason: ACCOUNT_CHANGED_REASON });
+  }, [activeAccount, cardPhase, onStatusChange, toolName]);
   const change = primaryBalanceChange(simulation.balanceChanges);
 
   // propose_unshield's calldata never gets a balanceChange entry (TransactionSimulator's FHE
@@ -154,13 +191,18 @@ export default function ConfirmationCard({ preview, onResolved, onApproveStarted
       ? "agent.confirmationCardShieldSummary"
       : toolName === "propose_unshield"
       ? "agent.confirmationCardUnshieldSummary"
+      : toolName === "pay_for_resource"
+      ? "agent.confirmationCardX402Summary"
       : "agent.confirmationCardSendSummary";
 
   // ── Load the "before" balance so the remaining-after-this-action amount can be shown. ──
+  // Skipped for pay_for_resource: it spends USDC, not the native/shielded asset this effect
+  // knows how to fetch — showing "remaining ETH balance" under a USDC payment would be wrong,
+  // not just unhelpful, so beforeBalance simply stays null and the row below never renders.
   React.useEffect(() => {
     let cancelled = false;
     const address = activeAccount?.GetAddress();
-    if (!network || !address) return;
+    if (!network || !address || toolName === "pay_for_resource") return;
 
     (async () => {
       try {
@@ -193,23 +235,38 @@ export default function ConfirmationCard({ preview, onResolved, onApproveStarted
   /**
    * Refreshes the balance TransactionResultCard shows after a confirmed transaction — real
    * Network.ts data, read the same way beforeBalance above was. Never throws: an unavailable
-   * network/account here just means the success state renders without a balance line.
+   * network/account here just means the success state renders without a balance line. Returns
+   * the balance (also mirrored into local `newBalance` state for this component's own render)
+   * rather than only setting state, because handleApprove awaits this before calling
+   * onStatusChange — see that call site for why: AgentChatPanel replaces this whole card with a
+   * persistent receipt the instant the terminal status fires, so a value only reachable via a
+   * *later* setState here would never make it into that receipt.
    */
-  async function loadNewBalance(): Promise<void> {
-    if (!network || !activeAccount) return;
+  async function loadNewBalance(): Promise<{ amount: string; symbol: string } | null> {
+    // Same reasoning as the beforeBalance effect above — this reads the native/shielded
+    // balance, not USDC, so it would show the wrong asset for an x402 payment. The
+    // informational "kalan bütçe" the auto-pay path shows instead (X402PaymentCard, a
+    // different piece) is the metric that's actually meaningful here.
+    if (!network || !activeAccount || toolName === "pay_for_resource") return null;
     try {
       if (toolName === "propose_unshield") {
         const tokenSymbol = String(originalArgs.tokenSymbol ?? "").toLowerCase();
         const portfolio = await network.getShieldedPortfolio(activeAccount);
         const holding = portfolio.find((h) => h.symbol.toLowerCase() === tokenSymbol);
-        if (holding) setNewBalance({ amount: holding.balance, symbol: holding.symbol });
+        if (!holding) return null;
+        const balance = { amount: holding.balance, symbol: holding.symbol };
+        setNewBalance(balance);
+        return balance;
       } else {
         const balanceWei = await network.getBalance(activeAccount.GetAddress());
         const { formatEther } = await import("ethers");
-        setNewBalance({ amount: formatEther(balanceWei), symbol: network.currency_symbol });
+        const balance = { amount: formatEther(balanceWei), symbol: network.currency_symbol };
+        setNewBalance(balance);
+        return balance;
       }
     } catch {
       // Leave newBalance null — TransactionResultCard simply omits the line.
+      return null;
     }
   }
 
@@ -230,7 +287,7 @@ export default function ConfirmationCard({ preview, onResolved, onApproveStarted
     // (a race the effect hasn't caught yet), this catches it before anything is ever signed.
     if (activeAccount?.GetAddress() !== originalAddressRef.current) {
       setCardPhase("cancelled");
-      onResolved({ status: "rejected", toolName, reason: ACCOUNT_CHANGED_REASON });
+      onStatusChange({ status: "rejected", toolName, reason: ACCOUNT_CHANGED_REASON });
       return;
     }
 
@@ -243,7 +300,8 @@ export default function ConfirmationCard({ preview, onResolved, onApproveStarted
     setCardPhase("working");
     setErrorMessage("");
     setWorkingLabel(t("agent.confirmationCardSigning"));
-    onApproveStarted?.(toolName);
+    setResultTimestamp(Date.now());
+    onStatusChange({ status: "pending", toolName, originalArgs });
 
     try {
       let hash: string;
@@ -255,6 +313,7 @@ export default function ConfirmationCard({ preview, onResolved, onApproveStarted
           hash = await network.sendTransaction(activeAccount, { to, value: amount }, (broadcastHash) => {
             setTxHash(broadcastHash);
             setWorkingLabel(t("agent.confirmationCardConfirming"));
+            onStatusChange({ status: "pending", toolName, originalArgs, txHash: broadcastHash });
           });
           await network.waitForTransaction(hash);
           break;
@@ -271,6 +330,7 @@ export default function ConfirmationCard({ preview, onResolved, onApproveStarted
           hash = await network.shieldNative(activeAccount, nativeHolding.wrapper, amount);
           setTxHash(hash);
           setWorkingLabel(t("agent.confirmationCardConfirming"));
+          onStatusChange({ status: "pending", toolName, originalArgs, txHash: hash });
           await network.waitForTransaction(hash);
           break;
         }
@@ -301,25 +361,75 @@ export default function ConfirmationCard({ preview, onResolved, onApproveStarted
           break;
         }
 
+        case "pay_for_resource": {
+          // Faz 3 only targets Base Sepolia — see AgentToolRunner's getUsdcTokenIdentity dep,
+          // which the auto-pay path already checks; this is the same guard for the manual
+          // (over-budget) approval path, which never went through that dep at all.
+          if (Number(network.network_id) !== NetworkId.Base_Sepolia) {
+            throw new Error(t("agent.confirmationCardX402UnsupportedNetwork"));
+          }
+          if (!activeAccount.ethers_wallet) {
+            throw new Error(t("agent.confirmationCardNoWallet"));
+          }
+
+          const resource = String(originalArgs.resource ?? "");
+          // Re-fetched live rather than trusted from the preview — same principle as
+          // propose_shield's wrapper re-resolution above: the terms (amount/payTo) the preview
+          // was built from could be stale by the time the user actually approves.
+          const requirement = await fetchX402PaymentRequirement(resource);
+          const tokenIdentity: Eip3009TokenIdentity = {
+            address: CONTRACTS_BASE_SEPOLIA.USDC.public,
+            name: "USD Coin",
+            version: "2",
+            chainId: NetworkId.Base_Sepolia,
+          };
+          const authorization: Eip3009Authorization = {
+            from: activeAccount.GetAddress()!,
+            to: requirement.payTo,
+            value: requirement.maxAmountRequired,
+            validAfter: 0,
+            validBefore: Math.floor(Date.now() / 1000) + requirement.maxTimeoutSeconds,
+            nonce: generateAuthorizationNonce(),
+          };
+
+          const signed = await signTransferWithAuthorization(activeAccount.ethers_wallet, tokenIdentity, authorization);
+          setWorkingLabel(t("agent.confirmationCardSettling"));
+          const settlement = await settleX402Payment(resource, signed);
+          hash = settlement.txHash;
+          setTxHash(hash);
+
+          await spendingLedger.recordPayment({
+            id: settlement.txHash,
+            accountAddress: activeAccount.GetAddress()!,
+            amountUsd: Number(requirement.maxAmountRequired) / 1_000_000,
+            service: resource,
+            txHash: settlement.txHash,
+          });
+          break;
+        }
+
         default:
           throw new Error(`Unknown proposal tool: "${toolName}"`);
       }
 
       setCardPhase("success");
-      onResolved({ status: "confirmed", toolName, txHash: hash });
-      // Fire-and-forget: the success state above is already fully valid without this — a
-      // failed balance refresh must never turn a confirmed transaction into an error state.
-      void loadNewBalance();
+      // Awaited (unlike the old fire-and-forget) so the real balance is available in time for
+      // onStatusChange — AgentChatPanel's persistent receipt is built entirely from that call's
+      // argument, since this component unmounts the instant the terminal status fires (see
+      // onStatusChange's own JSDoc). A failed balance refresh still never turns a confirmed
+      // transaction into an error state — loadNewBalance never throws, it just resolves to null.
+      const balanceAfter = await loadNewBalance();
+      onStatusChange({ status: "confirmed", toolName, originalArgs, txHash: hash, newBalance: balanceAfter });
     } catch (err) {
       const message = toUserMessage(err, t);
       setErrorMessage(message);
       setCardPhase("error");
-      onResolved({ status: "failed", toolName, message });
+      onStatusChange({ status: "failed", toolName, originalArgs, message });
     }
   };
 
   const handleReject = () => {
-    onResolved({ status: "rejected", toolName });
+    onStatusChange({ status: "rejected", toolName });
   };
 
   const isWorking = cardPhase === "working";
@@ -369,6 +479,18 @@ export default function ConfirmationCard({ preview, onResolved, onApproveStarted
             </Box>
           )}
 
+          {/* Resource/service, pay_for_resource only */}
+          {toolName === "pay_for_resource" && (
+            <Box>
+              <Typography variant="caption" color="text.secondary">
+                {t("agent.confirmationCardResource")}
+              </Typography>
+              <Typography variant="body2" sx={{ wordBreak: "break-all" }}>
+                {String(originalArgs.resource ?? "")}
+              </Typography>
+            </Box>
+          )}
+
           {/* Remaining balance */}
           {remaining !== null && (
             <Typography variant="caption" color="text.secondary">
@@ -413,11 +535,23 @@ export default function ConfirmationCard({ preview, onResolved, onApproveStarted
           {(cardPhase === "working" || cardPhase === "success" || cardPhase === "error") && (
             <TransactionResultCard
               phase={cardPhase === "working" ? "pending" : cardPhase === "success" ? "success" : "failed"}
+              toolName={toolName as TransactionResultToolName}
+              amount={displayAmount}
+              symbol={displaySymbol}
+              recipient={
+                toolName === "propose_send"
+                  ? String(originalArgs.to ?? "")
+                  : toolName === "pay_for_resource"
+                  ? change?.to
+                  : undefined
+              }
               txHash={txHash || undefined}
               errorMessage={errorMessage || undefined}
               newBalance={cardPhase === "success" ? newBalance : null}
               network={network}
               pendingLabel={workingLabel}
+              timestamp={resultTimestamp ?? undefined}
+              onRetry={onRetry ? () => onRetry(toolName, originalArgs) : undefined}
             />
           )}
 

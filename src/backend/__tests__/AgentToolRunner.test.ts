@@ -49,6 +49,37 @@ vi.mock('../DomainResolver.js', () => ({
   resolveDomain: mockResolveDomain,
 }));
 
+// ─── x402 (Faz 3) mocks ──────────────────────────────────────────────
+const { mockGetX402Settings, mockGetSpentToday, mockRecordPayment, mockFetchPaymentRequirement, mockSettleX402Payment, mockSignTransferWithAuthorization } = vi.hoisted(() => ({
+  mockGetX402Settings: vi.fn(),
+  mockGetSpentToday: vi.fn(),
+  mockRecordPayment: vi.fn(),
+  mockFetchPaymentRequirement: vi.fn(),
+  mockSettleX402Payment: vi.fn(),
+  mockSignTransferWithAuthorization: vi.fn(),
+}));
+
+vi.mock('../X402SettingsService.js', () => ({
+  X402SettingsService: { getSettings: mockGetX402Settings },
+}));
+
+vi.mock('../X402SpendingLedger.js', () => ({
+  // Must be a real `function`, not an arrow — AgentToolRunner calls `new X402SpendingLedger()`.
+  X402SpendingLedger: vi.fn().mockImplementation(function X402SpendingLedgerMock() {
+    return { getSpentToday: mockGetSpentToday, recordPayment: mockRecordPayment };
+  }),
+}));
+
+vi.mock('../X402ProxyClient.js', () => ({
+  fetchX402PaymentRequirement: mockFetchPaymentRequirement,
+  settleX402Payment: mockSettleX402Payment,
+}));
+
+vi.mock('../X402PaymentService.js', () => ({
+  signTransferWithAuthorization: mockSignTransferWithAuthorization,
+  generateAuthorizationNonce: () => '0x' + 'ab'.repeat(32),
+}));
+
 describe('AgentToolRunner', () => {
   const context = { account: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266', networkId: '11155111' };
   const RECIPIENT = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
@@ -109,6 +140,27 @@ describe('AgentToolRunner', () => {
     mockIsDomainName.mockReset().mockImplementation((input: string) => input.endsWith('.eth'));
     mockResolveDomain.mockReset();
 
+    mockGetX402Settings.mockReset().mockResolvedValue({ enabled: true, perTransactionCapUsd: 0.5, dailyBudgetCapUsd: 5 });
+    mockGetSpentToday.mockReset().mockResolvedValue(0);
+    mockRecordPayment.mockReset().mockResolvedValue(undefined);
+    mockFetchPaymentRequirement.mockReset().mockResolvedValue({
+      scheme: 'exact',
+      network: 'base-sepolia',
+      maxAmountRequired: '10000', // $0.01
+      resource: 'https://api.example.com/weather',
+      description: 'Access to weather data',
+      mimeType: 'application/json',
+      payTo: '0x00000000000000000000000000000000000000f1',
+      maxTimeoutSeconds: 60,
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      extra: { name: 'USD Coin', version: '2' },
+    });
+    mockSettleX402Payment.mockReset().mockResolvedValue({ success: true, txHash: '0xSETTLEDHASH' });
+    mockSignTransferWithAuthorization.mockReset().mockResolvedValue({
+      authorization: { from: context.account, to: '0x00000000000000000000000000000000000000f1', value: '10000', validAfter: 0, validBefore: 9999999999, nonce: '0x' + 'ab'.repeat(32) },
+      signature: '0xSIGNATURE',
+    });
+
     mockNetwork = {
       getBalance: vi.fn().mockResolvedValue('1000000000000000000'), // 1 ETH
       getShieldedPortfolio: vi.fn().mockResolvedValue([]),
@@ -116,11 +168,21 @@ describe('AgentToolRunner', () => {
       rpc_url: 'https://rpc.example.test',
       currency_symbol: 'ETH',
     };
-    mockAccount = { GetAddress: () => context.account } as unknown as Account;
+    mockAccount = {
+      GetAddress: () => context.account,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal signer stand-in for x402 tests
+      ethers_wallet: { signTypedData: vi.fn() } as any,
+    } as unknown as Account;
     deps = {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal mock for unit tests
       getNetwork: vi.fn(() => mockNetwork as any as Network),
       getAccount: vi.fn(() => mockAccount),
+      getUsdcTokenIdentity: vi.fn(() => ({
+        address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+        name: 'USD Coin',
+        version: '2',
+        chainId: 84532,
+      })),
     };
     configureAgentToolRunner(deps);
   });
@@ -439,6 +501,111 @@ describe('AgentToolRunner', () => {
       const allowed = await executeToolCall('propose_send', { to: RECIPIENT, amount: '0.1' }, context);
       expect(allowed.error).toBeUndefined();
       expect((allowed.result as ProposalPreview).requiresConfirmation).toBe(true);
+    });
+  });
+
+  // ─── pay_for_resource (x402, Faz 3) ────────────────────────────
+  describe('pay_for_resource', () => {
+    const RESOURCE = 'https://api.example.com/weather';
+
+    it('"resource" eksikse {error} döner, proxy hiç çağrılmaz', async () => {
+      const res = await executeToolCall('pay_for_resource', {}, context);
+      expect(res.result).toBeUndefined();
+      expect(res.error).toMatch(/resource/);
+      expect(mockFetchPaymentRequirement).not.toHaveBeenCalled();
+    });
+
+    it('proxy (payment-required) hata fırlatırsa {error} döner, throw etmez', async () => {
+      mockFetchPaymentRequirement.mockRejectedValueOnce(new Error('proxy unreachable'));
+      const res = await executeToolCall('pay_for_resource', { resource: RESOURCE }, context);
+      expect(res.result).toBeUndefined();
+      expect(res.error).toContain('proxy unreachable');
+    });
+
+    it('x402 kapalıysa {error} döner, ledger\'a hiçbir şey yazılmaz, imzalanmaz', async () => {
+      mockGetX402Settings.mockResolvedValueOnce({ enabled: false, perTransactionCapUsd: 0.5, dailyBudgetCapUsd: 5 });
+      const res = await executeToolCall('pay_for_resource', { resource: RESOURCE }, context);
+      expect(res.result).toBeUndefined();
+      expect(res.error).toBeDefined();
+      expect(mockSignTransferWithAuthorization).not.toHaveBeenCalled();
+      expect(mockRecordPayment).not.toHaveBeenCalled();
+    });
+
+    it('limit içindeyse OTOMATİK öder: imzalar, settle eder, ledger\'a kaydeder, autoPaid:true döner — model hiçbir karar vermez', async () => {
+      const res = await executeToolCall('pay_for_resource', { resource: RESOURCE }, context);
+
+      expect(res.error).toBeUndefined();
+      const result = res.result as { autoPaid: true; toolName: string; resource: string; amountUsd: number; txHash: string; remainingBudgetUsd: number };
+      expect(result.autoPaid).toBe(true);
+      expect(result.toolName).toBe('pay_for_resource');
+      expect(result.resource).toBe(RESOURCE);
+      expect(result.amountUsd).toBeCloseTo(0.01, 10);
+      expect(result.txHash).toBe('0xSETTLEDHASH');
+      expect(result.remainingBudgetUsd).toBeCloseTo(5 - 0.01, 10);
+
+      // Doğru sırayla: imzala -> settle et -> ledger'a kaydet.
+      expect(mockSignTransferWithAuthorization).toHaveBeenCalledWith(
+        mockAccount.ethers_wallet,
+        { address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', name: 'USD Coin', version: '2', chainId: 84532 },
+        expect.objectContaining({
+          from: context.account,
+          to: '0x00000000000000000000000000000000000000f1',
+          value: '10000',
+        })
+      );
+      expect(mockSettleX402Payment).toHaveBeenCalledWith(RESOURCE, expect.objectContaining({ signature: '0xSIGNATURE' }));
+      expect(mockRecordPayment).toHaveBeenCalledWith(
+        expect.objectContaining({ accountAddress: context.account, amountUsd: 0.01, txHash: '0xSETTLEDHASH', service: RESOURCE })
+      );
+    });
+
+    it('limit dışındaysa ConfirmationCard uyumlu bir preview döner (requiresConfirmation:true) — İMZALANMAZ, ödenmez, ledger\'a yazılmaz', async () => {
+      mockGetX402Settings.mockResolvedValueOnce({ enabled: true, perTransactionCapUsd: 0.001, dailyBudgetCapUsd: 5 }); // 0.01 > 0.001 tavanı
+
+      const res = await executeToolCall('pay_for_resource', { resource: RESOURCE }, context);
+
+      expect(res.error).toBeUndefined();
+      const preview = res.result as ProposalPreview;
+      expect(preview.requiresConfirmation).toBe(true);
+      expect(preview.toolName).toBe('pay_for_resource');
+      expect(preview.originalArgs).toEqual({ resource: RESOURCE });
+      expect(preview.simulation.success).toBe(true);
+      expect(preview.simulation.balanceChanges[0]).toMatchObject({
+        symbol: 'USDC',
+        amountFormatted: '0.01',
+        to: '0x00000000000000000000000000000000000000f1',
+      });
+
+      expect(mockSignTransferWithAuthorization).not.toHaveBeenCalled();
+      expect(mockSettleX402Payment).not.toHaveBeenCalled();
+      expect(mockRecordPayment).not.toHaveBeenCalled();
+    });
+
+    it('mevcut ağda x402 desteklenmiyorsa (getUsdcTokenIdentity undefined döner) otomatik ödeme yolunda {error} döner', async () => {
+      (deps.getUsdcTokenIdentity as ReturnType<typeof vi.fn>).mockReturnValueOnce(undefined);
+      const res = await executeToolCall('pay_for_resource', { resource: RESOURCE }, context);
+      expect(res.result).toBeUndefined();
+      expect(res.error).toMatch(/desteklenmiyor/);
+      expect(mockSignTransferWithAuthorization).not.toHaveBeenCalled();
+    });
+
+    it('hesabın ethers_wallet\'ı yoksa (kilitli) otomatik ödeme yolunda {error} döner', async () => {
+      (deps.getAccount as ReturnType<typeof vi.fn>).mockReturnValueOnce({ GetAddress: () => context.account, ethers_wallet: undefined } as unknown as Account);
+      const res = await executeToolCall('pay_for_resource', { resource: RESOURCE }, context);
+      expect(res.result).toBeUndefined();
+      expect(res.error).toBeDefined();
+      expect(mockSignTransferWithAuthorization).not.toHaveBeenCalled();
+    });
+
+    it('proxy geçersiz bir tutar döndürürse {error} döner, policy motoruna hiç gitmez', async () => {
+      mockFetchPaymentRequirement.mockResolvedValueOnce({
+        scheme: 'exact', network: 'base-sepolia', maxAmountRequired: 'not-a-number', resource: RESOURCE,
+        description: '', mimeType: 'application/json', payTo: '0x1', maxTimeoutSeconds: 60, asset: '0x2', extra: { name: 'USD Coin', version: '2' },
+      });
+      const res = await executeToolCall('pay_for_resource', { resource: RESOURCE }, context);
+      expect(res.result).toBeUndefined();
+      expect(res.error).toBeDefined();
+      expect(mockGetX402Settings).not.toHaveBeenCalled();
     });
   });
 });

@@ -1,6 +1,6 @@
 /// <reference types="vitest/globals" />
 import { AGENT_TOOLS } from '../agentTools';
-import { READ_ONLY_TOOLS, PROPOSAL_TOOLS } from '../AgentPolicyEngine';
+import { READ_ONLY_TOOLS, PROPOSAL_TOOLS, X402_TOOLS } from '../AgentPolicyEngine';
 
 /**
  * @vitest-environment node
@@ -8,16 +8,16 @@ import { READ_ONLY_TOOLS, PROPOSAL_TOOLS } from '../AgentPolicyEngine';
  * agentTools testleri
  *
  * Her tool tanımının OpenAI function-calling formatına uygun geçerli bir JSON şeması
- * olduğunu ve AgentPolicyEngine'in READ_ONLY_TOOLS + PROPOSAL_TOOLS setleriyle birebir
- * eşleştiğini doğrular. Ağ/RPC çağrısı yapılmaz.
+ * olduğunu ve AgentPolicyEngine'in READ_ONLY_TOOLS + PROPOSAL_TOOLS + X402_TOOLS setleriyle
+ * birebir eşleştiğini doğrular. Ağ/RPC çağrısı yapılmaz.
  */
 describe('agentTools', () => {
   it('AGENT_TOOLS boş değildir', () => {
     expect(AGENT_TOOLS.length).toBeGreaterThan(0);
   });
 
-  it('4 read-only + 3 proposal tool tanımlıdır', () => {
-    expect(AGENT_TOOLS).toHaveLength(7);
+  it('4 read-only + 3 proposal + 1 x402 tool tanımlıdır', () => {
+    expect(AGENT_TOOLS).toHaveLength(8);
   });
 
   describe('her tool geçerli bir OpenAI function-calling şemasına sahiptir', () => {
@@ -29,6 +29,7 @@ describe('agentTools', () => {
       'propose_send',
       'propose_shield',
       'propose_unshield',
+      'pay_for_resource',
     ] as const) {
       it(`${tool} tanımlıdır ve şeması geçerlidir`, () => {
         const def = AGENT_TOOLS.find((t) => t.function.name === tool);
@@ -66,9 +67,9 @@ describe('agentTools', () => {
   });
 
   // ─── AgentPolicyEngine ile isim tutarlılığı ───────────────────
-  describe('READ_ONLY_TOOLS / PROPOSAL_TOOLS ile birebir eşleşme', () => {
-    it('her AGENT_TOOLS ismi READ_ONLY_TOOLS veya PROPOSAL_TOOLS içinde bulunur', () => {
-      const allowed = new Set<string>([...READ_ONLY_TOOLS, ...PROPOSAL_TOOLS]);
+  describe('READ_ONLY_TOOLS / PROPOSAL_TOOLS / X402_TOOLS ile birebir eşleşme', () => {
+    it('her AGENT_TOOLS ismi READ_ONLY_TOOLS, PROPOSAL_TOOLS veya X402_TOOLS içinde bulunur', () => {
+      const allowed = new Set<string>([...READ_ONLY_TOOLS, ...PROPOSAL_TOOLS, ...X402_TOOLS]);
       for (const tool of AGENT_TOOLS) {
         expect(allowed.has(tool.function.name)).toBe(true);
       }
@@ -77,6 +78,23 @@ describe('agentTools', () => {
     it('PROPOSAL_TOOLS içindeki her isim için bir AGENT_TOOLS tanımı vardır', () => {
       const names = new Set(AGENT_TOOLS.map((t) => t.function.name));
       for (const tool of PROPOSAL_TOOLS) {
+        expect(names.has(tool)).toBe(true);
+      }
+    });
+
+    /**
+     * Yapısal kilit — pay_for_resource'un AGENT_TOOLS'ta hiç tanımlı olmadığı (Chrome'da elle
+     * test sırasında bulunan gerçek bug, bkz. CONTEXT.md bölüm 14) bir daha sessizce
+     * yaşanmasın diye: AgentOrchestrator'daki CONFIRMABLE_TOOLS ile birebir aynı küme
+     * (PROPOSAL_TOOLS ∪ X402_TOOLS, CONFIRMABLE_TOOLS'un kendi tanımı) — model bu isimlerden
+     * birini hiç göremiyorsa asla çağıramaz, tool_call sonucu geldiğinde döngüyü kırma kararı
+     * (isAwaitingConfirmation) hiçbir zaman devreye girmez. Bu test AgentPolicyEngine'e yeni
+     * bir X402_TOOLS/PROPOSAL_TOOLS üyesi eklenip agentTools.ts'e eklenmesi unutulursa kırmızı
+     * olur — tool eklendiğinde AGENT_TOOLS'a eklenmeyi ELLE hatırlamaya güvenmek yerine.
+     */
+    it('X402_TOOLS içindeki her isim için bir AGENT_TOOLS tanımı vardır (CONFIRMABLE_TOOLS kilidi)', () => {
+      const names = new Set(AGENT_TOOLS.map((t) => t.function.name));
+      for (const tool of X402_TOOLS) {
         expect(names.has(tool)).toBe(true);
       }
     });

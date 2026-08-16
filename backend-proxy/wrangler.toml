@@ -9,6 +9,18 @@ ALLOWED_ORIGIN = "chrome-extension://ajfpejolnhgeflhgjmboikiffpdlhngi"
 # Requests allowed per IP per 60 seconds.
 RATE_LIMIT_PER_MINUTE = "15"
 
+# x402 (Faz 3) — "true" routes /agent/x402/* through the real facilitator
+# (x402FacilitatorClient.ts) instead of the stub (x402Stub.ts). Default "false" until Chrome'da
+# elle uçtan uca test tamamlanır (bkz. CONTEXT.md bölüm 14).
+X402_USE_REAL_FACILITATOR = "false"
+# Base Sepolia address that receives real x402 settlements (ArfheWallet test cüzdanı).
+X402_PAYTO_ADDRESS = "0x9332339e54A27f9350C7Be300b4B9dEBc7D1c350"
+# Base Sepolia USDC contract — matches the extension's VITE_BASE_SEPOLIA_USDC_ADDRESS (.env).
+X402_USDC_ASSET_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+# X402_FACILITATOR_URL is NOT set here — x402FacilitatorClient.ts defaults to the public
+# https://x402.org/facilitator (no auth required); uncomment only to override:
+# X402_FACILITATOR_URL = "https://x402.org/facilitator"
+
 # KV namespace used by src/rateLimiter.ts to track per-IP request counts.
 # Create with: wrangler kv namespace create RATE_LIMIT_KV
 #              wrangler kv namespace create RATE_LIMIT_KV --preview

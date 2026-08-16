@@ -478,6 +478,75 @@ describe('AgentOrchestrator', () => {
     });
   });
 
+  // ─── x402 (pay_for_resource) sonrası döngü davranışı ────────────
+  //
+  // pay_for_resource, PROPOSAL_TOOLS setinde DEĞİL (semantiği farklı — bkz. CONTEXT.md bölüm
+  // 14) ama aynı "requiresConfirmation:true görünce döngü kırılmalı" garantisine tabi: bütçe
+  // dışı bir ödeme, tıpkı bir propose_* önerisi gibi ConfirmationCard'a düşer ve model devam
+  // etmemeli. Bütçe içiyse (autoPaid:true, requiresConfirmation hiç yok) döngü normal şekilde
+  // devam etmeli — otomatik ödeme sonucu modele iletilsin ki cevabında bahsedebilsin.
+  describe('pay_for_resource sonrası döngü davranışı', () => {
+    it('requiresConfirmation:true (bütçe dışı) dönerse, propose_* ile BİREBİR AYNI şekilde ikinci bir /agent/chat isteği ASLA atılmaz', async () => {
+      const paymentResponse = proxyResponse(
+        200,
+        assistantChoice({
+          content: 'Bu servise erişim için ödeme onayınız gerekiyor.',
+          tool_calls: [
+            { id: 'call_1', type: 'function', function: { name: 'pay_for_resource', arguments: '{"resource":"https://api.example.com/weather"}' } },
+          ],
+        })
+      );
+      // Kuyrukta yalnızca TEK yanıt var — döngü ikinci bir istek atarsa
+      // stubFetchRouter "unexpected extra /agent/chat call" fırlatır.
+      const fetchSpy = stubFetchRouter([paymentResponse]);
+      vi.mocked(executeToolCall).mockResolvedValueOnce({
+        result: {
+          requiresConfirmation: true,
+          toolName: 'pay_for_resource',
+          originalArgs: { resource: 'https://api.example.com/weather' },
+          simulation: {},
+        },
+      });
+
+      const res = await runAgentTurn('şu servise eriş', [], context);
+
+      expect(chatCalls(fetchSpy)).toHaveLength(1);
+      expect(res.reply).toBe('Bu servise erişim için ödeme onayınız gerekiyor.');
+      expect(res.updatedHistory).toHaveLength(3);
+      const toolResult = JSON.parse(res.updatedHistory[2].content);
+      expect(toolResult.result.requiresConfirmation).toBe(true);
+    });
+
+    it('autoPaid:true (bütçe içi) dönerse, requiresConfirmation hiç YOK — döngü kırılmaz, sonuç modele iletilir, model normal cevabını verir', async () => {
+      const paymentResponse = proxyResponse(
+        200,
+        assistantChoice({
+          content: '',
+          tool_calls: [
+            { id: 'call_1', type: 'function', function: { name: 'pay_for_resource', arguments: '{"resource":"https://api.example.com/weather"}' } },
+          ],
+        })
+      );
+      const finalResponse = proxyResponse(200, assistantChoice({ content: 'Ödeme otomatik olarak yapıldı, işte hava durumu verisi.' }));
+      const fetchSpy = stubFetchRouter([paymentResponse, finalResponse]);
+      vi.mocked(executeToolCall).mockResolvedValueOnce({
+        result: {
+          autoPaid: true,
+          toolName: 'pay_for_resource',
+          resource: 'https://api.example.com/weather',
+          amountUsd: 0.01,
+          txHash: '0xSETTLEDHASH',
+          remainingBudgetUsd: 0.99,
+        },
+      });
+
+      const res = await runAgentTurn('şu servise eriş', [], context);
+
+      expect(chatCalls(fetchSpy)).toHaveLength(2);
+      expect(res.reply).toBe('Ödeme otomatik olarak yapıldı, işte hava durumu verisi.');
+    });
+  });
+
   // ─── Max tur limiti ────────────────────────────────────────────
   describe('max tur limiti', () => {
     it('5 turdan fazla tool_calls dönerse güvenli bir mesajla durur, sonsuz döngüye girmez', async () => {

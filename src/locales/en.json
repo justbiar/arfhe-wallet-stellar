@@ -97,6 +97,8 @@
     "txResultRetry": "Try again",
     "txResultCopyAddress": "Copy address",
     "txResultCopied": "Copied",
+    "x402PaymentCardTitle": "Automatic payment made",
+    "x402PaymentCardRemainingBudgetLabel": "Remaining budget",
     "toastAccountSwitched": "Account switched: {{account}}",
     "systemNoteAccountSwitched": "— Switched to {{account}} —"
   },

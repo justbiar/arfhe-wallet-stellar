@@ -568,6 +568,7 @@ async function handlePayForResource(
     id: settlement.txHash,
     accountAddress: context.account,
     amountUsd,
+    timestamp: Date.now(),
     service: resource,
     txHash: settlement.txHash,
   });

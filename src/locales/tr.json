@@ -97,6 +97,8 @@
     "txResultRetry": "Tekrar dene",
     "txResultCopyAddress": "Adresi kopyala",
     "txResultCopied": "Kopyalandı",
+    "x402PaymentCardTitle": "Otomatik ödeme yapıldı",
+    "x402PaymentCardRemainingBudgetLabel": "Kalan bütçe",
     "toastAccountSwitched": "Hesap değişti: {{account}}",
     "systemNoteAccountSwitched": "— {{account}} hesabına geçildi —"
   },

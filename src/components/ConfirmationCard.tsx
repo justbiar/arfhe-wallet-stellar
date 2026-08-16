@@ -402,6 +402,7 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
             id: settlement.txHash,
             accountAddress: activeAccount.GetAddress()!,
             amountUsd: Number(requirement.maxAmountRequired) / 1_000_000,
+            timestamp: Date.now(),
             service: resource,
             txHash: settlement.txHash,
           });

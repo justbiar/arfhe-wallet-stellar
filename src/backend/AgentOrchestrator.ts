@@ -13,7 +13,19 @@
 import { AGENT_TOOLS } from "./agentTools.js";
 import { executeToolCall, type ToolExecutionContext } from "./AgentToolRunner.js";
 import { findLeakedInternalReference } from "./internalLeakGuard.js";
-import { PROPOSAL_TOOLS } from "./AgentPolicyEngine.js";
+import { PROPOSAL_TOOLS, X402_TOOLS } from "./AgentPolicyEngine.js";
+
+/**
+ * Tool names whose `{ result: { requiresConfirmation: true, ... } }` shape means "a
+ * ConfirmationCard is now pending, stop the loop dead" — see isAwaitingConfirmation below.
+ * PROPOSAL_TOOLS and X402_TOOLS are semantically different (see AgentPolicyEngine.ts's own
+ * docs: pay_for_resource can execute with NO confirmation at all, which no PROPOSAL_TOOLS call
+ * is ever allowed to do), but they share this one guarantee — a pending confirmation always
+ * means the loop must stop — so isAwaitingConfirmation checks membership in the union rather
+ * than duplicating its own copy of the same check per tool tier. Adding a third confirmable
+ * tool tier later means adding it here once, not hunting for every place this logic was copied.
+ */
+const CONFIRMABLE_TOOLS: readonly string[] = [...PROPOSAL_TOOLS, ...X402_TOOLS];
 
 // ─── Wire types (OpenAI-compatible chat-completion shape) ──────────
 
@@ -363,15 +375,19 @@ async function runOneToolCall(call: AgentToolCall, context: ToolExecutionContext
 }
 
 /**
- * True when `toolMessage` is a PROPOSAL_TOOLS call that produced a pending confirmation
- * card (`{ result: { requiresConfirmation: true, ... } }` — see AgentToolRunner.ts's
- * ProposalPreview). The tool loop must stop dead here: continuing would hand the model a
- * "here's a preview" result with nothing telling it the action hasn't happened yet, which
- * is exactly how it ends up hallucinating a completed transfer and a fabricated tx hash
- * (see buildSystemPrompt's YETKİ SINIRLARIN — this is the code-side half of that fix).
+ * True when `toolMessage` is a CONFIRMABLE_TOOLS (PROPOSAL_TOOLS ∪ X402_TOOLS) call that
+ * produced a pending confirmation card (`{ result: { requiresConfirmation: true, ... } }` —
+ * see AgentToolRunner.ts's ProposalPreview, which pay_for_resource's over-budget path also
+ * produces). The tool loop must stop dead here: continuing would hand the model a "here's a
+ * preview" result with nothing telling it the action hasn't happened yet, which is exactly how
+ * it ends up hallucinating a completed transfer and a fabricated tx hash (see buildSystemPrompt's
+ * YETKİ SINIRLARIN — this is the code-side half of that fix). An in-budget pay_for_resource
+ * result (`autoPaid: true`, no `requiresConfirmation` field at all) correctly returns false here
+ * — that path already executed, so the loop is meant to continue and hand the outcome to the
+ * model like any other completed tool call.
  */
 function isAwaitingConfirmation(toolName: string, toolMessage: ChatMessage): boolean {
-  if (!(PROPOSAL_TOOLS as readonly string[]).includes(toolName)) return false;
+  if (!CONFIRMABLE_TOOLS.includes(toolName)) return false;
   try {
     const parsed = JSON.parse(toolMessage.content) as { result?: { requiresConfirmation?: unknown } };
     return parsed.result?.requiresConfirmation === true;

@@ -49,6 +49,7 @@ import ConfirmationCard, {
   type ConfirmationOutcome,
 } from "./ConfirmationCard.js";
 import TransactionResultCard, { type TransactionResultToolName } from "./TransactionResultCard.js";
+import X402PaymentCard from "./X402PaymentCard.js";
 
 /** Preset prompts shown on the empty-state screen — translation keys, also used as the literal message text sent. */
 const QUICK_ACTIONS = [
@@ -121,6 +122,14 @@ type ChatItem =
       txHash?: string;
       newBalance?: { amount: string; symbol: string } | null;
       message?: string;
+    }
+  | {
+      kind: "x402Payment";
+      key: string;
+      resource: string;
+      amountUsd: number;
+      remainingBudgetUsd: number;
+      txHash?: string;
     }
   | { kind: "divider"; key: string; label: string };
 
@@ -206,6 +215,34 @@ function hasResultDetail(value: unknown): value is {
 }
 
 /**
+ * The `pay_for_resource` tool's own result when AgentPolicyEngine.evaluateX402Payment() decided
+ * the payment was within budget — AgentToolRunner.handlePayForResource has ALREADY signed,
+ * settled, and recorded it to the ledger by the time this shape exists (see that function's own
+ * docs). Unlike every other marker in this file, this is the tool message's ORIGINAL, unmodified
+ * content — AgentChatPanel never rewrites it (there's no ConfirmationCard/onStatusChange
+ * involved at all for this path), so buildChatItems reads it directly off whatever
+ * AgentOrchestrator appended to history.
+ */
+function isAutoPaidX402Result(value: unknown): value is {
+  autoPaid: true;
+  toolName: string;
+  resource: string;
+  amountUsd: number;
+  txHash?: string;
+  remainingBudgetUsd: number;
+} {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    v.autoPaid === true &&
+    typeof v.toolName === "string" &&
+    typeof v.resource === "string" &&
+    typeof v.amountUsd === "number" &&
+    typeof v.remainingBudgetUsd === "number"
+  );
+}
+
+/**
  * Derives the renderable chat log from the raw wire-format history: text bubbles for
  * user/assistant content, plus (at most one — see findPendingConfirmation, imported from
  * AgentProposalHistory.ts) an interactive ConfirmationCard slotted in exactly where its tool
@@ -216,6 +253,13 @@ function hasResultDetail(value: unknown): value is {
  * isSettledMarker (confirmed/failed — a "result" item too, phase="success"/"failed"; rejected
  * stays the minimal "settled" breadcrumb, see isSettledMarker's docs). A role:"system"
  * account-switch notice (written by Agent.tsx) renders as a centered divider.
+ *
+ * A `pay_for_resource` tool message carrying isAutoPaidX402Result is a fourth, SIMPLER case: an
+ * "x402Payment" item, read directly off the tool message's own original content — there's no
+ * ConfirmationCard/onStatusChange rewrite step for this path at all (the payment already
+ * happened before AgentOrchestrator ever appended the message), so unlike "result" this doesn't
+ * need any of handleCardStatusChange's captured-before-unmount data. Checked first in the tool
+ * branch below since its shape (`autoPaid: true`) is unambiguous and never overlaps the others.
  */
 function buildChatItems(history: ChatMessage[]): ChatItem[] {
   const pending = findPendingConfirmation(history);
@@ -250,6 +294,17 @@ function buildChatItems(history: ChatMessage[]): ChatItem[] {
         return;
       }
       const result = (parsed as { result?: unknown } | null)?.result;
+      if (isAutoPaidX402Result(result)) {
+        items.push({
+          kind: "x402Payment",
+          key: `${i}-x402-${m.tool_call_id}`,
+          resource: result.resource,
+          amountUsd: result.amountUsd,
+          remainingBudgetUsd: result.remainingBudgetUsd,
+          txHash: result.txHash,
+        });
+        return;
+      }
       if (isPendingSettlement(result)) {
         if (hasOriginalArgs(result)) {
           items.push({
@@ -626,6 +681,36 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
                     onRetry={
                       item.phase === "failed" ? () => void handleRetryProposal(item.toolName, item.originalArgs) : undefined
                     }
+                  />
+                </Box>
+              </Box>
+            ) : item.kind === "x402Payment" ? (
+              // Informational only — no Approve/Reject, the payment already happened before
+              // this item ever existed (see isAutoPaidX402Result's docs). Never part of the
+              // ConfirmationCard flow.
+              <Box key={item.key} sx={{ display: "flex", gap: 1, alignSelf: "flex-start", maxWidth: "100%", width: "100%" }}>
+                <Box
+                  sx={{
+                    width: 26,
+                    height: 26,
+                    flexShrink: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    border: "1px solid",
+                    borderColor: "divider",
+                    color: "text.primary",
+                  }}
+                >
+                  <Typography sx={{ fontSize: 14, lineHeight: 1 }}>{AGENT_AVATAR}</Typography>
+                </Box>
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <X402PaymentCard
+                    resource={item.resource}
+                    amountUsd={item.amountUsd}
+                    remainingBudgetUsd={item.remainingBudgetUsd}
+                    txHash={item.txHash}
+                    network={network}
                   />
                 </Box>
               </Box>

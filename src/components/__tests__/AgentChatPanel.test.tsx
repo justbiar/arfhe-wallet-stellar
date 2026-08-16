@@ -797,6 +797,64 @@ describe('AgentChatPanel', () => {
     });
   });
 
+  // ─── x402 otomatik ödeme kartı (Faz 3) ─────────────────────────────
+  describe('x402 otomatik ödeme (autoPaid) göstergesi', () => {
+    /**
+     * AgentToolRunner.handlePayForResource, bütçe içi bir ödemede tool mesajını doğrudan
+     * `{ result: { autoPaid: true, ... } }` şeklinde yazar (ConfirmationCard/onStatusChange hiç
+     * devreye girmez — bkz. CONTEXT.md bölüm 14). buildChatItems bu şekli henüz tanımıyor, bu
+     * yüzden bu test önce KIRMIZI olmalı: ne X402PaymentCard'ın başlığı ne de tutar/servis bilgisi
+     * hiçbir yerde görünmemeli (mesaj sessizce hiçbir ChatItem'a dönüşmüyor).
+     */
+    function autoPaidHistory(): ChatMessage[] {
+      return [
+        { role: 'user', content: 'şu servise eriş' },
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'pay_for_resource', arguments: '{"resource":"https://api.example.com/weather"}' } }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_1',
+          name: 'pay_for_resource',
+          content: JSON.stringify({
+            result: {
+              autoPaid: true,
+              toolName: 'pay_for_resource',
+              resource: 'https://api.example.com/weather',
+              amountUsd: 0.01,
+              txHash: '0xSTUBHASH1234567890',
+              remainingBudgetUsd: 0.99,
+            },
+          }),
+        },
+        { role: 'assistant', content: 'Ödeme otomatik olarak yapıldı, işte hava durumu verisi.' },
+      ];
+    }
+
+    it('autoPaid:true tool mesajı X402PaymentCard olarak render edilir — hiçbir ConfirmationCard açılmaz', async () => {
+      vi.mocked(runAgentTurn).mockResolvedValueOnce({
+        reply: 'Ödeme otomatik olarak yapıldı, işte hava durumu verisi.',
+        updatedHistory: autoPaidHistory(),
+      });
+
+      renderPanel();
+      fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'şu servise eriş' } });
+      fireEvent.click(screen.getByRole('button', { name: /send message/i }));
+
+      await waitFor(() => expect(screen.getByText('Ödeme otomatik olarak yapıldı, işte hava durumu verisi.')).toBeInTheDocument());
+
+      expect(screen.getByText('Automatic payment made')).toBeInTheDocument();
+      expect(screen.getByText('0.01 USDC')).toBeInTheDocument();
+      expect(screen.getByText('https://api.example.com/weather')).toBeInTheDocument();
+      expect(screen.getByText('0.99 USDC')).toBeInTheDocument();
+      expect(screen.queryByTestId('confirmation-card')).not.toBeInTheDocument();
+      // Ham tool adı asla görünmemeli.
+      expect(screen.queryByText(/pay_for_resource/)).not.toBeInTheDocument();
+    });
+  });
+
   // ─── Agent Geçmişi persistence ─────────────────────────────────────
   describe('agent proposal history persistence', () => {
     it('policy engine reddi agent_proposal_history storage anahtarına policy_rejected kaydı olarak yazılır', async () => {

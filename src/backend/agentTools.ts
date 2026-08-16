@@ -2,27 +2,38 @@
  * agentTools.ts — OpenAI-compatible tool (function-calling) definitions for the in-wallet
  * AI Agent, sent as the `tools` array in requests to OpenRouter.
  *
- * Covers both tool tiers from AgentPolicyEngine.ts:
+ * Covers three tool tiers from AgentPolicyEngine.ts:
  *  - READ_ONLY_TOOLS  — data reads, executed directly (see AgentToolRunner.ts).
  *  - PROPOSAL_TOOLS   — the `propose_*` tools below. Calling one only produces a preview
  *                        for the wallet UI to show the user; the agent has no signing
  *                        authority and never broadcasts anything itself. Executing the
  *                        preview (once a confirmation UI exists) is a separate, explicit
  *                        user action outside this tool-calling loop.
+ *  - X402_TOOLS       — `pay_for_resource`. Executes for real (possibly with no confirmation
+ *                        at all, if within budget) — see AgentPolicyEngine.evaluateX402Payment()
+ *                        and AgentToolRunner.handlePayForResource().
  * FORBIDDEN_TOOLS are never defined here — they're excluded at the AgentPolicyEngine level
  * and must never be offered to the model at all.
  *
- * Every `function.name` below is typed as `ReadOnlyTool | ProposalTool`, so a name that
- * drifts from AgentPolicyEngine's sets is a compile-time error, not a runtime surprise.
+ * Every `function.name` below is typed as `ReadOnlyTool | ProposalTool | X402Tool`, so a name
+ * that drifts from AgentPolicyEngine's sets is a compile-time error, not a runtime surprise.
+ * That compile-time check only catches a RENAMED tool, not a MISSING one, though — a tool that
+ * exists in AgentPolicyEngine but was simply never added here compiles just fine (its name is
+ * still a valid member of the union). That's exactly how `pay_for_resource` shipped without an
+ * AGENT_TOOLS entry for a full Faz 3 turn: AgentOrchestrator.ts sends AGENT_TOOLS verbatim as
+ * the model's tool schema, so the model could never call it, and every test up to that point
+ * hand-simulated the tool_call in a mock response instead of exercising this list — found only
+ * by manual testing in Chrome (see CONTEXT.md bölüm 14, "AGENT_TOOLS'ta pay_for_resource
+ * eksikti"). agentTools.test.ts now has a structural invariant test guarding against a repeat.
  *
  * This module runs only inside the extension, same as AgentPolicyEngine — the definitions
  * are shipped to OpenRouter as part of the request body, but no tool *implementation* lives
  * here or on any backend; execution happens locally against Network.ts / FheCofheService.ts.
  */
 
-import type { ReadOnlyTool, ProposalTool } from "./AgentPolicyEngine.js";
+import type { ReadOnlyTool, ProposalTool, X402Tool } from "./AgentPolicyEngine.js";
 
-type AllowedToolName = ReadOnlyTool | ProposalTool;
+type AllowedToolName = ReadOnlyTool | ProposalTool | X402Tool;
 
 /** A JSON Schema object, restricted to what OpenAI-style tool parameters actually use. */
 interface ToolParameterSchema {
@@ -228,6 +239,33 @@ export const AGENT_TOOLS: AgentToolDefinition[] = [
           },
         },
         required: ["amount", "tokenSymbol"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "pay_for_resource",
+      description:
+        "Ücretli (x402 ile korunan) bir kaynağa erişmek için mikro-ödeme yapar veya ödeme " +
+        "önerisi oluşturur. Kullanıcı 'şu API'ye eriş', 'şu kaynağı çek', 'ücretli veriye " +
+        "bak' gibi, erişim için ödeme gerektiren bir isteği açıkça belirttiğinde kullanılır — " +
+        "normal (ücretsiz) veri okumaları için (bakiye, geçmiş, shielded portföy) bu tool " +
+        "DEĞİL, ilgili get_* tool'u kullanılmalıdır. ÖNEMLİ: Ödeme kullanıcının önceden " +
+        "belirlediği bütçe içindeyse OTOMATİK olarak (onay istemeden) gerçekleşir; bütçe " +
+        "dışındaysa kullanıcının onayı istenir ve görev burada biter — hangi durumda " +
+        "olduğunu tool sonucundaki alanlardan (otomatik mi onay mı) anla, kullanıcıya asla " +
+        "ödemenin gerçekleştiğini varsayarak cevap verme.",
+      parameters: {
+        type: "object",
+        properties: {
+          resource: {
+            type: "string",
+            description: "Erişilmek istenen ücretli kaynağın URL'si (ör. 'https://api.example.com/weather').",
+          },
+        },
+        required: ["resource"],
         additionalProperties: false,
       },
     },

@@ -1,10 +1,15 @@
 # ArfheWallet — AI Agent Entegrasyonu: Bağlam Dosyası
 
 > Devir teslim / hatırlatma dosyası. Bir sonraki oturumda buradan devam edilecek.
-> Son güncelleme: 2026-08-16 (647 test yeşil; Faz 2 RAG tamamlandı, rewrite-omer
-> merge edildi, tool-ismi sızıntısı + propose_send halüsinasyon bug'ı + dekont UI
-> yeniden tasarımı + Alchemy multichain key sorunu çözüldü, Faz 3 (x402) ilk
-> entegrasyon turu devam ediyor — bkz. bölüm 3, 5, 10-13).
+> Son güncelleme: 2026-08-16 (kök proje 662 + backend-proxy 53 test yeşil; Faz 2 RAG
+> tamamlandı, rewrite-omer merge edildi, tool-ismi sızıntısı + propose_send
+> halüsinasyon bug'ı + dekont UI yeniden tasarımı + Alchemy multichain key sorunu
+> çözüldü, Faz 3 (x402) ilk entegrasyon turu tamamlandı + gerçek facilitator
+> entegrasyonu eklendi (backend-proxy, `x402FacilitatorClient.ts`, feature flag
+> arkasında, Chrome'da elle uçtan uca test HÂLÂ bekliyor) VE Chrome'da elle test
+> sırasında gerçek bir bug bulundu/düzeltildi: `pay_for_resource` `AGENT_TOOLS`
+> listesinde hiç yoktu, model tool'u hiç göremiyordu — bkz. bölüm 14, en alttaki
+> "Çözüldü" başlığı — bkz. bölüm 3, 5, 10-14).
 
 ## 1. Genel Amaç
 
@@ -80,11 +85,12 @@ Extension (AgentChatPanel)
 
 ## 5. Henüz Yapılmadı / Sıradaki Adımlar
 
-- **Faz 3 (x402)**: İlk tur (5 izole parça) + entegrasyonun bir kısmı tamamlandı.
-  Kalan: `AgentOrchestrator` tool-loop'una `pay_for_resource`'u tanıtmak (koşullu
-  döngü kırma), `X402PaymentCard` UI bileşeni, uçtan uca entegrasyon testleri,
-  gerçek facilitator entegrasyonu (şu an stub). Bkz. bölüm 13 — **sıradaki oturum
-  buradan devam etmeli.**
+- **Faz 3 (x402)**: İlk tur (5 izole parça) + entegrasyon (tool-loop, `X402PaymentCard`,
+  uçtan uca testler, gerçek facilitator client'ı) tamamlandı. Kalan: **Chrome'da elle
+  uçtan uca test** — gerçek facilitator kodu mock'lu testlerle doğrulandı ama gerçek bir
+  testnet settle'ının (geçerli imzayla, gerçek USDC transferi) uçtan uca başarıyla
+  tamamlandığı henüz görülmedi, `X402_USE_REAL_FACILITATOR` hâlâ `"false"` (varsayılan).
+  Bkz. bölüm 14 — **sıradaki oturum buradan devam etmeli.**
 - **Faz 4**: MCP uyumluluğu (opsiyonel, uzak gelecek, henüz başlanmadı).
 - **İngilizce başlıklar** (`TransactionResultCard`'da "Transfer successful" gibi
   bazı kalıntılar olabilir, son elle testte büyük ölçüde düzeltildi ama tam
@@ -119,8 +125,8 @@ Extension (AgentChatPanel)
 
 ## 7. Test Durumu
 
-**647 test yeşil** (kök proje, 35 dosya) + backend-proxy ayrı paket (kendi Vitest +
-`@cloudflare/vitest-pool-workers` suite'i, 30 test, 4 dosya — `pnpm exec vitest run`
+**662 test yeşil** (kök proje, 37 dosya) + backend-proxy ayrı paket (kendi Vitest +
+`@cloudflare/vitest-pool-workers` suite'i, 53 test, 6 dosya — `pnpm exec vitest run`
 ile). `pnpm build` temiz.
 
 ## 8-9. (Tarihsel — Faz 0-1 hesap-ayrımı, Arfio kimliği, erken bug fix'leri)
@@ -282,26 +288,253 @@ dostu bir sonuç kartı.
    kaydeder (manuel onaylanan limit-dışı ödemeler de ledger'a giriyor, şeffaflık
    için). "Kalan bakiye" satırı bilinçli olarak gösterilmiyor (native/shielded
    bakiye ile USDC harcaması karışmasın diye).
+7. **`AgentOrchestrator` tool-loop entegrasyonu** — bkz. "Çözüldü" alt bölümü
+   aşağıda.
+8. **`X402PaymentCard.tsx`** — otomatik (onaysız) x402 ödemesi için bilgilendirme
+   kartı, `AgentChatPanel`'e `"x402Payment"` `ChatItem` kind'i olarak entegre
+   edildi. Detaylar aşağıdaki "Çözüldü" alt bölümünde.
+9. **Uçtan uca entegrasyon testleri** (limit-içi + limit-dışı, gerçek modüller
+   birbirine bağlı) — bu turda gerçek bir bütçe-takibi bug'ı bulundu ve
+   düzeltildi. Detaylar aşağıdaki "Çözüldü" alt bölümünde.
+10. **Gerçek facilitator client'ı** (`backend-proxy/src/x402FacilitatorClient.ts`) —
+    `x402Stub.ts`'in yerini `X402_USE_REAL_FACILITATOR` feature flag'i arkasında alıyor
+    (varsayılan hâlâ stub). Detaylar aşağıdaki "Çözüldü" alt bölümünde.
 
 **Yeni tool:** `pay_for_resource(resource: string)` — `AgentToolRunner`'da
 `handlePayForResource`. `propose_*` isimlendirmesi bilinçli olarak kullanılmadı
 (semantik farklı: bu tool bütçe içindeyse gerçekten öder, sadece önizleme üretmez).
 
-**Test durumu:** 647 test yeşil (bu bölümün sonunda).
+**Test durumu:** kök proje 660 + backend-proxy 53 test yeşil (bu bölümün sonunda).
+
+### Çözüldü: AgentOrchestrator tool-loop'u pay_for_resource'u tanımıyordu (KALAN İŞ madde 1)
+
+**Bulundu (önce kırmızı test ile reprodüklendi, varsayımla değil):** `isAwaitingConfirmation()`
+yalnızca `PROPOSAL_TOOLS` listesine bakıyordu; `pay_for_resource` bu listede DEĞİL (bilinçli
+olarak, semantiği farklı olduğu için — bkz. yukarı). Sonuç: `pay_for_resource` bütçe dışı bir
+ödeme için `requiresConfirmation:true` dönse bile döngü kırılmıyor, `AgentOrchestrator` ikinci
+bir `/agent/chat` isteği atıyordu — tam olarak bölüm 12'deki halüsinasyon bug'ının aynı sınıfı
+(model, kullanıcı henüz onaylamamış bir `ConfirmationCard`'ı görmeden devam ediyor). Yazılan
+test (`pay_for_resource sonrası döngü davranışı` describe bloğu, `AgentOrchestrator.test.ts`)
+önce bu hatalı davranışı reprodükledi (kırmızı: ikinci `/agent/chat` isteği gerçekten atıldı),
+sonra fix sonrası yeşile alındı.
+
+**Fix:** Kopyalanmış bir kontrol yerine tek bir birleşik liste — `CONFIRMABLE_TOOLS =
+[...PROPOSAL_TOOLS, ...X402_TOOLS]` — tanımlandı, `isAwaitingConfirmation()` artık bu birleşik
+listeye bakıyor (aynı `ConfirmationCard.onStatusChange` union kararındaki disiplin: "birini
+düzeltip diğerini unutma" riski yapısal olarak kapatıldı — üçüncü bir onaylanabilir tool tier'ı
+eklenirse tek bir yerde eklenmesi yeterli). `pay_for_resource` `PROPOSAL_TOOLS` setine
+EKLENMEDİ — `CONFIRMABLE_TOOLS` ayrı, paralel bir birleşim, iki setin semantiği hâlâ ayrı
+(`evaluate()` vs `evaluateX402Payment()`).
+
+**Doğrulanan davranış (2 yeni test):**
+- `requiresConfirmation:true` (bütçe dışı) → `propose_send` ile birebir aynı: ikinci
+  `/agent/chat` isteği asla atılmaz, sonuç `ConfirmationCard`'a düşer.
+- `autoPaid:true` (bütçe içi, `requiresConfirmation` alanı hiç yok) → döngü kırılmaz, sonuç
+  modele iletilir, model normal cevabını üretir (bu yol zaten çalışıyordu, ek testle teyit
+  edildi).
+
+**Dosyalar:** `src/backend/AgentOrchestrator.ts` (`CONFIRMABLE_TOOLS` sabiti,
+`isAwaitingConfirmation` güncellendi), `src/backend/__tests__/AgentOrchestrator.test.ts`
+(2 yeni test). Test durumu: 647 → 649.
+
+### Çözüldü: X402PaymentCard eksikti (eski KALAN İŞ madde 1)
+
+**Bulundu (önce kırmızı test ile):** `pay_for_resource`'un otomatik ödeme sonucu
+(`{ result: { autoPaid: true, ... } }`) `AgentOrchestrator` tarafından history'ye ekleniyordu
+ama `AgentChatPanel.buildChatItems` bu şekli hiç tanımıyordu — mesaj sessizce hiçbir
+`ChatItem`'a dönüşmüyordu (ne kart, ne breadcrumb, hiçbir şey). Hem yeni `X402PaymentCard`
+bileşeni hem de `buildChatItems` entegrasyonu için önce component/mesaj render edilmeden
+kırmızı test yazılıp doğrulandı, sonra düzeltilip yeşile alındı.
+
+**Yapılanlar:**
+- `X402PaymentCard.tsx` — `TransactionResultCard`'ın dekont dilini (daire ikon, başlık, tarih,
+  ince ayraç, label/value satırlar, `shortenHex()` ile kısaltılmış+Etherscan linkli hash)
+  paylaşan ama **ayrı, bağımsız** bir bileşen — `ConfirmationCard` akışının parçası değil,
+  onay/red butonu hiç yok. "Kalan bakiye" yerine bilinçli olarak **"Kalan bütçe"**
+  (`remainingBudgetUsd`) gösteriyor — bölüm 3'teki karar gereği native/shielded bakiye ile
+  USDC harcaması hiç karışmasın diye.
+- `AgentChatPanel.tsx`: yeni `isAutoPaidX402Result()` guard'ı + yeni `"x402Payment"`
+  `ChatItem` kind'i. Diğer üç durumdan (`result`/`settling`/`settled`) farklı olarak, bu item
+  `handleCardStatusChange`'in yeniden yazdığı bir marker DEĞİL — tool mesajının kendi ham
+  içeriği doğrudan okunuyor (bu yol hiç `ConfirmationCard`/`onStatusChange`'den geçmiyor).
+- Locale: yalnızca 2 yeni anahtar (`x402PaymentCardTitle`: "Otomatik ödeme yapıldı",
+  `x402PaymentCardRemainingBudgetLabel`: "Kalan bütçe") — tutar/servis/işlem-no etiketleri
+  mevcut anahtarlardan (`txResultAmountLabel`, `confirmationCardResource`, `txResultTxLabel`,
+  `confirmationCardViewExplorer`) **yeniden kullanıldı**, kopyalanmadı. Parity testi (bölüm 13)
+  doğruladı.
+
+**Testler:** `X402PaymentCard.test.tsx` (8 test — başlık kullanıcı dili, tutar, servis, kalan
+bütçe vs. kalan bakiye karışmaması, hash yokken satır hiç yok, hash varken kısaltılmış+link,
+buton yok, tarih formatı) + `AgentChatPanel.test.tsx`'e 1 yeni test (autoPaid tool mesajı
+`X402PaymentCard` olarak render edilir, hiçbir `ConfirmationCard` açılmaz, ham tool adı
+görünmez).
+
+**Dosyalar:** `src/components/X402PaymentCard.tsx` (yeni), `src/components/AgentChatPanel.tsx`,
+`src/locales/en.json`/`tr.json`, `src/components/__tests__/X402PaymentCard.test.tsx` (yeni),
+`src/components/__tests__/AgentChatPanel.test.tsx`. Test durumu: 649 → 658.
+
+### Çözüldü: Uçtan uca entegrasyon testleri — X402SpendingLedger kayıtlarında eksik `timestamp` bulundu (eski KALAN İŞ madde 1)
+
+**Yapılanlar:** `src/components/__tests__/x402EndToEnd.test.tsx` (yeni) — iki senaryo, gerçek
+modüller birbirine bağlı (`AgentOrchestrator` + gerçek `AgentToolRunner` + gerçek
+`AgentPolicyEngine` + gerçek `X402SpendingLedger` + gerçek `ConfirmationCard`/`X402PaymentCard`
+render), yalnızca dış sınır (`fetch` — OpenRouter + x402 stub endpoint'leri) mock'landı:
+- **Senaryo 1 (limit içi):** `pay_for_resource` çağrısından sonra tool-loop kırılmadan devam
+  eder (`/agent/chat` iki kez çağrılır), `ConfirmationCard` hiç render edilmez,
+  `X402PaymentCard` gerçek verilerle görünür, ledger'a gerçekten yazılır.
+- **Senaryo 2 (limit dışı):** tool-loop kırılır, `ConfirmationCard` render edilir, onaylanınca
+  gerçek EIP-3009 imzası üretilir + settle edilir + ledger'a kaydedilir.
+
+**Bulundu (kırmızı, varsayımla değil — write path'i `console.log` ile adım adım izlenerek
+teşhis edildi):** İlk yazımda her iki senaryo da son assertion'da (`ledger.getRecordsForAccount(...)`
+→ `toHaveLength(1)`) kırmızıydı, `[]` dönüyordu. Teşhis: `chrome.storage.local` mock'unun ham
+içeriği doğru kaydı içeriyordu (`{"id":...,"accountAddress":...,"amountUsd":0.01,...}`) ama
+`X402SpendingLedger.getAll()` onu filtreleyip boş dizi döndürüyordu. Kök neden:
+`isValidRecord()` bir `timestamp: number` alanı zorunlu tutuyor, ama hem
+`AgentToolRunner.handlePayForResource` hem `ConfirmationCard`'ın `pay_for_resource` case'i
+`recordPayment()`'ı **`timestamp` alanı hiç vermeden** çağırıyordu. Sonuç: her x402 ödemesi
+sessizce geçersiz kayıt olarak yazılıyor, `getAll()`/`getSpentToday()`/
+`getRemainingDailyBudget()` onu hiçbir zaman görmüyordu — yani otomatik-ödenen x402
+harcamaları günlük bütçe hesabına **hiç girmiyordu**, bütçe tavanı fiilen işlevsizdi. Bu, kod
+yazılırken fark edilmemiş gerçek bir entegrasyon bug'ıydı; önceki turlardaki testler
+`recordPayment`'ı hep mock'lanmış/izole ledger ile çağırdığı için bu boşluğu hiç yakalamamıştı.
+
+**Fix:** Her iki `recordPayment(...)` çağrısına da `timestamp: Date.now()` eklendi
+(`src/backend/AgentToolRunner.ts`, `src/components/ConfirmationCard.tsx`).
+
+**Doğrulanan davranış:** Fix sonrası her iki senaryo da yeşil; ledger kayıtları artık
+`getAll()`/`getRecordsForAccount()`/`getSpentToday()` üzerinden gerçekten görünür oluyor.
+
+**Dosyalar:** `src/backend/AgentToolRunner.ts`, `src/components/ConfirmationCard.tsx`,
+`src/components/__tests__/x402EndToEnd.test.tsx` (yeni). Test durumu: 658 → 660.
+
+### Çözüldü: x402Stub.ts'in yerini gerçek facilitator client'ı aldı (eski KALAN İŞ madde 1)
+
+**Netleştirme (kod yazmadan önce, canlı doğrulandı):**
+- **Facilitator:** Coinbase'in açık x402 protokolü, ücretsiz/genel `https://x402.org/facilitator`
+  (auth/API key gerekmiyor) — `curl` ile canlı doğrulandı, şu an ayakta.
+- **Ağ:** Base Sepolia — bölüm 6'daki Alchemy multichain key notuyla ve mevcut
+  `VITE_BASE_SEPOLIA_USDC_ADDRESS` ile tutarlı.
+- **Protokol sürümü:** Facilitator hem v1 (legacy, düz `network: "base-sepolia"` string,
+  `maxAmountRequired`, `resource: string` — `x402Stub.ts`'in şekli) hem v2'yi (güncel, CAIP
+  network id `eip155:84532`) aynı anda destekliyor (`GET /facilitator/supported` çıktısı canlı
+  doğrulandı). **v1 hedeflendi** — kullanıcı onayıyla, mevcut koda en az değişiklik.
+- **Şema karşılaştırması (canlı `curl` istekleriyle doğrulandı, coinbase/x402 repo'sundaki
+  gerçek TypeScript tiplerinden okunarak):** `PaymentRequirements` alanları örtüşüyor (tek eksik:
+  `outputSchema`, eklendi). EIP-3009 payload şekli (`{signature, authorization: {from,to,value,
+  validAfter,validBefore,nonce}}`) `X402PaymentService.ts`'in ürettiğiyle birebir aynı — imzalama
+  tarafında SIFIR değişiklik. Kritik farklar: (1) gerçek akış `/verify` + `/settle` iki ayrı
+  çağrı istiyor, stub'ta `/verify` hiç yoktu; (2) settle yanıtındaki alan adı `txHash` değil
+  `transaction` (canlı doğrulandı: `{"success":false,"network":"base-sepolia","transaction":"",
+  "errorReason":"invalid_exact_evm_signature","payer":"0x933..."}`); (3) `validAfter`/
+  `validBefore` extension'da `number`, facilitator'da `string` bekliyor.
+
+**Yapılanlar:**
+- `backend-proxy/src/x402FacilitatorClient.ts` (yeni) — `buildRealPaymentRequirements()`
+  (payTo/asset env'den, deterministik), `verifyWithFacilitator()`/`settleWithFacilitator()`
+  (gerçek facilitator'a `/verify` + `/settle`), `isExtensionSignedPayload()` (eski stub'ın hiç
+  yapmadığı bir doğrulama — bkz. aşağıdaki kırmızı→yeşil), `settleX402PaymentReal()`
+  (verify+settle orkestrasyonu, `transaction`→`txHash` çevirisi).
+- `backend-proxy/src/index.ts`: `Env`'e `X402_USE_REAL_FACILITATOR`/`X402_PAYTO_ADDRESS`/
+  `X402_USDC_ASSET_ADDRESS`/`X402_FACILITATOR_URL` eklendi. `handleX402PaymentRequired`/
+  `handleX402Settle` artık `env.X402_USE_REAL_FACILITATOR === "true"` iken gerçek client'a,
+  değilse (varsayılan) `x402Stub.ts`'e dallanıyor — **`x402Stub.ts` silinmedi**, feature flag
+  ile geri dönülebiliyor.
+- `backend-proxy/wrangler.toml`: `X402_USE_REAL_FACILITATOR = "false"` (varsayılan),
+  `X402_PAYTO_ADDRESS = "0x9332339e54A27f9350C7Be300b4B9dEBc7D1c350"` (ArfheWallet test
+  cüzdanı, kullanıcı tarafından verildi), `X402_USDC_ASSET_ADDRESS` — sabit kodlama yerine
+  config/env değişkeni, bölüm 6'daki `.env.development`/`.env.production` deseniyle tutarlı.
+
+**Kırmızı→yeşil (gerçekten uygulandı, varsayımla değil):** `buildFacilitatorPaymentPayload()`
+içindeki `isExtensionSignedPayload()` kontrolü geçici olarak kaldırılıp testler koşuldu —
+eski stub'ın kabul ettiği eksik bir `paymentPayload` (`{signature:"0xfake"}`, `authorization`
+alanı yok) ile çağrıldığında kontrolsüz bir `TypeError` (`Cannot read properties of undefined
+(reading 'from')`) fırlattığı gözlemlendi (kırmızı). Kontrol geri eklenip aynı testler tekrar
+koşuldu, artık net bir hata mesajıyla reddediyor (yeşil).
+
+**Testler:**
+- `x402FacilitatorClient.test.ts` (16 test) — `buildRealPaymentRequirements`'ın deterministik
+  olduğu ve eksik env'de açıkça hata verdiği; `isExtensionSignedPayload`/
+  `buildFacilitatorPaymentPayload`'ın eski stub'ın kabul ettiği şekilleri reddettiği
+  (kırmızı→yeşil bölümü); `verifyWithFacilitator`/`settleWithFacilitator`/
+  `settleX402PaymentReal`'ın **canlı facilitator'dan gözlenen gerçek response örnekleriyle**
+  (hem `unexpected_error`/`invalid_exact_evm_signature` hata örnekleri hem sentetik başarı
+  örnekleri) doğru davrandığı — hiçbiri gerçek `x402.org`'a istek atmıyor, `fetch` mock'lu.
+- `x402FacilitatorEndpoint.test.ts` (7 test, yeni) — `/agent/x402/payment-required` ve
+  `/agent/x402/settle`'ı `env.X402_USE_REAL_FACILITATOR="true"` iken uçtan uca (SELF.fetch,
+  mock'lu `fetch`) doğruluyor: gerçek v1 requirements döner (`_stub` yok), eski stub sözleşmesi
+  reddedilir (kırmızı→yeşilin endpoint seviyesindeki karşılığı), verify+settle başarılı akışta
+  `transaction`→`txHash` çevirisi doğru, verify başarısızsa 402 + `response.ok=false` (extension'ın
+  `X402ProxyClient.settleX402Payment()`'ının throw etmesi için), facilitator'a ağ hatasında 502.
+  Ayrıca bayrak `"false"` iken (varsayılan) davranışın hiç değişmediği ayrı bir describe bloğunda
+  doğrulandı.
+- `x402StubEndpoints.test.ts` (eski, dokunulmadı) — hâlâ 12/12 yeşil, stub yolu bozulmadı.
+
+**Dosyalar:** `backend-proxy/src/x402FacilitatorClient.ts` (yeni), `backend-proxy/src/index.ts`,
+`backend-proxy/wrangler.toml`, `backend-proxy/src/__tests__/x402FacilitatorClient.test.ts` (yeni),
+`backend-proxy/src/__tests__/x402FacilitatorEndpoint.test.ts` (yeni). Test durumu (backend-proxy):
+30 → **53**. Kök proje (extension tarafı): **660, değişmedi** — `X402ProxyClient.ts`/
+`X402PaymentService.ts`/`ConfirmationCard.tsx`/`AgentToolRunner.ts` arayüzleri hiç değişmedi.
+
+**⚠️ Henüz doğrulanmadı, "tamamlandı" ile karıştırılmamalı:** Bu kod gerçek facilitator'ın
+şemasıyla eşleşiyor ve mock'lu testlerle doğrulandı, verify/settle endpoint'lerine bu turda
+GERÇEKTEN `curl` ile istek atılıp gerçek response şekilleri gözlemlendi — ama geçerli bir
+EIP-3009 imzasıyla, gerçek testnet USDC'nin uçtan uca (extension → backend-proxy → facilitator →
+zincir) başarıyla taşındığı hiç görülmedi (kullanılan test imzası kasıtlı olarak geçersizdi, bkz.
+`invalid_exact_evm_signature` örneği). `X402_USE_REAL_FACILITATOR` prod'da/dev'de hâlâ `"false"`.
+Bu, Chrome'da elle uçtan uca test aşamasını bekliyor.
 
 **KALAN İŞ — sıradaki oturum buradan devam etmeli:**
-1. `AgentOrchestrator`'ın tool-loop'una `pay_for_resource`'u tanıtmak: 
-   `requiresConfirmation:false` ise döngü kırılmadan otomatik devam, `true` ise
-   mevcut `PROPOSAL_TOOLS` gibi döngü kırılıp `ConfirmationCard`'a düşsün.
-2. `X402PaymentCard.tsx` — otomatik ödeme bilgilendirme kartı (dekont diliyle,
-   onay istemez): daire ikon, başlık, tarih, tutar, servis/kaynak, kalan bütçe.
-   `AgentChatPanel.buildChatItems`'a yeni bir `"x402Payment"` `ChatItem` kind'i.
-3. Locale: yeni metinler `en.json`/`tr.json`'a, parity testinin yakaladığını
-   doğrula.
-4. Uçtan uca entegrasyon testleri: limit-içi otomatik akış (kart hiç açılmadan
-   `X402PaymentCard` render edilir, ledger'a kaydedilir) + limit-dışı akış
-   (`ConfirmationCard` açılır, onaylanınca doğru ödeme yapılır).
-5. Bu ilk turun kapsamı dışında bırakılanlar: gerçek facilitator entegrasyonu
-   (stub'ın yerini alacak), Chrome'da elle uçtan uca test (henüz hiç yapılmadı —
-   önceki fazlarda elle test defalarca kod-only testlerin kaçırdığı gerçek
-   bug'ları bulmuştu, bu yüzden entegrasyon bitince mutlaka yapılmalı).
+1. Chrome'da elle uçtan uca test — hem x402 akışının genel UI/UX'i (limit-içi otomatik ödeme,
+   limit-dışı `ConfirmationCard` onayı) hem de `X402_USE_REAL_FACILITATOR="true"` yapılıp gerçek
+   bir Base Sepolia test cüzdanıyla, gerçek testnet USDC ile uçtan uca bir settle'ın fiilen
+   başarılı olduğu HİÇ görülmedi. Önceki fazlarda elle test defalarca kod-only testlerin
+   kaçırdığı gerçek bug'ları bulmuştu (bkz. bölüm 13), bu yüzden mutlaka yapılmalı — bu madde
+   "tamamlandı" olarak işaretlenmedi.
+
+### Çözüldü: Chrome'da elle test sırasında bulunan gerçek bug — pay_for_resource AGENT_TOOLS'ta hiç yoktu
+
+Bu, "KALAN İŞ" listesindeki planlı bir madde DEĞİL — bölüm 5/14'ün öngördüğü elle test adımı
+sırasında yeni keşfedilen bir bug.
+
+**Bulundu:** Chrome'da Arfio'ya "hangi ücretli kaynaklara erişebiliyorsun" diye sorulduğunda,
+model kendi yetkisi olmadığını söyledi — `pay_for_resource`'un varlığından tamamen habersizdi.
+
+**Kök neden:** `AgentOrchestrator.ts` LLM'e gönderilecek tool şemasını `AGENT_TOOLS`'tan
+(`agentTools.ts`) alıyor. `AgentPolicyEngine.ts`'teki `X402_TOOLS` sabiti yalnızca
+`CONFIRMABLE_TOOLS` (tool_call SONUCU geldiğinde döngüyü kırma kararı) içinde kullanılıyordu —
+ama `agentTools.ts`'in `AGENT_TOOLS` dizisine `pay_for_resource` hiç eklenmemişti. Model bu
+tool'u şemada hiç görmediği için asla çağıramıyordu; tüm önceki turlardaki testler
+(`AgentOrchestrator.test.ts`, `AgentToolRunner.test.ts`, `x402EndToEnd.test.tsx`) tool_call'ı
+mock response içinde ELLE simüle ettiği için (`function: { name: 'pay_for_resource', ... }`
+sabit yazılmış), hiçbiri gerçek `AGENT_TOOLS` listesini okumuyordu — şemanın eksik olduğunu
+yakalayamadılar. `AgentPolicyEngine.ts`'teki `X402_TOOLS`'un kendi JSDoc'u aslında
+"callers (AgentToolRunner, agentTools.ts) classify a tool name by referencing this constant"
+diyordu — yani niyet baştan beri buydu, uygulanmamıştı.
+
+**Fix:** `agentTools.ts`'e `propose_*` deseniyle birebir tutarlı bir `pay_for_resource` tanımı
+eklendi (`resource: string`, zorunlu; description modelin bunu NE ZAMAN çağıracağını — ücretli
+kaynak erişimi, normal get_* okumalarıyla karıştırılmaması gerektiğini, otomatik/onaylı ayrımını
+kullanıcıya asla varsayarak anlatmaması gerektiğini — açıkça belirtiyor). `AllowedToolName`
+union'ına `X402Tool` eklendi (`ReadOnlyTool | ProposalTool | X402Tool`).
+
+**Yapısal kilit (tekrar yaşanmasın diye):** `agentTools.test.ts`'e yeni bir invariant testi
+eklendi — `X402_TOOLS` (≡ `CONFIRMABLE_TOOLS`'un x402 bacağı, `PROPOSAL_TOOLS ∪ X402_TOOLS`)
+içindeki her isim için bir `AGENT_TOOLS` tanımı olduğunu doğruluyor. Bu, `AgentPolicyEngine`'e
+yeni bir `X402_TOOLS`/`PROPOSAL_TOOLS` üyesi eklenip `agentTools.ts`'e eklenmesi unutulursa
+kırmızı olacak — elle hatırlamaya güvenmek yerine.
+
+**Kırmızı→yeşil (gerçekten uygulandı):** `agentTools.ts`'ten `pay_for_resource` tanımı geçici
+olarak kaldırılıp testler koşuldu — yeni invariant testi dahil 3 test kırmızı oldu (`X402_TOOLS
+içindeki her isim için bir AGENT_TOOLS tanımı vardır` testi tam olarak bu bug'ı yakaladı).
+Tanım geri eklenip testler tekrar koşuldu, hepsi yeşil.
+
+**Testler:** `agentTools.test.ts` — 18 → 20 test (yeni `pay_for_resource` şema testi, yeni
+`X402_TOOLS` invariant testi, tool sayısı 7 → 8 güncellendi).
+
+**Dosyalar:** `src/backend/agentTools.ts`, `src/backend/__tests__/agentTools.test.ts`. Test
+durumu: 660 → **662**. Kod-only değişiklik — dev server'lara (wrangler dev/vite dev) dokunulmadı.
+
+**Not:** Bu fix `X402_USE_REAL_FACILITATOR` bayrağından bağımsız — stub yolunda da gerçek
+facilitator yolunda da geçerli, çünkü sorun modelin tool'u görüp göremediğiyle ilgiliydi, hangi
+backend'e settle edildiğiyle değil.

@@ -97,6 +97,17 @@ describe('AgentOrchestrator', () => {
       expect(prompt).toMatch(/DUR\./);
     });
 
+    it('pay_for_resource\'un da propose_* ile aynı "çağır, sonra DUR" protokolüne tabi olduğunu ve modelin ayrıca sohbette ödeme izni SORMAMASI gerektiğini belirtir', () => {
+      // Bu araç kullanıcıya sohbette "ödemeyi onaylıyor musunuz?" diye ayrıca sorulmadan
+      // doğrudan çağrılmalı — asıl onay zaten ConfirmationCard'ın işi (requiresConfirmation:true
+      // döndüğünde). Bu talimat eksikken model, tool'u hiç çağırmadan düz metinle izin
+      // istiyordu — bu yüzden kart hiç render edilmiyordu (Chrome'da elle test bulgusu).
+      const prompt = buildSystemPrompt();
+      expect(prompt).toContain('pay_for_resource');
+      expect(prompt).toMatch(/pay_for_resource[\s\S]{0,400}AYNI kural/);
+      expect(prompt).toMatch(/ayrıca ödeme izni.*İSTEME/);
+    });
+
     it('gerçek sonuç gelmeden "işlem gönderildi/tamamlandı" dememesi ve tx hash uydurmaması gerektiğini belirtir', () => {
       const prompt = buildSystemPrompt();
       expect(prompt).toMatch(/ASLA.*tx hash.*uydurma|uydurman.*yanlış/i);

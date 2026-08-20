@@ -13,6 +13,7 @@ import type Account from '../../backend/Account';
 import type { ChatMessage, RunAgentTurnResult } from '../../backend/AgentOrchestrator';
 import type { ProposalPreview } from '../../backend/AgentToolRunner';
 import type { ProposalRecord } from '../../backend/AgentProposalHistory';
+import { PROPOSAL_TOOLS, X402_TOOLS } from '../../backend/AgentPolicyEngine';
 
 /**
  * AgentChatPanel testleri
@@ -405,6 +406,33 @@ describe('AgentChatPanel', () => {
       // Aynı turdaki metin cevabı da normal şekilde render edilmeli
       expect(screen.getByText('İşte önizleme, onaylar mısınız?')).toBeInTheDocument();
     });
+
+    // Invariant: buildChatItems/ConfirmationCard render yolu toolName'e göre dallanmıyor
+    // (kasıtlı olarak — bkz. AgentChatPanel.tsx'teki buildChatItems ve findPendingConfirmation,
+    // ikisi de yalnızca { requiresConfirmation: true, toolName, originalArgs, simulation } şeklini
+    // kontrol eder, belirli bir toolName listesiyle eşleştirmez). Bu test, requiresConfirmation
+    // döndürebilen HER tool (PROPOSAL_TOOLS ∪ X402_TOOLS — AgentOrchestrator.ts'teki
+    // CONFIRMABLE_TOOLS ile birebir aynı küme) için kartın gerçekten render edildiğini kanıtlar
+    // — biri ileride buraya toolName-özel bir filtre eklerse (ör. yalnızca propose_* için kart
+    // göster gibi bir "iyileştirme"), pay_for_resource sessizce düz metne düşer ve bu test kırılır.
+    const CONFIRMABLE_TOOLS = [...PROPOSAL_TOOLS, ...X402_TOOLS];
+    it.each(CONFIRMABLE_TOOLS)(
+      'requiresConfirmation:true dönen "%s" için de ConfirmationCard render edilir',
+      async (toolName) => {
+        const preview = makeProposalPreview({ toolName, originalArgs: { resource: 'https://api.example.com/weather' } });
+        vi.mocked(runAgentTurn).mockResolvedValueOnce({
+          reply: '',
+          updatedHistory: makeProposalHistory('call_1', preview),
+        });
+
+        renderPanel();
+        fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'test' } });
+        fireEvent.click(screen.getByRole('button', { name: /send message/i }));
+
+        await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
+        expect(screen.getByTestId('confirmation-tool')).toHaveTextContent(toolName);
+      }
+    );
 
     it('bir ConfirmationCard aktifken input ve gönder butonu devre dışı kalır', async () => {
       const preview = makeProposalPreview();

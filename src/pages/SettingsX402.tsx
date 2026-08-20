@@ -11,7 +11,7 @@
  * every keystroke.
  */
 
-import { useContext, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 import {
@@ -24,6 +24,23 @@ import { X402_ABSOLUTE_CAPS } from "../backend/AgentPolicyEngine.js";
 
 function formatUsd(amount: number): string {
     return `$${amount.toFixed(2)}`;
+}
+
+/** Digits with at most one decimal point — "", "0", "0.", "0.05" all match; "0.0.5", "abc" don't. */
+const DECIMAL_INPUT_PATTERN = /^\d*\.?\d*$/;
+
+/**
+ * A native `type="number"` input sharing its flex row with both a startAdornment ("$") and
+ * Chromium's own spin-button box, inside the ~120px width these fields use, renders correctly
+ * (DOM `value` is right, confirmed via DevTools) but the browser can collapse the number input's
+ * own text layer to near-zero visible width — the field then LOOKS empty (just the adornment
+ * and a caret) even though it isn't. `type="text"` with `inputMode="decimal"` sidesteps that
+ * rendering path entirely (no native spinner, no number-specific layout) while still bringing up
+ * the numeric keyboard on mobile; DECIMAL_INPUT_PATTERN below does the digit-filtering the native
+ * `type="number"` used to do for free.
+ */
+function isValidDecimalInput(value: string): boolean {
+    return DECIMAL_INPUT_PATTERN.test(value);
 }
 
 export default function SettingsX402() {
@@ -48,26 +65,48 @@ export default function SettingsX402() {
         };
     }, []);
 
-    const persist = async (next: X402Settings) => {
+    /**
+     * Monotonic counter guarding against out-of-order persist() resolution: onBlur on either
+     * numeric field, or the enable toggle, can each independently kick off an async
+     * X402SettingsService.saveSettings() call, and nothing serializes them — a user editing
+     * perTxInput then quickly editing it again (or toggling enabled mid-edit) can have TWO
+     * saveSettings() calls in flight at once. Without this guard, whichever call's chrome.storage
+     * round-trip happens to resolve LAST wins and overwrites local input state, even if it was
+     * dispatched FIRST — so a slower-resolving stale write can clobber a newer, already-visible
+     * value the user just typed (observed: setting a field to "0" then having it silently revert
+     * to an earlier in-flight value once that older write finally resolved).
+     */
+    const persistRequestId = useRef(0);
+
+    /** Which local input state (if any) to resync from the clamped result — see persist()'s own docs. */
+    type PersistTarget = "enabled" | "perTx" | "dailyBudget";
+
+    const persist = async (next: X402Settings, target: PersistTarget) => {
+        const requestId = ++persistRequestId.current;
         const clamped = await X402SettingsService.saveSettings(next);
+        // A newer persist() call has started since this one was dispatched — this result is
+        // stale (whatever the newer call's own resolution says, or will say, wins instead).
+        if (requestId !== persistRequestId.current) return;
         setSettings(clamped);
-        setPerTxInput(String(clamped.perTransactionCapUsd));
-        setDailyBudgetInput(String(clamped.dailyBudgetCapUsd));
+        // Only resync the field this specific commit was actually for — never the other one,
+        // which may be mid-edit right now and must not be stomped by an unrelated commit.
+        if (target === "perTx") setPerTxInput(String(clamped.perTransactionCapUsd));
+        if (target === "dailyBudget") setDailyBudgetInput(String(clamped.dailyBudgetCapUsd));
     };
 
     const toggleEnabled = (enabled: boolean) => {
         if (!settings) return;
-        void persist({ ...settings, enabled });
+        void persist({ ...settings, enabled }, "enabled");
     };
 
     const commitPerTx = () => {
         if (!settings) return;
-        void persist({ ...settings, perTransactionCapUsd: Number.parseFloat(perTxInput) });
+        void persist({ ...settings, perTransactionCapUsd: Number.parseFloat(perTxInput) }, "perTx");
     };
 
     const commitDailyBudget = () => {
         if (!settings) return;
-        void persist({ ...settings, dailyBudgetCapUsd: Number.parseFloat(dailyBudgetInput) });
+        void persist({ ...settings, dailyBudgetCapUsd: Number.parseFloat(dailyBudgetInput) }, "dailyBudget");
     };
 
     if (!settings) {
@@ -114,19 +153,24 @@ export default function SettingsX402() {
                             <ListItemText primary={t("x402.perTransactionCap")} secondary={t("x402.perTransactionCapDesc")} />
                             <TextField
                                 size="small"
-                                type="number"
+                                type="text"
                                 disabled={disabled}
                                 value={perTxInput}
-                                onChange={(e) => setPerTxInput(e.target.value)}
+                                onChange={(e) => isValidDecimalInput(e.target.value) && setPerTxInput(e.target.value)}
                                 onBlur={commitPerTx}
                                 onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
                                 slotProps={{
                                     input: {
                                         startAdornment: <InputAdornment position="start">$</InputAdornment>,
                                     },
-                                    htmlInput: { min: 0, step: 0.01, "aria-label": t("x402.perTransactionCap") },
+                                    htmlInput: { inputMode: "decimal", "aria-label": t("x402.perTransactionCap") },
                                 }}
-                                sx={{ width: 120, ml: 2 }}
+                                sx={{
+                                    width: 150,
+                                    ml: 2,
+                                    "& .MuiInputBase-input": { fontSize: 13 },
+                                    "& .MuiInputAdornment-root .MuiTypography-root": { fontSize: 13 },
+                                }}
                             />
                         </ListItem>
 
@@ -135,19 +179,24 @@ export default function SettingsX402() {
                             <ListItemText primary={t("x402.dailyBudget")} secondary={t("x402.dailyBudgetDesc")} />
                             <TextField
                                 size="small"
-                                type="number"
+                                type="text"
                                 disabled={disabled}
                                 value={dailyBudgetInput}
-                                onChange={(e) => setDailyBudgetInput(e.target.value)}
+                                onChange={(e) => isValidDecimalInput(e.target.value) && setDailyBudgetInput(e.target.value)}
                                 onBlur={commitDailyBudget}
                                 onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
                                 slotProps={{
                                     input: {
                                         startAdornment: <InputAdornment position="start">$</InputAdornment>,
                                     },
-                                    htmlInput: { min: 0, step: 0.01, "aria-label": t("x402.dailyBudget") },
+                                    htmlInput: { inputMode: "decimal", "aria-label": t("x402.dailyBudget") },
                                 }}
-                                sx={{ width: 120, ml: 2 }}
+                                sx={{
+                                    width: 150,
+                                    ml: 2,
+                                    "& .MuiInputBase-input": { fontSize: 13 },
+                                    "& .MuiInputAdornment-root .MuiTypography-root": { fontSize: 13 },
+                                }}
                             />
                         </ListItem>
                     </List>

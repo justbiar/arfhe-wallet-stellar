@@ -90,7 +90,13 @@ export function buildRealPaymentRequirements(resource: string, env: X402Env): Re
     payTo: requireEnvValue(env.X402_PAYTO_ADDRESS, "X402_PAYTO_ADDRESS"),
     maxTimeoutSeconds: 60,
     asset: requireEnvValue(env.X402_USDC_ASSET_ADDRESS, "X402_USDC_ASSET_ADDRESS"),
-    extra: { name: "USD Coin", version: "2" },
+    // Base Sepolia testnet USDC'nin GERÇEK EIP-712 domain name'i — extension'ın
+    // (src/AppContext.ts'teki getUsdcTokenIdentity dep'i) imzaladığı domain'le BİREBİR AYNI
+    // olmalı. Facilitator, imzayı doğrularken burada bildirilen name/version'ı kullanarak EIP-712
+    // domain'ini yeniden kurup ecrecover yapıyor — extension "USDC" ile imzalarken burada hâlâ
+    // "USD Coin" yazıyorsa, iki taraf farklı domain hash'i üretir ve facilitator her seferinde
+    // invalid_exact_evm_signature ile reddeder (imzanın kendisi doğru olsa bile).
+    extra: { name: "USDC", version: "2" },
   };
 }
 

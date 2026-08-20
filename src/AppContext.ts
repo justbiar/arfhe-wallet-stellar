@@ -99,7 +99,7 @@ export class AppContext {
         if (Number(networkId) !== NetworkId.Base_Sepolia) return undefined;
         return {
           address: CONTRACTS_BASE_SEPOLIA.USDC.public,
-          name: "USD Coin",
+          name: "USDC", // Base Sepolia testnet USDC domain name — confirmed via Circle docs & BaseScan
           version: "2",
           chainId: NetworkId.Base_Sepolia,
         };

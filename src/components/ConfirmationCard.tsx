@@ -34,17 +34,16 @@ import { isDomainName, resolveDomain } from "../backend/DomainResolver.js";
 import { toUserMessage } from "../backend/UserFacingError.js";
 import TransactionResultCard, { type TransactionResultToolName } from "./TransactionResultCard.js";
 import type { ProposalPreview } from "../backend/AgentToolRunner.js";
+import { getUsdcTokenIdentity } from "../backend/AgentToolRunner.js";
 import type { BalanceChange } from "../backend/TransactionSimulator.js";
 import { fetchX402PaymentRequirement, settleX402Payment } from "../backend/X402ProxyClient.js";
 import {
   signTransferWithAuthorization,
   generateAuthorizationNonce,
   type Eip3009Authorization,
-  type Eip3009TokenIdentity,
 } from "../backend/X402PaymentService.js";
 import { X402SpendingLedger } from "../backend/X402SpendingLedger.js";
 import { NetworkId } from "../backend/NetworkTypes.js";
-import { CONTRACTS_BASE_SEPOLIA } from "./panels/shared.js";
 
 /** Same instance shape as AgentToolRunner's own — both just read/write chrome.storage.local, no shared in-memory state needed. */
 const spendingLedger = new X402SpendingLedger();
@@ -364,7 +363,7 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
         case "pay_for_resource": {
           // Faz 3 only targets Base Sepolia — see AgentToolRunner's getUsdcTokenIdentity dep,
           // which the auto-pay path already checks; this is the same guard for the manual
-          // (over-budget) approval path, which never went through that dep at all.
+          // (over-budget) approval path.
           if (Number(network.network_id) !== NetworkId.Base_Sepolia) {
             throw new Error(t("agent.confirmationCardX402UnsupportedNetwork"));
           }
@@ -377,12 +376,15 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
           // propose_shield's wrapper re-resolution above: the terms (amount/payTo) the preview
           // was built from could be stale by the time the user actually approves.
           const requirement = await fetchX402PaymentRequirement(resource);
-          const tokenIdentity: Eip3009TokenIdentity = {
-            address: CONTRACTS_BASE_SEPOLIA.USDC.public,
-            name: "USD Coin",
-            version: "2",
-            chainId: NetworkId.Base_Sepolia,
-          };
+          // Read from the same AgentToolRunner dep the auto-pay path uses (configured once in
+          // AppContext.ts) rather than re-declaring the domain locally — a second, independently
+          // maintained copy is exactly what let this domain drift out of sync before (name:
+          // "USD Coin" vs "USDC"), which the token contract silently rejects as an invalid
+          // signature rather than a helpful error.
+          const tokenIdentity = getUsdcTokenIdentity(String(network.network_id));
+          if (!tokenIdentity) {
+            throw new Error(t("agent.confirmationCardX402UnsupportedNetwork"));
+          }
           const authorization: Eip3009Authorization = {
             from: activeAccount.GetAddress()!,
             to: requirement.payTo,

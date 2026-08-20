@@ -56,10 +56,25 @@ vi.mock('../../backend/X402SpendingLedger.js', () => ({
     return { recordPayment: mockRecordPayment };
   }),
 }));
+// ConfirmationCard now sources the USDC EIP-712 domain from AgentToolRunner's dep (single
+// source of truth shared with the auto-pay path, see AgentToolRunner.ts's getUsdcTokenIdentity)
+// instead of declaring its own copy — mock just that export rather than pulling in the real
+// module (which would drag in Network.ts/X402SettingsService/etc.).
+vi.mock('../../backend/AgentToolRunner.js', () => ({
+  getUsdcTokenIdentity: vi.fn(),
+}));
 
 import { fetchX402PaymentRequirement, settleX402Payment } from '../../backend/X402ProxyClient';
 import { signTransferWithAuthorization } from '../../backend/X402PaymentService';
+import { getUsdcTokenIdentity } from '../../backend/AgentToolRunner';
 import { NetworkId } from '../../backend/NetworkTypes';
+
+const X402_TOKEN_IDENTITY = {
+  address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+  name: 'USDC', // Base Sepolia testnet USDC domain name — see AppContext.ts's getUsdcTokenIdentity
+  version: '2',
+  chainId: NetworkId.Base_Sepolia,
+};
 
 const TEST_ADDRESS = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266';
 const RECIPIENT = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
@@ -197,6 +212,7 @@ describe('ConfirmationCard', () => {
       authorization: { from: TEST_ADDRESS, to: '0x00000000000000000000000000000000000000f1', value: '10000', validAfter: 0, validBefore: 9999999999, nonce: '0x' + 'cd'.repeat(32) },
       signature: '0xX402SIGNATURE',
     });
+    vi.mocked(getUsdcTokenIdentity).mockReset().mockReturnValue(X402_TOKEN_IDENTITY);
   });
 
   function renderCard(preview: ProposalPreview) {
@@ -628,7 +644,7 @@ describe('ConfirmationCard', () => {
       expect(fetchX402PaymentRequirement).toHaveBeenCalledWith(X402_RESOURCE);
       expect(signTransferWithAuthorization).toHaveBeenCalledWith(
         mockAccount.ethers_wallet,
-        { address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', name: 'USD Coin', version: '2', chainId: NetworkId.Base_Sepolia },
+        X402_TOKEN_IDENTITY,
         expect.objectContaining({ from: TEST_ADDRESS, to: X402_PAY_TO, value: '10000' })
       );
       expect(settleX402Payment).toHaveBeenCalledWith(X402_RESOURCE, expect.objectContaining({ signature: '0xX402SIGNATURE' }));
@@ -654,6 +670,19 @@ describe('ConfirmationCard', () => {
           </ActiveAccountContext.Provider>
         </WalletContext.Provider>
       );
+      fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+      await waitFor(() => expect(lastCallWithStatus(onStatusChange, 'failed')).toBeDefined());
+      expect(signTransferWithAuthorization).not.toHaveBeenCalled();
+      expect(mockRecordPayment).not.toHaveBeenCalled();
+    });
+
+    it('getUsdcTokenIdentity (AgentToolRunner dep) undefined dönerse {failed} ile sonuçlanır, hiçbir şey imzalanmaz', async () => {
+      // AgentToolRunner henüz configureAgentToolRunner() ile yapılandırılmamışsa dep undefined
+      // döner — Base Sepolia'da bile, USD Coin/USDC domain mismatch'ini önlemek için burada da
+      // imzalamadan önce sert biçimde durmalı.
+      vi.mocked(getUsdcTokenIdentity).mockReturnValue(undefined);
+      renderX402Card(makeX402Preview());
       fireEvent.click(screen.getByRole('button', { name: /approve/i }));
 
       await waitFor(() => expect(lastCallWithStatus(onStatusChange, 'failed')).toBeDefined());

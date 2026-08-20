@@ -107,6 +107,16 @@ export function configureAgentToolRunner(newDeps: AgentToolRunnerDeps): void {
   deps = newDeps;
 }
 
+/**
+ * Single source of truth for the USDC EIP-712 domain — used by both the auto-pay path
+ * (handlePayForResource, above) and ConfirmationCard's manual/over-budget approval path, so the
+ * two never drift into signing against different domains (which the token contract's
+ * transferWithAuthorization would silently reject as an invalid signature).
+ */
+export function getUsdcTokenIdentity(networkId: string): Eip3009TokenIdentity | undefined {
+  return deps?.getUsdcTokenIdentity(networkId);
+}
+
 const policyEngine = new AgentPolicyEngine();
 /** x402 spending record — chrome.storage.local-backed, see X402SpendingLedger.ts's own docs for why. */
 const spendingLedger = new X402SpendingLedger();

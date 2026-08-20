@@ -53,6 +53,15 @@ describe("buildRealPaymentRequirements / buildRealPaymentRequiredBody", () => {
     expect(req.maxAmountRequired).toBe("10000");
   });
 
+  it("extra.name/version, extension'ın imzaladığı EIP-712 domain'le (src/AppContext.ts'teki " +
+    "getUsdcTokenIdentity) BİREBİR AYNI olmalı — facilitator ecrecover için burayı kullanır, " +
+    "farklıysa imza doğru olsa bile invalid_exact_evm_signature ile reddedilir " +
+    "(bu tam olarak yaşanan bug'dı: extension \"USDC\" ile imzalıyordu, burası hâlâ \"USD Coin\" " +
+    "bildiriyordu)", () => {
+    const req = buildRealPaymentRequirements("https://api.example.com/weather", ENV);
+    expect(req.extra).toEqual({ name: "USDC", version: "2" });
+  });
+
   it("aynı resource için deterministik — iki çağrı birebir aynı requirements üretir", () => {
     const a = buildRealPaymentRequirements("https://api.example.com/x", ENV);
     const b = buildRealPaymentRequirements("https://api.example.com/x", ENV);

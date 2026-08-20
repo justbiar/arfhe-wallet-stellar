@@ -6,10 +6,15 @@
 > halüsinasyon bug'ı + dekont UI yeniden tasarımı + Alchemy multichain key sorunu
 > çözüldü, Faz 3 (x402) ilk entegrasyon turu tamamlandı + gerçek facilitator
 > entegrasyonu eklendi (backend-proxy, `x402FacilitatorClient.ts`, feature flag
-> arkasında, Chrome'da elle uçtan uca test HÂLÂ bekliyor) VE Chrome'da elle test
-> sırasında gerçek bir bug bulundu/düzeltildi: `pay_for_resource` `AGENT_TOOLS`
-> listesinde hiç yoktu, model tool'u hiç göremiyordu — bkz. bölüm 14, en alttaki
-> "Çözüldü" başlığı — bkz. bölüm 3, 5, 10-14).
+> arkasında). Chrome'da elle uçtan uca test BAŞLADI (bkz. bölüm 15): `pay_for_resource`
+> `AGENT_TOOLS`'ta hiç yoktu bug'ı bu test sırasında bulunup düzeltildi (bkz. bölüm 14
+> sonu), fix Chrome'da doğrulandı (Arfio artık tool'un varlığından haberdar). AMA yeni
+> bir sorun açık: gerçek bir `pay_for_resource` denemesinde 404 hatası alınıyor, kaynağı
+> henüz teşhis edilmedi (wrangler dev'de hiç istek logu yok — istek backend-proxy'ye
+> ulaşmıyor gibi görünüyor). Teşhis LLM rate limit nedeniyle YARIDA KESİLDİ — **sıradaki
+> oturum bölüm 15'teki açık noktadan devam etmeli.** `X402_USE_REAL_FACILITATOR` şu an
+> `.dev.vars`'ta `true` (local test için), `wrangler.toml`'daki prod/dev varsayılanı hâlâ
+> `false`.
 
 ## 1. Genel Amaç
 
@@ -485,12 +490,11 @@ zincir) başarıyla taşındığı hiç görülmedi (kullanılan test imzası ka
 Bu, Chrome'da elle uçtan uca test aşamasını bekliyor.
 
 **KALAN İŞ — sıradaki oturum buradan devam etmeli:**
-1. Chrome'da elle uçtan uca test — hem x402 akışının genel UI/UX'i (limit-içi otomatik ödeme,
-   limit-dışı `ConfirmationCard` onayı) hem de `X402_USE_REAL_FACILITATOR="true"` yapılıp gerçek
-   bir Base Sepolia test cüzdanıyla, gerçek testnet USDC ile uçtan uca bir settle'ın fiilen
-   başarılı olduğu HİÇ görülmedi. Önceki fazlarda elle test defalarca kod-only testlerin
-   kaçırdığı gerçek bug'ları bulmuştu (bkz. bölüm 13), bu yüzden mutlaka yapılmalı — bu madde
-   "tamamlandı" olarak işaretlenmedi.
+1. Chrome'da elle uçtan uca test — **BAŞLADI, YARIDA**. Detaylı ilerleme, ortam kurulumu ve
+   açık kalan 404 sorunu için bkz. **bölüm 15**. Özet: `pay_for_resource` artık modele görünüyor
+   (bir önceki bug fix'i Chrome'da doğrulandı) ama gerçek bir çağrıda 404 alınıyor, kaynağı
+   teşhis edilmedi. Limit-içi/limit-dışı senaryolar, gerçek testnet USDC transferi, hata yolu
+   testi — hiçbiri henüz tamamlanamadı. Bu madde "tamamlandı" olarak işaretlenmedi.
 
 ### Çözüldü: Chrome'da elle test sırasında bulunan gerçek bug — pay_for_resource AGENT_TOOLS'ta hiç yoktu
 
@@ -538,3 +542,91 @@ durumu: 660 → **662**. Kod-only değişiklik — dev server'lara (wrangler dev
 **Not:** Bu fix `X402_USE_REAL_FACILITATOR` bayrağından bağımsız — stub yolunda da gerçek
 facilitator yolunda da geçerli, çünkü sorun modelin tool'u görüp göremediğiyle ilgiliydi, hangi
 backend'e settle edildiğiyle değil.
+
+## 15. Chrome'da elle uçtan uca test — BAŞLADI, YARIDA KESİLDİ (2026-08-16)
+
+Bölüm 14'ün "KALAN İŞ" maddesinin fiilen başlatıldığı oturum. Aşağıda hem ortam kurulum
+adımları (gelecekte tekrar kurulum gerekirse referans olsun diye) hem de bulunan/doğrulanan
+şeyler, hem de açık kalan sorun kayıtlı.
+
+### Ortam kurulumu (tekrarlanabilir referans)
+
+- `backend-proxy/.dev.vars`'ta `X402_USE_REAL_FACILITATOR=true` zaten set edilmiş bulundu
+  (önceki bir CLI turunda eklenmiş olmalı — bu turda yeniden eklemeye gerek kalmadı).
+- **Terminal 1 (sürekli açık, dokunulmuyor):** `cd backend-proxy && pnpm exec wrangler dev`
+  → `Ready on http://localhost:8787`.
+- **Terminal 2 (frontend build):** Proje kökünde `pnpm dev` — bu projede `pnpm dev` bir kere
+  build edip **watch modunda açık kalıyor** (Vite dev server, `localhost:5173`), önceki
+  turlardaki `pnpm build`'in tek-seferlik davranışından farklı. `dist/` yine de doğru şekilde
+  güncelleniyor (dosya zaman damgalarıyla doğrulandı) — extension Chrome'da reload edildiğinde
+  güncel kodu kullanıyor, `pnpm build`'e gerek kalmadı.
+- **Chrome extension reload:** Sadece `chrome://extensions/`'ta reload ikonu (↻) kullanıldı,
+  **"Remove" hiç kullanılmadı** — cüzdan/seed hiç sıfırlanmadı, bölüm 13'teki risk bu turda
+  hiç gerçekleşmedi.
+- **Test hesabı:** Cüzdanda zaten "Account 2" (`0x9332339e54A27f9350C7Be300b4B9dEBc7D1c350`)
+  mevcuttu — bu, `wrangler.toml`'daki `X402_PAYTO_ADDRESS` ile birebir aynı adres (kullanıcı
+  bunu bilerek/kasıtlı olarak önceden eklemiş). Aktif hesap "New User #1"den "Account 2"ye
+  değiştirildi.
+- **Ağ:** Varsayılan olarak Ethereum Sepolia geliyordu, Base Sepolia'ya elle değiştirildi.
+- **Testnet fonları:**
+  - ETH faucet'lerinden bazıları (örn. bir tanesi denenirken) mainnet'te ≥0.001 ETH şartı
+    koyuyor (sybil-önleme) — kullanıcının mainnet bakiyesi olmadığı için bu faucet başarısız
+    oldu. **ETH aslında kritik değil**: x402/EIP-3009 akışı gassiz (`transferWithAuthorization`,
+    facilitator/relayer gas'ı öder) — bu not kullanıcıya iletildi, ETH faucet sorunu bu yüzden
+    dallanıp çözülmedi, doğrudan USDC faucet'ine geçildi.
+  - Circle'ın resmi Base Sepolia USDC faucet'i (`faucet.circle.com`) ile **20 test USDC**
+    başarıyla alındı, cüzdanda göründü ($19.99 olarak, muhtemelen küçük bir fiyat/gas
+    farkından). ETH bakiyesi hâlâ 0 — bu turda hiç soruna yol açmadı.
+
+### Doğrulanan: bölüm 14 sonundaki fix Chrome'da gerçekten çalışıyor
+
+Fix'ten ÖNCE Chrome'da Arfio'ya "hangi ücretli kaynaklara (x402) erişebiliyorsun?" diye
+sorulduğunda, model kendi yetkisi olmadığını söylemişti (bug'ın kendisinin canlı kanıtı).
+Fix'ten SONRA (extension reload edildikten sonra) aynı soru tekrar soruldu — bu sefer model
+`pay_for_resource`'un varlığından tam olarak haberdardı, kullanıcıdan bir URL istedi ("URL'yi
+sen verirsin, ben ödemeyi hallederim" gibi doğru bir açıklamayla). **Bu, agentTools.ts fix'inin
+sadece testlerde değil gerçek LLM davranışında da düzeldiğinin doğrudan kanıtı.**
+
+### AÇIK SORUN: `https://api.example.com/weather adresine eriş` → 404
+
+Kullanıcı test amaçlı bu URL'i verdi (testlerde de kullanılan placeholder, gerçek bir sunucu
+değil — backend zaten gerçek bir fetch atmıyor, deterministik requirement üretiyor, bkz.
+bölüm 14 mimarisi). Arfio, tool'u çağırdı ama sonuç bir **404 hatası** olarak döndü ve modelin
+kendi yorumu "kaynak adresi mevcut değil / x402 ile korunmuş değil" oldu — ama bu yorum
+GÜVENİLİR DEĞİL, çünkü model kendi iç hata mesajını yorumluyor, gerçek HTTP durumunu bilmiyor
+olabilir (bkz. bölüm 4/11 — model kendi iç mekanizmasını doğru yansıtmayabilir).
+
+**Teşhis için atılan ilk adım:** Terminal 1'deki (wrangler dev) canlı log çıktısı kontrol
+edildi — **hiçbir yeni istek satırı görünmedi**. Bu, isteğin `localhost:8787`'ye (backend-proxy)
+hiç ulaşmadığına işaret ediyor. Olası nedenler (henüz doğrulanmadı):
+- Extension'ın kendi tarafında (`X402ProxyClient.ts` veya çağrıldığı yer) yanlış bir URL'e
+  gidiyor olabilir (örn. hâlâ prod URL'ine, `.env.production`'daki
+  `arfhewallet-agent-proxy.arfhewallet.workers.dev`'e; extension build'i doğru `.env.development`
+  ile mi yapıldı kontrol edilmeli).
+- Ya da backend-proxy'ye ulaşıyor ama `handleX402PaymentRequired`/`handleX402Settle` route'u
+  içinde, gerçek facilitator'a giden bir adımda 404 üretiliyor olabilir (facilitator'ın kendisi
+  mi 404 döndürüyor, yoksa backend-proxy'nin kendi route eşleşmesi mi başarısız oluyor —
+  ayırt edilmedi).
+- Ya da agent'ın "404" yorumu tamamen yanlış/hayali olabilir — gerçek hata farklı bir şey olup
+  model onu yanlış özetlemiş olabilir (bölüm 12'deki halüsinasyon sınıfına benzer bir risk,
+  bu sefer "gönderildi" yerine "404" hayal ediyor olabilir, doğrulanmadı).
+
+**Teşhisin ikinci adımı başlatıldı ama tamamlanamadı:** Kullanıcıya extension popup'ının
+kendi DevTools'unu açması (service worker'ın DevTools'u DEĞİL — popup'a sağ tık → İncele)
+ve Network sekmesinde gerçek isteğin URL'ini/status kodunu bulması istendi. **Bu adım LLM
+rate limit'e (muhtemelen OpenRouter'ın ücretsiz model havuzunda) çarpılınca yarıda kesildi**
+— kullanıcı Arfio'ya mesaj gönderemez hale geldi, oturum burada durduruldu.
+
+**SIRADAKİ OTURUM TAM OLARAK BURADAN DEVAM ETMELİ:**
+1. Rate limit'in geçmesini bekle (ya da `modelConfig.ts`'deki fallback zincirini/anahtarı
+   kontrol et — bölüm 4'teki not: fallback sırası gerçek modeli garanti etmiyor, aynı havuzun
+   tamamı limitli olabilir).
+2. Popup'a sağ tık → İncele → Network sekmesi → popup açıkken tekrar `pay_for_resource`
+   tetikle → 404 dönen isteğin TAM URL'ini ve hangi aşamada (payment-required mi, settle mi)
+   olduğunu bul.
+3. URL'e göre dallan: extension yanlış proxy URL'ine mi gidiyor (env/build sorunu) yoksa
+   backend-proxy/facilitator zincirinde mi 404 üretiliyor (route/facilitator sorunu) — teşhis
+   edilince muhtemelen küçük bir CLI fix'i yeterli olacak.
+4. 404 çözülünce KALAN İŞ madde 1'deki asıl senaryolara (limit-içi otomatik akış, limit-dışı
+   `ConfirmationCard` onayı, gerçek testnet USDC transferinin Etherscan'de doğrulanması, hata
+   yolu testi) geçilebilir.

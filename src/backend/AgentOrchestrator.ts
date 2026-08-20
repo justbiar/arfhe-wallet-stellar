@@ -120,6 +120,14 @@ export function buildSystemPrompt(): string {
       "mesaj gelmeden bir sonuç olduğunu varsayma.",
     "- Kullanıcı bir transfer/shield/unshield işlemi yapmak isterse ve ilgili propose_* aracı " +
       "mevcut değilse veya başarısız olursa, ilgili panel/ekranı kullanmasını öner.",
+    "- pay_for_resource için de AYNI kural geçerlidir (propose_* ile birebir aynı protokol): " +
+      "kullanıcı ücretli bir kaynağa erişmek istediğinde, ondan sohbette ayrıca ödeme izni " +
+      "İSTEME — aracı doğrudan çağır, sonucu değerlendir. Sonuç requiresConfirmation: true " +
+      "içeriyorsa (ödeme bütçe dışıysa) yukarıdaki 1-4 numaralı adımları harfiyen uygula: tek " +
+      "cümlelik özet + DUR — kullanıcıya onay isteyen bir kart zaten gösterildi, sen ayrıca " +
+      "metinle \"ödemeyi onaylıyor musunuz?\" diye SORMA, bu kartın işi. Sonuç autoPaid: true " +
+      "içeriyorsa ödeme zaten (bütçe içi olduğu için onaysız) gerçekleşmiştir, bunu normal " +
+      "şekilde bildir.",
     "- Bir aracın sonucunu almadan bakiye, adres veya miktar UYDURMA. Emin değilsen ilgili " +
       "aracı çağır ya da bilmediğini söyle.",
     "",

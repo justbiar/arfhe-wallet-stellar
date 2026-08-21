@@ -80,6 +80,65 @@ describe('AgentPolicyEngine', () => {
     });
   });
 
+  // ─── reasonKey/reasonParams — model-facing `reason` ile kullanıcıya-gösterilen çeviri
+  // arasındaki ayrım (bkz. PolicyDecision'ın kendi JSDoc'u). `reason` HİÇBİR ZAMAN değişmemeli
+  // (model buna hâlâ İngilizce, aynı metinle güveniyor) — reasonKey/reasonParams SADECE ek,
+  // paralel bir alan. Yalnızca reddedilen (allowed:false) kararlarda set edilir.
+  describe('reasonKey / reasonParams — kullanıcıya-gösterilen çeviri anahtarları', () => {
+    it('forbidden_tool: reasonKey + toolName param taşır, ham "reason" (İngilizce) DEĞİŞMEZ', () => {
+      const decision = engine.evaluate('set_operator', {}, { balance: 100 });
+      expect(decision.reasonKey).toBe('agent.policyReasonForbiddenTool');
+      expect(decision.reasonParams).toEqual({ toolName: 'set_operator' });
+      expect(decision.reason).toBe('"set_operator" is a forbidden tool and is never exposed to the agent.');
+    });
+
+    it('unknown_tool: reasonKey + toolName param taşır', () => {
+      const decision = engine.evaluate('claim_unshielded_batch', {}, { balance: 100 });
+      expect(decision.reasonKey).toBe('agent.policyReasonUnknownTool');
+      expect(decision.reasonParams).toEqual({ toolName: 'claim_unshielded_batch' });
+      expect(decision.reason).toBe('"claim_unshielded_batch" is not a recognized tool.');
+    });
+
+    it('session_proposal_limit_reached: reasonKey + limit param (string\'e çevrilmiş) taşır', () => {
+      const limitedEngine = new AgentPolicyEngine({ maxProposalRatio: 1, maxProposalsPerSession: 1 });
+      limitedEngine.evaluate('propose_send', { amount: 1 }, { balance: 100 }); // ilk öneri tüketir
+      const decision = limitedEngine.evaluate('propose_send', { amount: 1 }, { balance: 100 });
+      expect(decision.reasonKey).toBe('agent.policyReasonSessionLimitReached');
+      expect(decision.reasonParams).toEqual({ limit: '1' });
+      expect(decision.reason).toBe('Session proposal limit reached (1).');
+    });
+
+    it('exceeds_balance_ratio: reasonKey + ratio/limit parametreleri ("reason"daki gibi aynı formatlanmış string\'ler) taşır', () => {
+      const decision = engine.evaluate('propose_send', { amount: 60 }, { balance: 100 });
+      expect(decision.reasonKey).toBe('agent.policyReasonExceedsBalanceRatio');
+      expect(decision.reasonParams).toEqual({ ratio: '60.0', limit: '50' });
+      expect(decision.reason).toBe('Proposed amount is 60.0% of balance, exceeding the 50% limit.');
+    });
+
+    it('allowed bir karar (allowed_read_only/allowed_proposal) reasonKey TAŞIMAZ — reddedilmeyen bir şeyin kullanıcıya gösterilecek bir çevirisi yok', () => {
+      expect(engine.evaluate('get_balance', {}, { balance: 100 }).reasonKey).toBeUndefined();
+      expect(engine.evaluate('propose_send', { amount: 10 }, { balance: 100 }).reasonKey).toBeUndefined();
+    });
+
+    it('evaluateX402Payment — x402_invalid_amount: reasonKey + amount param taşır', () => {
+      const decision = engine.evaluateX402Payment(-1, { enabled: true, perTransactionCapUsd: 1, dailyBudgetCapUsd: 10 }, 0);
+      expect(decision.reasonKey).toBe('agent.policyReasonX402InvalidAmount');
+      expect(decision.reasonParams).toEqual({ amount: '-1' });
+    });
+
+    it('evaluateX402Payment — x402_disabled: reasonKey taşır, param yok', () => {
+      const decision = engine.evaluateX402Payment(0.1, { enabled: false, perTransactionCapUsd: 1, dailyBudgetCapUsd: 10 }, 0);
+      expect(decision.reasonKey).toBe('agent.policyReasonX402Disabled');
+      expect(decision.reasonParams).toBeUndefined();
+    });
+
+    it('evaluateX402Payment — allowed kararlar (x402_auto_paid/x402_requires_confirmation) reasonKey taşımaz', () => {
+      const settings = { enabled: true, perTransactionCapUsd: 1, dailyBudgetCapUsd: 10 };
+      expect(engine.evaluateX402Payment(0.1, settings, 0).reasonKey).toBeUndefined();
+      expect(engine.evaluateX402Payment(5, settings, 0).reasonKey).toBeUndefined();
+    });
+  });
+
   // ─── evaluate: proposal ratio cap ────────────────────────────
   describe('evaluate — maxProposalRatio', () => {
     it('bakiyenin %50sini aşan öneri reddedilir', () => {

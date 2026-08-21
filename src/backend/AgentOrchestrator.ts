@@ -374,11 +374,20 @@ async function runOneToolCall(call: AgentToolCall, context: ToolExecutionContext
   const args = parseToolArguments(call.function.arguments);
   const outcome = await executeToolCall(call.function.name, args, context);
 
+  // outcome.reasonKey/reasonParams (set only for an AgentPolicyEngine denial, see
+  // ToolExecutionResult's own docs) ride along purely for AgentProposalHistory.ts's
+  // extractPolicyDenials() to translate the denial for a human later — the model only ever
+  // reads `error` itself, which is unchanged either way.
+  const errorPayload =
+    outcome.error !== undefined
+      ? { error: outcome.error, ...(outcome.reasonKey ? { reasonKey: outcome.reasonKey, reasonParams: outcome.reasonParams } : {}) }
+      : { result: outcome.result };
+
   return {
     role: "tool",
     tool_call_id: call.id,
     name: call.function.name,
-    content: JSON.stringify(outcome.error !== undefined ? { error: outcome.error } : { result: outcome.result }),
+    content: JSON.stringify(errorPayload),
   };
 }
 

@@ -41,6 +41,7 @@ import {
   extractPolicyDenials,
   appendProposalRecords,
   findPendingConfirmation,
+  toolNameLabelKey,
   type ProposalRecord,
 } from "../backend/AgentProposalHistory.js";
 import ConfirmationCard, {
@@ -63,13 +64,6 @@ const QUICK_ACTIONS = [
 const AGENT_AVATAR = "🤖";
 
 /**
- * Maps a raw tool name (e.g. "propose_send") to its already-translated, user-facing label
- * (e.g. "Gönder") — reuses the labels AgentProposalHistoryPanel.tsx already shows for the same
- * tools, so the "settling"/"settled" breadcrumbs below never leak a raw function name into the
- * UI. Falls back to the raw name only if it's an unrecognized tool, which should never happen
- * for PROPOSAL_TOOLS.
- */
-/**
  * Amount/symbol/recipient for a "result" item's TransactionResultCard — derived straight from
  * the tool call's originalArgs (exactly what the user asked for), not from a re-run simulation
  * (ConfirmationCard's own displayAmount logic isn't reachable here, see isSettledMarker's docs).
@@ -89,17 +83,15 @@ function resultDisplayFields(
   return { amount, symbol };
 }
 
+/**
+ * Maps a raw tool name (e.g. "propose_send") to its already-translated, user-facing label (e.g.
+ * "Send") for the "settling"/"settled" breadcrumbs below — thin wrapper around
+ * AgentProposalHistory.ts's toolNameLabelKey, the single shared mapping also used by
+ * AgentProposalHistoryPanel.tsx's own rows, so a tool added to CONFIRMABLE_TOOLS only needs that
+ * one switch updated instead of two independently-drifting copies.
+ */
 function toolActionLabel(toolName: string, t: (key: string) => string): string {
-  switch (toolName) {
-    case "propose_send":
-      return t("agent.historyToolSend");
-    case "propose_shield":
-      return t("agent.historyToolShield");
-    case "propose_unshield":
-      return t("agent.historyToolUnshield");
-    default:
-      return toolName;
-  }
+  return t(toolNameLabelKey(toolName));
 }
 
 export interface AgentChatPanelProps {

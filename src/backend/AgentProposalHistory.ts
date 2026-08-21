@@ -3,7 +3,8 @@
  *
  * Distinct from AgentChatPanel's `agent_chat_history` (the raw OpenAI-wire-format transcript,
  * kept so the model retains its own tool-calling context) — this is a UI-facing log of what
- * every PROPOSAL_TOOLS call actually resulted in: approved and broadcast, denied by
+ * every PROPOSAL_TOOLS (and, for a policy denial only, X402_TOOLS — see DENIABLE_TOOLS) call
+ * actually resulted in: approved and broadcast, denied by
  * AgentPolicyEngine before the user ever saw a card, rejected by the user in ConfirmationCard
  * (manually, or auto-cancelled because the active account changed mid-review — see that
  * component's `reason`, and pages/Agent.tsx's account-switch effect), or approved by the user
@@ -24,7 +25,20 @@
 
 import type { ChatMessage } from "./AgentOrchestrator.js";
 import type { ProposalPreview } from "./AgentToolRunner.js";
-import { PROPOSAL_TOOLS } from "./AgentPolicyEngine.js";
+import { PROPOSAL_TOOLS, X402_TOOLS } from "./AgentPolicyEngine.js";
+
+/**
+ * Every tool whose denial can end up as a `policy_rejected` ProposalRecord — PROPOSAL_TOOLS
+ * (evaluate()'s forbidden_tool/unknown_tool/session_proposal_limit_reached/exceeds_balance_ratio)
+ * plus X402_TOOLS (evaluateX402Payment()'s x402_invalid_amount/x402_disabled — see
+ * AgentToolRunner.ts's PolicyDenialError, which is what gets these two onto the wire in the same
+ * `{error, reasonKey, reasonParams}` shape as every other denial). Same union AgentOrchestrator.ts's
+ * own (unexported) CONFIRMABLE_TOOLS is — kept as a separate local constant here rather than a
+ * shared export, matching how each consumer in this codebase already builds its own union from
+ * the same two source lists rather than depending on one export (see AgentChatPanel.test.tsx's
+ * identical pattern).
+ */
+const DENIABLE_TOOLS: readonly string[] = [...PROPOSAL_TOOLS, ...X402_TOOLS];
 
 /**
  * Structurally compatible with ConfirmationCard.tsx's ConfirmationOutcome (this module runs
@@ -60,8 +74,22 @@ export interface ProposalRecord {
   /** Only set for propose_send. */
   recipient?: string;
   status: ProposalRecordStatus;
-  /** Human-readable reason — policy denial text, outcome.message, or a fixed "user rejected" label. */
+  /**
+   * Human-readable reason — policy denial text, outcome.message, or a fixed "user rejected"
+   * label. English (this is AgentPolicyEngine's model-facing `PolicyDecision.reason`, or
+   * outcome.message from ConfirmationCard — see buildRecordFromOutcome). AgentProposalHistoryPanel
+   * renders THIS only as a fallback, when reasonKey below is absent (older records, or a
+   * non-policy reason like an approve failure that has no i18n key at all).
+   */
   reason?: string;
+  /**
+   * Set only for a `policy_rejected` record whose denial carried a `PolicyDecision.reasonKey` —
+   * see extractPolicyDenials() and that field's own docs on AgentPolicyEngine.ts. When present,
+   * AgentProposalHistoryPanel.tsx translates via `t(reasonKey, reasonParams)` instead of showing
+   * `reason` raw, so the panel reflects the UI's own language rather than always English.
+   */
+  reasonKey?: string;
+  reasonParams?: Record<string, string>;
   /** Only set when status === "approved". */
   txHash?: string;
   timestamp: number;
@@ -115,20 +143,22 @@ export function buildRecordFromOutcome(
 /**
  * Scans a single runAgentTurn() call's newly-appended messages (i.e.
  * `updatedHistory.slice(baseHistoryLength)`, never the whole transcript — a resolved proposal's
- * tool message keeps matching PROPOSAL_TOOLS forever, so re-scanning old messages would produce
+ * tool message keeps matching DENIABLE_TOOLS forever, so re-scanning old messages would produce
  * duplicate/incorrect records) for AgentPolicyEngine denials: a `role:"tool"` message naming a
- * PROPOSAL_TOOLS tool whose content is `{ error }` rather than `{ result }`. The denied amount/
- * recipient come from the matching assistant `tool_calls[].function.arguments` in the same
- * slice — the tool message itself never got that far. `accountAddress` is the account that turn
- * actually ran against (the `context.account` passed to runAgentTurn), not necessarily whatever
- * is active by the time this is called.
+ * DENIABLE_TOOLS (PROPOSAL_TOOLS ∪ X402_TOOLS) tool whose content is `{ error }` rather than
+ * `{ result }`. The denied amount/recipient come from the matching assistant
+ * `tool_calls[].function.arguments` in the same slice — the tool message itself never got that
+ * far (irrelevant for pay_for_resource, which never carries an amount/recipient the same way —
+ * see readStringArg's callers below, both simply come back undefined for it). `accountAddress`
+ * is the account that turn actually ran against (the `context.account` passed to runAgentTurn),
+ * not necessarily whatever is active by the time this is called.
  */
 export function extractPolicyDenials(newMessages: ChatMessage[], accountAddress: string): ProposalRecord[] {
   const records: ProposalRecord[] = [];
 
   for (const m of newMessages) {
     if (m.role !== "tool" || !m.tool_call_id || !m.name) continue;
-    if (!(PROPOSAL_TOOLS as readonly string[]).includes(m.name)) continue;
+    if (!DENIABLE_TOOLS.includes(m.name)) continue;
 
     let parsed: unknown;
     try {
@@ -136,8 +166,17 @@ export function extractPolicyDenials(newMessages: ChatMessage[], accountAddress:
     } catch {
       continue;
     }
-    const error = (parsed as { error?: unknown } | null)?.error;
+    const parsedObj = parsed as { error?: unknown; reasonKey?: unknown; reasonParams?: unknown } | null;
+    const error = parsedObj?.error;
     if (typeof error !== "string") continue;
+    // See AgentOrchestrator.ts's runOneToolCall — set only when this denial came from
+    // AgentPolicyEngine (PolicyDecision.reasonKey), never for a ToolArgumentError or any other
+    // `{error}` shape, so both may legitimately be absent here.
+    const reasonKey = typeof parsedObj?.reasonKey === "string" ? parsedObj.reasonKey : undefined;
+    const reasonParams =
+      parsedObj?.reasonParams && typeof parsedObj.reasonParams === "object" && !Array.isArray(parsedObj.reasonParams)
+        ? (parsedObj.reasonParams as Record<string, string>)
+        : undefined;
 
     let args: Record<string, unknown> = {};
     for (const am of newMessages) {
@@ -165,6 +204,8 @@ export function extractPolicyDenials(newMessages: ChatMessage[], accountAddress:
       recipient: readStringArg(args, "to"),
       status: "policy_rejected",
       reason: error,
+      reasonKey,
+      reasonParams,
       timestamp: Date.now(),
     });
   }
@@ -198,6 +239,34 @@ export function appendProposalRecords(current: ProposalRecord[], additions: Prop
   }
 
   return combined;
+}
+
+/**
+ * Maps a raw tool name (e.g. "propose_send") to its i18n key for the already-translated,
+ * user-facing label (e.g. "agent.historyToolSend" → "Send") — the single source of truth for
+ * this mapping, used by both AgentChatPanel.tsx (its "settling"/"settled" breadcrumbs) and
+ * AgentProposalHistoryPanel.tsx (every row's title, regardless of status). The two used to carry
+ * their own independent copies of this switch; "pay_for_resource" was added to CONFIRMABLE_TOOLS
+ * (AgentOrchestrator.ts) without either copy being updated, so its raw function name leaked into
+ * both the chat breadcrumb and every "Agent Geçmişi" row for an x402 proposal — see CONTEXT.md
+ * for that bug's history. One function now means one place to update when a new PROPOSAL_TOOLS/
+ * X402_TOOLS entry is added; falls back to the raw name only for a genuinely unrecognized tool,
+ * which should never happen for CONFIRMABLE_TOOLS. Returns the i18n key itself, not the
+ * translated string — callers still own their own `t()`.
+ */
+export function toolNameLabelKey(toolName: string): string {
+  switch (toolName) {
+    case "propose_send":
+      return "agent.historyToolSend";
+    case "propose_shield":
+      return "agent.historyToolShield";
+    case "propose_unshield":
+      return "agent.historyToolUnshield";
+    case "pay_for_resource":
+      return "agent.historyToolPayForResource";
+    default:
+      return toolName;
+  }
 }
 
 // ─── Shared wire-format history helpers (also used by AgentChatPanel.tsx / pages/Agent.tsx) ──

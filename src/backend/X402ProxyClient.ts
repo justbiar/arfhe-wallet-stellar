@@ -116,7 +116,25 @@ export async function settleX402Payment(
   }
 
   if (!response.ok) {
-    throw new Error(`x402 settle isteği başarısız oldu: ${response.status}`);
+    // backend-proxy maps a facilitator-side settle failure (insufficient funds, expired
+    // EIP-3009 authorization, invalid_exact_evm_signature/token_name_mismatch, etc. — see
+    // x402FacilitatorClient.ts's settleX402PaymentReal) to `{ error: <raw facilitator reason> }`
+    // with a non-2xx status. That reason is the ONLY thing that lets UserFacingError.ts tell
+    // these apart — discarding it here (and throwing just the status code) is exactly what used
+    // to happen, and it collapsed every distinct facilitator rejection into the same generic
+    // "something went wrong, try again" message even for genuinely non-retryable failures like
+    // insufficient funds. A response body that isn't JSON, or has no `error` string (e.g. a
+    // route-level 404/5xx with no facilitator involved), falls back to the status-code message.
+    let message = `x402 settle isteği başarısız oldu: ${response.status}`;
+    try {
+      const errorBody = (await response.json()) as { error?: unknown };
+      if (typeof errorBody.error === "string" && errorBody.error.trim().length > 0) {
+        message = errorBody.error;
+      }
+    } catch {
+      // Body wasn't JSON — keep the generic status-code message.
+    }
+    throw new Error(message);
   }
 
   let body: unknown;

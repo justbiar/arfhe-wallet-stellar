@@ -19,7 +19,7 @@
  * NOTE: in practice pages/Agent.tsx now owns per-account chat history, so switching accounts
  * always swaps `conversationHistory` to the new account's own array in the same render this
  * card's tool_call_id came from — meaning this component gets unmounted, not re-rendered with
- * a new `activeAccount`, and Agent.tsx's own effect (using the same ACCOUNT_CHANGED_REASON) is
+ * a new `activeAccount`, and Agent.tsx's own effect (using the same ACCOUNT_CHANGED_REASON_KEY) is
  * what actually performs the cancel. The effect below is kept as defense-in-depth for any path
  * where this component stays mounted across an account change.
  */
@@ -75,13 +75,17 @@ export type ConfirmationCardStatus =
   | { status: "pending"; toolName: string; originalArgs: Record<string, unknown>; txHash?: string };
 
 /**
- * Set as the "rejected" status's `reason` when the active account changed before approval — see
- * the auto-cancel effect below. Exported so pages/Agent.tsx's own account-switch handling (which
- * cancels a pending card for the OUTGOING account — this component will already have been
- * unmounted by then, so its own effect never gets a chance to run) uses the exact same reason
- * text, keeping Agent Geçmişi consistent regardless of which mechanism actually fired.
+ * i18n key for the "rejected" status's `reason` when the active account changed before approval
+ * — see the auto-cancel effect below. Exported so pages/Agent.tsx's own account-switch handling
+ * (which cancels a pending card for the OUTGOING account — this component will already have been
+ * unmounted by then, so its own effect never gets a chance to run) translates the exact same
+ * text, keeping Agent Geçmişi consistent regardless of which mechanism actually fired. A KEY
+ * (translated at each call site via that caller's own `t`) rather than a fixed English string —
+ * this reason is persisted verbatim into AgentProposalHistoryPanel's `record.reason` and rendered
+ * there with no further translation step, so a raw English literal here used to leak untranslated
+ * into "Agent Geçmişi" even when the UI language was Turkish.
  */
-export const ACCOUNT_CHANGED_REASON = "Active account changed before approval";
+export const ACCOUNT_CHANGED_REASON_KEY = "agent.confirmationCardAccountChangedReason";
 
 export interface ConfirmationCardProps {
   preview: ProposalPreview;
@@ -169,8 +173,8 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
     if (cardPhase !== "review") return;
     if (activeAccount?.GetAddress() === originalAddressRef.current) return;
     setCardPhase("cancelled");
-    onStatusChange({ status: "rejected", toolName, reason: ACCOUNT_CHANGED_REASON });
-  }, [activeAccount, cardPhase, onStatusChange, toolName]);
+    onStatusChange({ status: "rejected", toolName, reason: t(ACCOUNT_CHANGED_REASON_KEY) });
+  }, [activeAccount, cardPhase, onStatusChange, toolName, t]);
   const change = primaryBalanceChange(simulation.balanceChanges);
 
   // propose_unshield's calldata never gets a balanceChange entry (TransactionSimulator's FHE
@@ -286,7 +290,7 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
     // (a race the effect hasn't caught yet), this catches it before anything is ever signed.
     if (activeAccount?.GetAddress() !== originalAddressRef.current) {
       setCardPhase("cancelled");
-      onStatusChange({ status: "rejected", toolName, reason: ACCOUNT_CHANGED_REASON });
+      onStatusChange({ status: "rejected", toolName, reason: t(ACCOUNT_CHANGED_REASON_KEY) });
       return;
     }
 

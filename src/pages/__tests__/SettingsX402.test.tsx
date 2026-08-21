@@ -32,7 +32,7 @@ describe('SettingsX402', () => {
     renderPage();
     await waitFor(() => expect(screen.getByLabelText('Per-payment cap')).toBeInTheDocument());
 
-    expect(screen.getByRole('checkbox', { name: /enable x402 payments/i })).not.toBeChecked();
+    expect(screen.getByRole('switch', { name: /enable x402 payments/i })).not.toBeChecked();
     expect(screen.getByLabelText('Per-payment cap')).toHaveValue(String(DEFAULT_X402_SETTINGS.perTransactionCapUsd));
     expect(screen.getByLabelText('Daily budget')).toHaveValue(String(DEFAULT_X402_SETTINGS.dailyBudgetCapUsd));
   });
@@ -45,7 +45,7 @@ describe('SettingsX402', () => {
 
   it('etkinleştirince alanlar açılır ve servis üzerinden kaydedilir', async () => {
     renderPage();
-    const toggle = await screen.findByRole('checkbox', { name: /enable x402 payments/i });
+    const toggle = await screen.findByRole('switch', { name: /enable x402 payments/i });
     fireEvent.click(toggle);
 
     await waitFor(async () => {

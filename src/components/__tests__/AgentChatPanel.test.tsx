@@ -580,6 +580,54 @@ describe('AgentChatPanel', () => {
       expect(runAgentTurn).toHaveBeenCalledTimes(1);
     });
 
+    // Bütçe/limit dışı bir pay_for_resource önerisi de dahil, CONFIRMABLE_TOOLS'daki (=
+    // PROPOSAL_TOOLS ∪ X402_TOOLS, AgentOrchestrator.ts'teki tanımla birebir) HER tool için
+    // Reddet, aynı üç garantiyi sağlamalı:
+    //   (a) settled tool mesajı yazılır ama runAgentTurn ASLA tekrar çağrılmaz — model reddi
+    //       kendiliğinden "gönderildi" gibi yorumlayıp halüsinasyon yapamaz, çünkü hiç ikinci
+    //       bir tur tetiklenmiyor (bkz. handleCardStatusChange'in kendi JSDoc'u).
+    //   (b) buildChatItems bu tool_call_id için asla bir "result" (TransactionResultCard) kalemi
+    //       üretmez — isSettledMarker'ın "rejected" dalı hiçbir zaman hasResultDetail almaz, bu
+    //       yüzden ekranda ne bir Explorer linki ne de "successful/failed" bir makbuz belirir;
+    //       yalnızca soluk "cancelled" breadcrumb'ı (kind: "settled") görünür.
+    //   (c) o breadcrumb ham tool adını ("pay_for_resource" gibi) ASLA sızdırmaz — çevrilmiş bir
+    //       etiketle "X cancelled" gösterir (toolActionLabel'ın pay_for_resource'u da kapsaması
+    //       gerekir; kapsamazsa bu test kırmızıya döner).
+    it.each(CONFIRMABLE_TOOLS)(
+      '"%s" reddedildiğinde: settled:rejected yazılır, runAgentTurn TEKRAR çağrılmaz, TransactionResultCard hiç render edilmez, ham tool adı sızmaz',
+      async (toolName) => {
+        const preview = makeProposalPreview({ toolName, originalArgs: { resource: 'https://api.example.com/weather' } });
+        vi.mocked(runAgentTurn).mockResolvedValueOnce({ reply: '', updatedHistory: makeProposalHistory('call_1', preview) });
+
+        renderPanel();
+        fireEvent.change(screen.getByPlaceholderText(/Ask Arfio about your balance/i), { target: { value: 'test' } });
+        fireEvent.click(screen.getByRole('button', { name: /send message/i }));
+        await waitFor(() => expect(screen.getByTestId('confirmation-card')).toBeInTheDocument());
+
+        fireEvent.click(screen.getByText('mock-reject'));
+        await waitFor(() => expect(screen.queryByTestId('confirmation-card')).not.toBeInTheDocument());
+
+        // (a) settled:rejected senkron yazıldı, ikinci bir model turu ASLA tetiklenmedi.
+        const toolMessage = readDebugConversationHistory().find((m) => m.tool_call_id === 'call_1');
+        expect(toolMessage).toBeDefined();
+        const parsed = JSON.parse(toolMessage!.content) as {
+          result: { settled: true; status: string; toolName: string; summary: string };
+        };
+        expect(parsed.result.settled).toBe(true);
+        expect(parsed.result.status).toBe('rejected');
+        expect(parsed.result.toolName).toBe(toolName);
+        expect(runAgentTurn).toHaveBeenCalledTimes(1);
+
+        // (b) Hiçbir TransactionResultCard (receipt) hiç render edilmedi.
+        expect(screen.queryByRole('link', { name: /view on explorer/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
+        expect(screen.queryByText(/successful/i)).not.toBeInTheDocument();
+
+        // (c) Görünen breadcrumb ham tool adını değil, çevrilmiş etiketi taşır.
+        expect(screen.queryAllByText(new RegExp(toolName))).toHaveLength(0);
+      }
+    );
+
     it('birden fazla çözülmemiş öneri varsa yalnızca ilki gösterilir', async () => {
       const firstPreview = makeProposalPreview({ toolName: 'propose_send' });
       const secondPreview = makeProposalPreview({ toolName: 'propose_shield', originalArgs: { amount: '0.2', tokenSymbol: 'ETH' } });

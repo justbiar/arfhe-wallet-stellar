@@ -264,4 +264,73 @@ describe("settleX402PaymentReal — verify+settle orkestrasyon", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
+
+  // ── Hata-yolu senaryoları — bkz. src/backend/__tests__/X402ProxyClient.test.ts ve
+  // UserFacingError.test.ts: bu 4 senaryonun her biri, extension tarafında ayırt edilebilir bir
+  // kullanıcı mesajına dönüşebilmesi için buradaki `error` alanının facilitator'ın HAM nedenini
+  // (invalidReason/errorReason, invalidMessage/errorMessage değil — ikisi de mevcutsa mesaj
+  // önceliklidir, bkz. settleX402PaymentReal'in kendi kodu) taşıması gerekiyor.
+  it("yetersiz bakiye (facilitator'ın canlı gözlenmemiş ama spesifikasyondaki insufficient_funds örneği) verify aşamasında errorReason olarak taşınır", async () => {
+    const fetchSpy = vi.fn(async (url: string) => {
+      if (String(url).includes("/verify")) {
+        return new Response(JSON.stringify({ isValid: false, invalidReason: "insufficient_funds" }), { status: 200 });
+      }
+      throw new Error("settle never should have been called");
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await settleX402PaymentReal("https://api.example.com/weather", VALID_SIGNED_PAYLOAD, ENV);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toBe("insufficient_funds");
+    vi.unstubAllGlobals();
+  });
+
+  it("süresi geçmiş EIP-3009 yetkilendirmesi (validBefore geçmişte) settle aşamasında errorReason olarak taşınır", async () => {
+    const fetchSpy = vi.fn(async (url: string) => {
+      if (String(url).includes("/verify")) return new Response(JSON.stringify({ isValid: true }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          success: false,
+          network: "base-sepolia",
+          transaction: "",
+          errorReason: "invalid_exact_evm_payload_authorization_valid_before",
+        }),
+        { status: 200 }
+      );
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await settleX402PaymentReal("https://api.example.com/weather", VALID_SIGNED_PAYLOAD, ENV);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toBe("invalid_exact_evm_payload_authorization_valid_before");
+    vi.unstubAllGlobals();
+  });
+
+  it("invalid_exact_evm_token_name_mismatch (CONTEXT.md'de belgelenen EIP-712 domain uyuşmazlığı bug'ı) errorReason olarak taşınır — regresyon koruması", async () => {
+    const fetchSpy = vi.fn(async (url: string) => {
+      if (String(url).includes("/verify")) return new Response(JSON.stringify({ isValid: true }), { status: 200 });
+      return new Response(
+        JSON.stringify({ success: false, network: "base-sepolia", transaction: "", errorReason: "invalid_exact_evm_token_name_mismatch" }),
+        { status: 200 }
+      );
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await settleX402PaymentReal("https://api.example.com/weather", VALID_SIGNED_PAYLOAD, ENV);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toBe("invalid_exact_evm_token_name_mismatch");
+    vi.unstubAllGlobals();
+  });
+
+  it("facilitator'ın kendisi ulaşılamaz durumdaysa (network/route hatası) settleX402PaymentReal throw eder — handleX402Settle bunu 502'ye çevirir", async () => {
+    const fetchSpy = vi.fn(async () => {
+      throw new Error("fetch failed");
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(settleX402PaymentReal("https://api.example.com/weather", VALID_SIGNED_PAYLOAD, ENV)).rejects.toThrow(
+      /x402 facilitator/
+    );
+    vi.unstubAllGlobals();
+  });
 });

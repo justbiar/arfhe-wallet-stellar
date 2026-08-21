@@ -1,7 +1,7 @@
 /// <reference types="vitest/globals" />
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import '@testing-library/jest-dom';
-import '../../i18n.js';
+import { changeLanguage } from '../../i18n.js';
 import ConfirmationCard, {
   buildConfirmationOutcomeSummary,
   type ConfirmationCardStatus,
@@ -284,6 +284,53 @@ describe('ConfirmationCard', () => {
       expect(onStatusChange).toHaveBeenCalledTimes(1);
       expect(onStatusChange).toHaveBeenCalledWith({ status: 'rejected', toolName: 'propose_send' });
     });
+
+    // Bütçe/limit dışı bir pay_for_resource önerisi de dahil, her PROPOSAL_TOOLS/X402_TOOLS
+    // üyesi için Reddet'e basmak hiçbir imzalama/broadcast/settle yan etkisi tetiklememeli —
+    // ve özellikle x402 için ledger'a (X402SpendingLedger) KESİNLİKLE yazılmamalı, çünkü ledger
+    // bütçe takibinin tek kaynağı: reddedilen bir ödeme yanlışlıkla harcanmış gibi sayılırsa,
+    // kullanıcının gerçek günlük bütçesi sessizce yanlış hesaplanır. handleReject cardPhase'i
+    // hiç değiştirmediği için kart "review" fazında kalır — bu yüzden hiçbir
+    // TransactionResultCard (pending/success/failed receipt) hiçbir zaman render edilmemeli.
+    const REJECT_CASES: Array<{ toolName: string; makePreview: () => ProposalPreview }> = [
+      { toolName: 'propose_send', makePreview: () => makePreview() },
+      {
+        toolName: 'propose_shield',
+        makePreview: () => makePreview({ toolName: 'propose_shield', originalArgs: { amount: '0.1', tokenSymbol: 'ETH' } }),
+      },
+      {
+        toolName: 'propose_unshield',
+        makePreview: () => makePreview({ toolName: 'propose_unshield', originalArgs: { amount: '0.2', tokenSymbol: 'aeETH' } }),
+      },
+      { toolName: 'pay_for_resource', makePreview: () => makeX402Preview() },
+    ];
+
+    it.each(REJECT_CASES)(
+      '"$toolName" reddedildiğinde: hiçbir yan etki tetiklenmez, ledger\'a yazılmaz, TransactionResultCard render edilmez',
+      ({ toolName, makePreview: buildPreview }) => {
+        renderCard(buildPreview());
+        fireEvent.click(screen.getByRole('button', { name: /reject/i }));
+
+        expect(onStatusChange).toHaveBeenCalledTimes(1);
+        expect(onStatusChange).toHaveBeenCalledWith({ status: 'rejected', toolName });
+
+        expect(mockNetwork.sendTransaction).not.toHaveBeenCalled();
+        expect(mockNetwork.shieldNative).not.toHaveBeenCalled();
+        expect(mockNetwork.unshieldAndClaim).not.toHaveBeenCalled();
+        expect(signTransferWithAuthorization).not.toHaveBeenCalled();
+        expect(settleX402Payment).not.toHaveBeenCalled();
+
+        // Bütçe dışı bir x402 reddi ledger'ı KESİNLİKLE etkilememeli.
+        expect(mockRecordPayment).not.toHaveBeenCalled();
+
+        // Kart hâlâ review fazında (Reject/Approve butonları hâlâ orada) — hiçbir receipt yok.
+        expect(screen.getByRole('button', { name: /reject/i })).toBeInTheDocument();
+        expect(screen.queryByText(/successful/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/^Transfer failed$/i)).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: /view on explorer/i })).not.toBeInTheDocument();
+      }
+    );
   });
 
   // ─── Aktif hesap değişimi ────────────────────────────────────────
@@ -308,6 +355,36 @@ describe('ConfirmationCard', () => {
       expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
       expect(screen.getByText(/active account changed/i)).toBeInTheDocument();
+    });
+
+    // Regresyon: ACCOUNT_CHANGED_REASON eskiden sabit bir İngilizce string'di ve bu değer
+    // AgentProposalHistoryPanel'in `record.reason`'ı hiç çevirmeden ham gösterdiği için, aktif
+    // dil Türkçe olsa bile "Agent Geçmişi"nde her zaman İngilizce görünüyordu. Artık bir i18n
+    // ANAHTARI (ACCOUNT_CHANGED_REASON_KEY) — bu test, aktif dil Türkçe iken onStatusChange'e
+    // giden `reason`'ın da gerçekten Türkçe olduğunu (İngilizce sabitin sızmadığını) kanıtlıyor.
+    it('dil Türkçe iken hesap değişimi reason\'ı Türkçe çevrilir (sabit İngilizce metin sızmaz)', async () => {
+      await act(async () => {
+        changeLanguage('tr');
+      });
+      try {
+        const { rerenderWithAccount } = renderCardAs(makePreview(), mockAccount);
+        rerenderWithAccount(otherAccount);
+
+        await waitFor(() =>
+          expect(onStatusChange).toHaveBeenCalledWith({
+            status: 'rejected',
+            toolName: 'propose_send',
+            reason: 'Onaydan önce aktif hesap değişti',
+          })
+        );
+        expect(onStatusChange).not.toHaveBeenCalledWith(
+          expect.objectContaining({ reason: 'Active account changed before approval' })
+        );
+      } finally {
+        await act(async () => {
+          changeLanguage('en');
+        });
+      }
     });
 
     it('aynı hesaba "değişim" (referans değişse de adres aynıysa) iptal tetiklemez', () => {
@@ -713,6 +790,74 @@ describe('ConfirmationCard', () => {
       await waitFor(() => expect(lastCallWithStatus(onStatusChange, 'failed')).toBeDefined());
       expect(mockRecordPayment).not.toHaveBeenCalled();
     });
+
+    // ── Facilitator hata yolu (gerçek settle reddi) ────────────────────────────────
+    //
+    // X402ProxyClient.settleX402Payment artık backend-proxy'nin `{error: <ham facilitator
+    // nedeni>}` gövdesini gerçekten okuyup thrown Error mesajı olarak taşıyor (bkz.
+    // X402ProxyClient.test.tsx) — burada da settleX402Payment'ın mock'u AYNI şekilde davranıyor:
+    // gerçek entegrasyondaki gibi facilitator'ın ham nedenini (insufficient_funds,
+    // invalid_exact_evm_payload_authorization_valid_before, invalid_exact_evm_signature,
+    // invalid_exact_evm_token_name_mismatch, ya da bir route-seviyesi 5xx status koduyla)
+    // reddediyor. Her senaryo için üç şey kanıtlanıyor:
+    //   (a) ekranda gösterilen mesaj ANLAŞILIR (UserFacingError.ts'in çevirdiği metin) — ham
+    //       facilitator kodu asla ekrana sızmıyor,
+    //   (b) ledger'a KESİNLİKLE yazılmıyor (başarısız bir ödeme bütçeyi tüketmemeli),
+    //   (c) TransactionResultCard "failed" fazını doğru render ediyor ("x402 Payment failed" +
+    //       "Tekrar dene" butonu).
+    const FACILITATOR_ERROR_CASES: Array<{
+      name: string;
+      rawError: string;
+      expectedMessage: string;
+    }> = [
+      {
+        name: 'yetersiz bakiye (insufficient_funds)',
+        rawError: 'insufficient_funds',
+        expectedMessage: 'Not enough balance to cover the amount and network fee.',
+      },
+      {
+        name: 'süresi geçmiş EIP-3009 yetkilendirmesi (validBefore)',
+        rawError: 'invalid_exact_evm_payload_authorization_valid_before',
+        expectedMessage: 'Your payment authorization expired before it could settle. Try again to sign a fresh one.',
+      },
+      {
+        name: 'invalid_exact_evm_signature (EIP-712 domain uyuşmazlığı)',
+        rawError: 'invalid_exact_evm_signature',
+        expectedMessage: 'The payment facilitator rejected this payment. Please contact support if this keeps happening.',
+      },
+      {
+        name: 'invalid_exact_evm_token_name_mismatch (CONTEXT.md, bölüm 16 Bug 2)',
+        rawError: 'invalid_exact_evm_token_name_mismatch',
+        expectedMessage: 'The payment facilitator rejected this payment. Please contact support if this keeps happening.',
+      },
+      {
+        name: "facilitator'ın kendisine ulaşılamadı — genel 5xx (X402ProxyClient'ın durum koduna geri düşen mesajı)",
+        rawError: 'x402 settle isteği başarısız oldu: 502',
+        expectedMessage: 'Server is temporarily unavailable. Please try again later.',
+      },
+    ];
+
+    it.each(FACILITATOR_ERROR_CASES)(
+      '$name: anlaşılır bir mesaj gösterilir, ledger\'a yazılmaz, TransactionResultCard "failed" fazını render eder',
+      async ({ rawError, expectedMessage }) => {
+        vi.mocked(settleX402Payment).mockRejectedValueOnce(new Error(rawError));
+        renderX402Card(makeX402Preview());
+        fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+        await waitFor(() => expect(lastCallWithStatus(onStatusChange, 'failed')).toBeDefined());
+
+        // (a) Ham facilitator kodu asla ekranda görünmez; anlaşılır çeviri görünür.
+        expect(screen.queryByText(rawError)).not.toBeInTheDocument();
+        expect(screen.getByText(expectedMessage)).toBeInTheDocument();
+
+        // (b) Başarısız ödeme ledger'ı KESİNLİKLE etkilemedi.
+        expect(mockRecordPayment).not.toHaveBeenCalled();
+
+        // (c) Gerçek TransactionResultCard'ın "failed" fazı render edildi.
+        expect(screen.getByText('x402 Payment failed')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+      }
+    );
 
     it('"Remaining balance" satırı gösterilmez (yanlış varlık — USDC yerine native/shielded olurdu)', () => {
       renderX402Card(makeX402Preview());

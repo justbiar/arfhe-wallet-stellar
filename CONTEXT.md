@@ -1,20 +1,18 @@
 # ArfheWallet — AI Agent Entegrasyonu: Bağlam Dosyası
 
 > Devir teslim / hatırlatma dosyası. Bir sonraki oturumda buradan devam edilecek.
-> Son güncelleme: 2026-08-16 (kök proje 662 + backend-proxy 53 test yeşil; Faz 2 RAG
-> tamamlandı, rewrite-omer merge edildi, tool-ismi sızıntısı + propose_send
-> halüsinasyon bug'ı + dekont UI yeniden tasarımı + Alchemy multichain key sorunu
-> çözüldü, Faz 3 (x402) ilk entegrasyon turu tamamlandı + gerçek facilitator
-> entegrasyonu eklendi (backend-proxy, `x402FacilitatorClient.ts`, feature flag
-> arkasında). Chrome'da elle uçtan uca test BAŞLADI (bkz. bölüm 15): `pay_for_resource`
-> `AGENT_TOOLS`'ta hiç yoktu bug'ı bu test sırasında bulunup düzeltildi (bkz. bölüm 14
-> sonu), fix Chrome'da doğrulandı (Arfio artık tool'un varlığından haberdar). AMA yeni
-> bir sorun açık: gerçek bir `pay_for_resource` denemesinde 404 hatası alınıyor, kaynağı
-> henüz teşhis edilmedi (wrangler dev'de hiç istek logu yok — istek backend-proxy'ye
-> ulaşmıyor gibi görünüyor). Teşhis LLM rate limit nedeniyle YARIDA KESİLDİ — **sıradaki
-> oturum bölüm 15'teki açık noktadan devam etmeli.** `X402_USE_REAL_FACILITATOR` şu an
-> `.dev.vars`'ta `true` (local test için), `wrangler.toml`'daki prod/dev varsayılanı hâlâ
-> `false`.
+> Son güncelleme: 2026-08-20 (bkz. bölüm 16). **Faz 3 (x402) Chrome'da uçtan uca
+> BAŞARIYLA DOĞRULANDI** — hem auto-pay (bütçe içi) hem manuel onaylı
+> (`ConfirmationCard`, bütçe dışı) yollar gerçek Base Sepolia testnet
+> transaction'larıyla kanıtlandı. Bu oturumda 404'ten başlayıp beş ayrı bug zincirleme
+> bulunup düzeltildi (env/build, üç kopyalı token domain-name mismatch, eksik sistem
+> prompt talimatı, Settings input race condition, UI genişlik sorunu — detaylar bölüm
+> 16'da). Test amaçlı `X402SettingsService` local ayarları per-payment cap: 0.01,
+> daily budget: 1 olarak bırakıldı (varsayılanlara yakın, sorun değil).
+> `X402_USE_REAL_FACILITATOR` `.dev.vars`'ta `true` (local test için),
+> `wrangler.toml`'daki prod/dev varsayılanı hâlâ `false`. **Sıradaki oturum bölüm 16'nın
+> sonundaki "Yapılmadı" listesinden devam etmeli** (limit-dışı ret/hata yolu testi,
+> İngilizce başlık kalıntıları, Dependabot uyarıları, Wrangler güncelleme).
 
 ## 1. Genel Amaç
 
@@ -630,3 +628,98 @@ rate limit'e (muhtemelen OpenRouter'ın ücretsiz model havuzunda) çarpılınca
 4. 404 çözülünce KALAN İŞ madde 1'deki asıl senaryolara (limit-içi otomatik akış, limit-dışı
    `ConfirmationCard` onayı, gerçek testnet USDC transferinin Etherscan'de doğrulanması, hata
    yolu testi) geçilebilir.
+
+## 16. Chrome uçtan uca test — 404'ten BAŞARIYA, beş bug zincirleme çözüldü (2026-08-20)
+
+Bölüm 15'in yarıda kaldığı yerden devam edildi. Bu oturumda **Faz 3 (x402) hem auto-pay
+hem manuel onay yolu Chrome'da gerçek Base Sepolia testnet transaction'larıyla uçtan uca
+doğrulandı.** Sırayla bulunup çözülen beş bağımsız bug:
+
+### Bug 1 — 404: extension yanlış build/env kullanıyordu
+`vite.config.js`'de extension için özel bir dev-server→`dist/` senkronizasyonu yok;
+`pnpm dev` (`vite`) sadece in-memory dev server açıyor, `dist/`'e yazmıyor. Extension ise
+`dist/`'i **diskten** okuyor. Yani popup'ın kullandığı `dist/` hep en son `pnpm build`
+(prod mode, `.env.production` → `workers.dev` URL'i) çıktısıydı, `pnpm dev` çalışırken bile
+hiç güncellenmiyordu. **Fix:** local test için `npx vite build --mode development` ile
+build almak gerekiyor (`.env.development` → `localhost:8787`). **Bu proje boyunca local
+Chrome testi yapılacaksa her seferinde bu komutla build alınmalı**, `pnpm dev`/`pnpm build`
+yeterli değil.
+
+### Bug 2 — x402 settle 402: token domain-name mismatch (ÜÇ ayrı kopya)
+`invalid_exact_evm_token_name_mismatch` hatası. Base Sepolia testnet USDC kontratının
+EIP-712 domain adı `"USDC"` (mainnet USDC'nin `"USD Coin"` kullanmasından farklı — Circle'ın
+kendi dokümantasyonu ve BaseScan/Blockscout ile doğrulandı). Kodda `name: "USD Coin"`
+**üç bağımsız kopyada** hardcoded bulundu ve tek tek düzeltildi:
+1. `src/AppContext.ts` (`getUsdcTokenIdentity` dep, auto-pay yolu)
+2. `src/components/panels/ConfirmationCard.tsx` (manuel onay yolu — ayrıca tek doğruluk
+   kaynağı olsun diye `AgentToolRunner.ts`'e eklenen `getUsdcTokenIdentity` export'unu
+   çağıracak şekilde refactor edildi, artık kendi kopyasını inşa etmiyor)
+3. `backend-proxy/src/x402FacilitatorClient.ts` (`buildRealPaymentRequirements`,
+   facilitator'a gönderilen `extra.name` — asıl kök neden buradaydı: extension doğru
+   imzalıyordu ama facilitator'a "bu imza yanlış domain'le atıldı" deniyordu, ecrecover
+   farklı adrese düşüyordu → `invalid_exact_evm_signature`)
+
+Bu üçüncü kopyanın varlığı, `recoverAuthorizationSigner` ile local imza doğrulaması
+(imza→from adresi eşleşmesi BAŞARILI çıktı) yapılarak kanıtlandı — yani sorunun imzalama
+kodunda değil, facilitator'a giden `extra` payload'ında olduğu adım adım elenerek bulundu.
+`x402FacilitatorClient.test.ts`'e bu üç kopyanın bir daha driftlenemeyeceğini garanti eden
+bir test eklendi.
+
+### Bug 3 — ConfirmationCard hiç render edilmiyordu (x402 için)
+Model, bütçe dışı bir `pay_for_resource` isteğinde kart göstermek yerine sohbette düz
+metinle "onaylıyor musunuz?" diye soruyordu — kod tarafında bir "eksik case" değil, **sistem
+promptunda eksik talimat**: `AgentOrchestrator.ts`'teki `buildSystemPrompt()` yalnızca
+`propose_send`/`propose_shield`/`propose_unshield` için "aracı çağır, DUR, sohbette ayrıca
+sorma" talimatı veriyordu, `pay_for_resource` bu listede yoktu. Model temkinli davranıp
+tool'u hiç çağırmadan izin istiyordu, dolayısıyla `findPendingConfirmation`'ın bulacağı bir
+tool-result hiç oluşmuyordu. **Fix:** `pay_for_resource`'a `propose_*` ile aynı protokol
+talimatı eklendi. `AgentChatPanel.test.tsx`'e `CONFIRMABLE_TOOLS`'daki her tool için kartın
+gerçekten render edildiğini kanıtlayan bir invariant test eklendi.
+
+### Bug 4 — Settings ekranında per-payment cap / daily budget input'ları düzenlenemiyordu
+`SettingsX402.tsx`'teki `persist()` art arda tetiklenen `saveSettings()` çağrılarını
+sıralamıyordu — iki çağrı aynı anda uçuştaysa, hangisinin önce dispatch edildiği değil,
+hangisinin async `chrome.storage` round-trip'i önce çözüldüğü kazanıyordu; geç çözülen eski
+bir çağrı, kullanıcının o an gördüğü daha yeni değerin üzerine sessizce yazabiliyordu
+(örn. kullanıcı `0` yazıp blur oluyor, ekranda `0` görünüyor, sonra sessizce `0.02`'ye
+dönüyor). **Fix:** monoton `persistRequestId` guard eklendi (stale response artık state'e
+yazmıyor), ayrıca `persist()` artık hangi alan için çağrıldığını bilip yalnızca o alanın
+local state'ini senkronize ediyor (önceden her commit iki input state'ini de eziyordu).
+Race, `git stash` ile eski koda dönülüp yeni testin başarısız olduğu gösterilerek kanıtlandı.
+
+### Bug 5 — Aynı input'larda "0" değeri görsel olarak görünmüyordu
+DOM'da `value="0"` doğru duruyordu (Console'dan doğrulandı) ama görsel olarak alan boş
+görünüyordu — React state binding sorunu değil, `type="number"` + `$` startAdornment + dar
+(120px) kutunun Chromium'da native number-input iç metin katmanını sıkıştırması. **Fix:**
+`type="number"` → `type="text"` + `inputMode="decimal"` + `isValidDecimalInput` regex guard
+(native karakter filtrelemesinin yerine), kutu genişliği 120→150px, font-size 13'e küçültme.
+
+### Sonuç: iki x402 yolu da gerçek testnet'te doğrulandı
+- **Auto-pay (bütçe içi):** `tx 0xce7aa5320455be937d9a961639436a4e238b734ecd0109eef8ff9f32e42bfdad`
+- **Manuel onay (`ConfirmationCard`, bütçe dışı):** `tx 0x9521b236748465584daed816604c11da38288705417f544ed214e7e4ccb9dba1`
+
+İkisi de Base Sepolia'da, gerçek 0.01 USDC transferi, EIP-3009 gassiz imza + facilitator
+settle ile. **Not:** `https://api.example.com/weather` test amaçlı bir placeholder URL,
+gerçek bir sunucu değil — backend fetch atmıyor, deterministik requirement üretiyor (bkz.
+bölüm 14). Yani bugün doğrulanan **ödeme mekanizmasının kendisi**, gerçek bir kaynağa
+erişim değil.
+
+### Değişen dosyalar (bu oturum)
+`src/AppContext.ts`, `src/components/panels/ConfirmationCard.tsx`,
+`src/backend/AgentToolRunner.ts` (+ test'leri), `backend-proxy/src/x402FacilitatorClient.ts`
+(+ test), `src/backend/AgentOrchestrator.ts` (+ test), `src/components/AgentChatPanel.tsx`
+test'i (yeni invariant), `src/pages/SettingsX402.tsx` (+ test) — race guard + genişlik/tip
+fix'i iki ayrı turda.
+
+### Yapılmadı / Sıradaki Adımlar
+- **Limit-dışı ret senaryosu test edilmedi**: kullanıcı `ConfirmationCard`'da REJECT'e
+  basarsa akış doğru iptal oluyor mu — sadece APPROVE test edildi.
+- **Hata yolu testi**: facilitator gerçekten reddederse (yetersiz bakiye, süresi geçmiş
+  authorization, vb.) kullanıcıya gösterilen mesaj doğru mu.
+- **İngilizce başlık kalıntıları** (`TransactionResultCard`'da "Transfer successful" gibi,
+  bölüm 5'ten beri bekliyor) — küçük, ertelenebilir.
+- **GitHub Dependabot uyarısı** (113 vulnerabilities) — henüz incelenmedi.
+- **Wrangler güncel değil** (3.114.17, 4.x mevcut) — güncellenmedi.
+- **Local test ortamı notu**: `X402SettingsService` local ayarları şu an per-payment cap:
+  0.01, daily budget: 1 (varsayılana yakın bırakıldı, kasıtlı bir sorun değil, ama
+  bir sonraki oturumda limit-dışı senaryo test edilecekse bu değerlerin bilinmesi gerekir).

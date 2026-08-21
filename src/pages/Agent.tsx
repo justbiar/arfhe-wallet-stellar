@@ -46,7 +46,7 @@ import {
   findPendingConfirmation,
   type ProposalRecord,
 } from "../backend/AgentProposalHistory.js";
-import { buildConfirmationOutcomeSummary, ACCOUNT_CHANGED_REASON } from "../components/ConfirmationCard.js";
+import { buildConfirmationOutcomeSummary, ACCOUNT_CHANGED_REASON_KEY } from "../components/ConfirmationCard.js";
 import AgentChatPanel from "../components/AgentChatPanel.js";
 import AgentProposalHistoryPanel from "../components/AgentProposalHistoryPanel.js";
 
@@ -75,13 +75,13 @@ function Agent() {
     if (previous === address || previous === undefined || address === undefined) return;
 
     // 1. If the OUTGOING account left a pending confirmation card under review, auto-cancel it
-    //    — same mechanism/reason text as ConfirmationCard's own effect (see ACCOUNT_CHANGED_REASON),
+    //    — same mechanism/reason text as ConfirmationCard's own effect (see ACCOUNT_CHANGED_REASON_KEY),
     //    just performed here because that component will already be unmounted by the time this
     //    runs (conversationHistory swaps to the INCOMING account's array in the same render).
     const outgoingHistory = historyByAccount[previous] ?? [];
     const pending = findPendingConfirmation(outgoingHistory);
     if (pending) {
-      const cancelOutcome = { status: "rejected" as const, toolName: pending.preview.toolName, reason: ACCOUNT_CHANGED_REASON };
+      const cancelOutcome = { status: "rejected" as const, toolName: pending.preview.toolName, reason: t(ACCOUNT_CHANGED_REASON_KEY) };
       const summary = buildConfirmationOutcomeSummary(cancelOutcome, t);
       const cancelledHistory = outgoingHistory.map((m) =>
         m.role === "tool" && m.tool_call_id === pending.toolCallId

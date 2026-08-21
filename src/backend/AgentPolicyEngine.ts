@@ -173,7 +173,29 @@ export interface PolicyDecision {
   /** True when `allowed` is a proposal that still needs explicit user confirmation before execution. */
   requiresConfirmation: boolean;
   reasonCode: PolicyDecisionReasonCode;
+  /**
+   * Model-facing, English, plain-text explanation — this is what the agent reads back as the
+   * tool call's `{error}` and reacts to in its own reply. NEVER localized: the model's own
+   * reasoning/response language is a separate concern from the wallet UI's language, and a
+   * consistent English contract here is what LLM prompting actually relies on. Do not change
+   * this field's language or add interpolation braces to it — see reasonKey/reasonParams below
+   * for the user-facing counterpart.
+   */
   reason: string;
+  /**
+   * User-facing counterpart to `reason`, set ONLY on a denial (allowed:false) — an i18n key
+   * (e.g. "agent.policyReasonExceedsBalanceRatio") plus its interpolation params, both string
+   * keys/values exactly like every other `t()` call in this codebase. Exists because `reason`
+   * above must stay English for the model, but the SAME denial also gets persisted into
+   * AgentProposalHistoryPanel's `record.reason` and shown to a human — who may have the UI set
+   * to Turkish. Never set for an "allowed" decision (allowed_read_only/allowed_proposal/
+   * x402_auto_paid/x402_requires_confirmation) — those reasons are never surfaced as a denial
+   * anywhere, so there's nothing for a human to read a translation of. Optional: a caller with
+   * no i18n concerns (this class itself, most tests) can ignore both fields entirely and only
+   * `reason` still works exactly as before.
+   */
+  reasonKey?: string;
+  reasonParams?: Record<string, string>;
   /**
    * Set only by evaluateX402Payment(): budget left for the rest of the day AFTER this payment,
    * using the same (re-clamped) daily cap the decision itself was made against. The auto-paid
@@ -247,6 +269,8 @@ export class AgentPolicyEngine {
         requiresConfirmation: false,
         reasonCode: "forbidden_tool",
         reason: `"${toolName}" is a forbidden tool and is never exposed to the agent.`,
+        reasonKey: "agent.policyReasonForbiddenTool",
+        reasonParams: { toolName },
       };
     }
 
@@ -265,6 +289,8 @@ export class AgentPolicyEngine {
         requiresConfirmation: false,
         reasonCode: "unknown_tool",
         reason: `"${toolName}" is not a recognized tool.`,
+        reasonKey: "agent.policyReasonUnknownTool",
+        reasonParams: { toolName },
       };
     }
 
@@ -274,17 +300,23 @@ export class AgentPolicyEngine {
         requiresConfirmation: false,
         reasonCode: "session_proposal_limit_reached",
         reason: `Session proposal limit reached (${this.config.maxProposalsPerSession}).`,
+        reasonKey: "agent.policyReasonSessionLimitReached",
+        reasonParams: { limit: String(this.config.maxProposalsPerSession) },
       };
     }
 
     if (typeof args.amount === "number" && walletContext.balance > 0) {
       const ratio = args.amount / walletContext.balance;
       if (ratio > this.config.maxProposalRatio) {
+        const ratioPercent = (ratio * 100).toFixed(1);
+        const limitPercent = (this.config.maxProposalRatio * 100).toFixed(0);
         return {
           allowed: false,
           requiresConfirmation: false,
           reasonCode: "exceeds_balance_ratio",
-          reason: `Proposed amount is ${(ratio * 100).toFixed(1)}% of balance, exceeding the ${(this.config.maxProposalRatio * 100).toFixed(0)}% limit.`,
+          reason: `Proposed amount is ${ratioPercent}% of balance, exceeding the ${limitPercent}% limit.`,
+          reasonKey: "agent.policyReasonExceedsBalanceRatio",
+          reasonParams: { ratio: ratioPercent, limit: limitPercent },
         };
       }
     }
@@ -331,6 +363,8 @@ export class AgentPolicyEngine {
         requiresConfirmation: false,
         reasonCode: "x402_invalid_amount",
         reason: `x402 payment amount must be a positive number (got ${amountUsd}).`,
+        reasonKey: "agent.policyReasonX402InvalidAmount",
+        reasonParams: { amount: String(amountUsd) },
       };
     }
 
@@ -340,6 +374,7 @@ export class AgentPolicyEngine {
         requiresConfirmation: false,
         reasonCode: "x402_disabled",
         reason: "x402 payments are disabled in settings.",
+        reasonKey: "agent.policyReasonX402Disabled",
       };
     }
 

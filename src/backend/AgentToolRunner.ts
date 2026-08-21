@@ -40,6 +40,7 @@ import {
   type ReadOnlyTool,
   type ProposalTool,
   type AgentToolArgs,
+  type PolicyDecision,
 } from "./AgentPolicyEngine.js";
 import type { ShieldedHolding, UnshieldClaim } from "../types/fhe.js";
 import { X402SettingsService } from "./X402SettingsService.js";
@@ -72,6 +73,14 @@ export interface ProposalPreview {
 export interface ToolExecutionResult {
   result?: unknown;
   error?: string;
+  /**
+   * Set only alongside `error`, and only when it originated from an AgentPolicyEngine denial —
+   * see PolicyDecision.reasonKey's own docs. Carried through unchanged so AgentOrchestrator.ts's
+   * tool message can include it for AgentProposalHistory.ts's extractPolicyDenials() to pick up;
+   * `error` itself (the model-facing English text) is never touched.
+   */
+  reasonKey?: string;
+  reasonParams?: Record<string, string>;
 }
 
 export interface AgentToolRunnerDeps {
@@ -97,6 +106,28 @@ export interface AgentToolRunnerDeps {
 
 /** Raised for a malformed/unsupported tool_call argument — caught alongside Network.ts errors below. */
 class ToolArgumentError extends Error {}
+
+/**
+ * Raised only for an AgentPolicyEngine denial inside handlePayForResource (x402_invalid_amount/
+ * x402_disabled) — unlike a plain ToolArgumentError, this carries `reasonKey`/`reasonParams`
+ * (see PolicyDecision's own docs on AgentPolicyEngine.ts) so the catch block in executeToolCall
+ * can attach them to the `{error}` result, exactly like the PROPOSAL_TOOLS denial paths (evaluate()
+ * results) already do via `return { error, reasonKey, reasonParams }`. handlePayForResource itself
+ * only ever throws (its return type is folded into a `{result}` wrapper at the call site, with no
+ * room for a denial variant), so a distinguishable subclass — rather than restructuring that
+ * control flow — is the minimal way to thread the same structured data through the same throw/catch
+ * path every other error in this function already uses.
+ */
+class PolicyDenialError extends Error {
+  reasonKey?: string;
+  reasonParams?: Record<string, string>;
+
+  constructor(decision: PolicyDecision) {
+    super(decision.reason);
+    this.reasonKey = decision.reasonKey;
+    this.reasonParams = decision.reasonParams;
+  }
+}
 
 // ─── Configuration (singleton, same pattern as FheCofheService) ────
 
@@ -539,7 +570,7 @@ async function handlePayForResource(
   const decision = policyEngine.evaluateX402Payment(amountUsd, settings, spentToday);
 
   if (!decision.allowed) {
-    throw new ToolArgumentError(decision.reason);
+    throw new PolicyDenialError(decision);
   }
 
   if (decision.requiresConfirmation) {
@@ -627,7 +658,7 @@ export async function executeToolCall(
     // ── Read-only tools: policy is a trivial always-allow, no balance needed. ──
     if ((READ_ONLY_TOOLS as readonly string[]).includes(toolName)) {
       const decision = policyEngine.evaluate(toolName, args, { balance: 0 });
-      if (!decision.allowed) return { error: decision.reason };
+      if (!decision.allowed) return { error: decision.reason, reasonKey: decision.reasonKey, reasonParams: decision.reasonParams };
 
       switch (toolName as ReadOnlyTool) {
         case "get_balance":
@@ -648,7 +679,7 @@ export async function executeToolCall(
 
       const policyArgs: AgentToolArgs = { ...args, amount: prepared.amountNumber };
       const decision = policyEngine.evaluate(toolName, policyArgs, { balance: prepared.balance });
-      if (!decision.allowed) return { error: decision.reason };
+      if (!decision.allowed) return { error: decision.reason, reasonKey: decision.reasonKey, reasonParams: decision.reasonParams };
 
       return { result: await prepared.buildPreview() };
     }
@@ -662,8 +693,14 @@ export async function executeToolCall(
     // Forbidden or genuinely unrecognized — evaluate() supplies the precise reason
     // (forbidden_tool vs unknown_tool) without needing any Network/Account lookup.
     const decision = policyEngine.evaluate(toolName, args, { balance: 0 });
-    return { error: decision.reason };
+    return { error: decision.reason, reasonKey: decision.reasonKey, reasonParams: decision.reasonParams };
   } catch (err) {
+    // A PolicyDenialError (handlePayForResource's own AgentPolicyEngine denial) carries
+    // reasonKey/reasonParams — attach them the same way the PROPOSAL_TOOLS denial paths above
+    // do, so AgentProposalHistory.ts's extractPolicyDenials() can translate it for a human.
+    if (err instanceof PolicyDenialError) {
+      return { error: err.message, reasonKey: err.reasonKey, reasonParams: err.reasonParams };
+    }
     // Covers ToolArgumentError, a determined-to-fail simulation (see simulateAndEnrich),
     // and anything Network.ts throws (e.g. an FHE decrypt failure other than
     // CiphertextNotFoundError, which Network.ts already normalizes to a "0.0" balance

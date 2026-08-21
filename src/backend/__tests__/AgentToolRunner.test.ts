@@ -312,6 +312,23 @@ describe('AgentToolRunner', () => {
       expect(res.error).toBeDefined();
       expect(mockNetwork.getBalance).not.toHaveBeenCalled();
     });
+
+    // AgentPolicyEngine.evaluate()'in reasonKey/reasonParams'ı — kullanıcıya-gösterilen çeviri
+    // anahtarı — executeToolCall'ın {error} sonucuna da taşınıyor mu? Bu, AgentOrchestrator.ts'in
+    // wire-format tool mesajına (runOneToolCall) ve oradan AgentProposalHistory.ts'in
+    // extractPolicyDenials()'ına ulaşmasının TEK yolu — bkz. ToolExecutionResult'ın kendi JSDoc'u.
+    it('forbidden tool reddi: {error} ile birlikte reasonKey + reasonParams da döner (ham "reason" İngilizce metinle birebir aynı kalır)', async () => {
+      const res = await executeToolCall('set_operator', {}, context);
+      expect(res.reasonKey).toBe('agent.policyReasonForbiddenTool');
+      expect(res.reasonParams).toEqual({ toolName: 'set_operator' });
+      expect(res.error).toBe('"set_operator" is a forbidden tool and is never exposed to the agent.');
+    });
+
+    it('bilinmeyen tool reddi de reasonKey + reasonParams taşır', async () => {
+      const res = await executeToolCall('drain_wallet', {}, context);
+      expect(res.reasonKey).toBe('agent.policyReasonUnknownTool');
+      expect(res.reasonParams).toEqual({ toolName: 'drain_wallet' });
+    });
   });
 
   // ─── propose_send ─────────────────────────────────────────────
@@ -502,6 +519,14 @@ describe('AgentToolRunner', () => {
       expect(allowed.error).toBeUndefined();
       expect((allowed.result as ProposalPreview).requiresConfirmation).toBe(true);
     });
+
+    it('bakiye oranı aşımıyla reddedilen bir öneri de reasonKey + reasonParams taşır (kullanıcıya-gösterilen çeviri için)', async () => {
+      const denied = await executeToolCall('propose_send', { to: RECIPIENT, amount: '0.6' }, context);
+      expect(denied.reasonKey).toBe('agent.policyReasonExceedsBalanceRatio');
+      expect(denied.reasonParams).toBeDefined();
+      expect(denied.reasonParams?.ratio).toBeDefined();
+      expect(denied.reasonParams?.limit).toBeDefined();
+    });
   });
 
   // ─── pay_for_resource (x402, Faz 3) ────────────────────────────
@@ -529,6 +554,20 @@ describe('AgentToolRunner', () => {
       expect(res.error).toBeDefined();
       expect(mockSignTransferWithAuthorization).not.toHaveBeenCalled();
       expect(mockRecordPayment).not.toHaveBeenCalled();
+    });
+
+    // AgentPolicyEngine.evaluateX402Payment()'ın x402_disabled reasonKey'i — PROPOSAL_TOOLS'un
+    // evaluate() denial'ları gibi — artık pay_for_resource'un {error} sonucuna da taşınıyor.
+    // Önceden handlePayForResource bunu düz bir ToolArgumentError olarak throw ediyordu (ham
+    // "reason" metni korunuyordu ama reasonKey/reasonParams tamamen kayboluyordu) — bkz.
+    // AgentToolRunner.ts'teki PolicyDenialError. Bu, AgentProposalHistory.extractPolicyDenials()'ın
+    // bir pay_for_resource reddini de çevrilebilir hâle getirmesinin TEK yolu.
+    it('x402 kapalıyken dönen {error} reasonKey + reasonParams de taşır (kullanıcıya-gösterilen çeviri için)', async () => {
+      mockGetX402Settings.mockResolvedValueOnce({ enabled: false, perTransactionCapUsd: 0.5, dailyBudgetCapUsd: 5 });
+      const res = await executeToolCall('pay_for_resource', { resource: RESOURCE }, context);
+      expect(res.reasonKey).toBe('agent.policyReasonX402Disabled');
+      expect(res.reasonParams).toBeUndefined();
+      expect(res.error).toBe('x402 payments are disabled in settings.');
     });
 
     it('limit içindeyse OTOMATİK öder: imzalar, settle eder, ledger\'a kaydeder, autoPaid:true döner — model hiçbir karar vermez', async () => {
@@ -606,6 +645,9 @@ describe('AgentToolRunner', () => {
       expect(res.result).toBeUndefined();
       expect(res.error).toBeDefined();
       expect(mockGetX402Settings).not.toHaveBeenCalled();
+      // Bu bir AgentPolicyEngine denial'ı DEĞİL (policy motoruna hiç gidilmedi) — düz bir
+      // ToolArgumentError, PolicyDenialError değil, bu yüzden reasonKey taşımamalı.
+      expect(res.reasonKey).toBeUndefined();
     });
   });
 });

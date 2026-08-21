@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { SELF } from "cloudflare:test";
+import { describe, expect, it, beforeEach } from "vitest";
+import { env, SELF } from "cloudflare:test";
 
 /**
  * POST /agent/x402/payment-required ve POST /agent/x402/settle testleri.
@@ -8,7 +8,18 @@ import { SELF } from "cloudflare:test";
  * bağlanmıyor. Bu testler gerçek x402 davranışını değil, stub'ın kararlı ve doğru şekilde
  * "sahte veri" ürettiğini ve CORS/rate-limit/validation davranışının diğer endpoint'lerle
  * tutarlı olduğunu doğruluyor.
+ *
+ * Stub yolu yalnızca env.X402_USE_REAL_FACILITATOR !== "true" iken devreye girer (bkz.
+ * index.ts'in handleX402PaymentRequired/handleX402Settle'ı) — bunu wrangler.toml'daki
+ * varsayılana ("false") güvenerek bırakmak yerine burada açıkça set ediyoruz. Bir geliştiricinin
+ * yerel `.dev.vars` dosyasında (gitignored, CI'da yok) gerçek facilitator'a karşı elle Chrome
+ * uçtan uca test yapmak için X402_USE_REAL_FACILITATOR=true bırakması hâlâ mümkün — vitest-pool-
+ * workers bu dosyayı da wrangler.toml ile birlikte okuyor, bu yüzden ambient varsayılan HER ZAMAN
+ * "false" olacağı garanti değil.
  */
+beforeEach(() => {
+  env.X402_USE_REAL_FACILITATOR = "false";
+});
 
 const EXTENSION_ORIGIN = "chrome-extension://ajfpejolnhgeflhgjmboikiffpdlhngi";
 

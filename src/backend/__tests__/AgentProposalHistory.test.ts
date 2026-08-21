@@ -141,6 +141,107 @@ describe('AgentProposalHistory', () => {
       expect(records).toHaveLength(0);
     });
 
+    // reasonKey/reasonParams — AgentPolicyEngine'in kullanıcıya-gösterilen çeviri anahtarı (bkz.
+    // AgentOrchestrator.ts'in runOneToolCall'ı, tool mesajının {error} gövdesine bunu ekliyor).
+    it('tool mesajı reasonKey/reasonParams taşıyorsa kayda aktarır', () => {
+      const slice: ChatMessage[] = [
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: 'call_x', type: 'function', function: { name: 'propose_send', arguments: JSON.stringify({ amount: '0.9' }) } }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_x',
+          name: 'propose_send',
+          content: JSON.stringify({
+            error: 'Proposed amount is 90.0% of balance, exceeding the 50% limit.',
+            reasonKey: 'agent.policyReasonExceedsBalanceRatio',
+            reasonParams: { ratio: '90.0', limit: '50' },
+          }),
+        },
+      ];
+      const records = extractPolicyDenials(slice, ACCOUNT_A);
+      expect(records).toHaveLength(1);
+      expect(records[0].reasonKey).toBe('agent.policyReasonExceedsBalanceRatio');
+      expect(records[0].reasonParams).toEqual({ ratio: '90.0', limit: '50' });
+      // Ham (model-facing) reason hâlâ ayrıca korunuyor — geriye dönük uyumluluk/fallback için.
+      expect(records[0].reason).toBe('Proposed amount is 90.0% of balance, exceeding the 50% limit.');
+    });
+
+    it('tool mesajı reasonKey taşımıyorsa (eski format ya da policy-dışı bir hata) reasonKey/reasonParams undefined kalır, reason yine de doğru okunur', () => {
+      const records = extractPolicyDenials(makeDenialSlice(), ACCOUNT_A);
+      expect(records[0].reasonKey).toBeUndefined();
+      expect(records[0].reasonParams).toBeUndefined();
+      expect(records[0].reason).toBe('Proposed amount exceeds limit.');
+    });
+
+    // pay_for_resource (X402_TOOLS) — extractPolicyDenials önceden yalnızca PROPOSAL_TOOLS'u
+    // (send/shield/unshield) tarıyordu; bir x402 reddi (x402_invalid_amount, x402_disabled) bu
+    // filtreden hiç geçemiyordu, ne bir ProposalRecord'a ne de "Agent Geçmişi"ne hiç ulaşmıyordu
+    // — altyapı (reasonKey/reasonParams) hazırdı ama bu tool için bağlı değildi. Artık DENIABLE_TOOLS
+    // (PROPOSAL_TOOLS ∪ X402_TOOLS) taranıyor.
+    it('pay_for_resource (x402_disabled) reddi de kayda çevrilir, doğru toolName + reasonKey ile', () => {
+      const slice: ChatMessage[] = [
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: 'call_x402_1', type: 'function', function: { name: 'pay_for_resource', arguments: JSON.stringify({ resource: 'https://api.example.com/weather' }) } }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_x402_1',
+          name: 'pay_for_resource',
+          content: JSON.stringify({
+            error: 'x402 payments are disabled in settings.',
+            reasonKey: 'agent.policyReasonX402Disabled',
+          }),
+        },
+      ];
+      const records = extractPolicyDenials(slice, ACCOUNT_A);
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        id: 'call_x402_1',
+        accountAddress: ACCOUNT_A,
+        toolName: 'pay_for_resource',
+        status: 'policy_rejected',
+        reason: 'x402 payments are disabled in settings.',
+        reasonKey: 'agent.policyReasonX402Disabled',
+      });
+      expect(records[0].reasonParams).toBeUndefined();
+      // pay_for_resource'un originalArgs'ı {resource} taşır, amount/tokenSymbol/to değil —
+      // bunlar propose_* tool'lara özgü, x402 kaydında undefined kalmalı (yanlışlıkla bir alan
+      // sızdırmamalı).
+      expect(records[0].amount).toBeUndefined();
+      expect(records[0].tokenSymbol).toBeUndefined();
+      expect(records[0].recipient).toBeUndefined();
+    });
+
+    it('pay_for_resource (x402_invalid_amount) reddi de reasonKey + reasonParams ile kayda çevrilir', () => {
+      const slice: ChatMessage[] = [
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: 'call_x402_2', type: 'function', function: { name: 'pay_for_resource', arguments: JSON.stringify({ resource: 'https://api.example.com/weather' }) } }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_x402_2',
+          name: 'pay_for_resource',
+          content: JSON.stringify({
+            error: 'x402 payment amount must be a positive number (got -1).',
+            reasonKey: 'agent.policyReasonX402InvalidAmount',
+            reasonParams: { amount: '-1' },
+          }),
+        },
+      ];
+      const records = extractPolicyDenials(slice, ACCOUNT_A);
+      expect(records).toHaveLength(1);
+      expect(records[0].toolName).toBe('pay_for_resource');
+      expect(records[0].reasonKey).toBe('agent.policyReasonX402InvalidAmount');
+      expect(records[0].reasonParams).toEqual({ amount: '-1' });
+    });
+
     it('bozuk tool_call arguments string\'ini sessizce yutar, kaydı yine de üretir', () => {
       const slice: ChatMessage[] = [
         {

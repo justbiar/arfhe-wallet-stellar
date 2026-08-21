@@ -31,14 +31,23 @@ const VALID_SIGNED_PAYLOAD = {
 };
 
 describe("gerçek facilitator yolu (X402_USE_REAL_FACILITATOR=true)", () => {
-  const originalFlag = env.X402_USE_REAL_FACILITATOR;
-
   beforeEach(() => {
     env.X402_USE_REAL_FACILITATOR = "true";
   });
 
+  // "false"'a (wrangler.toml'daki gerçek varsayılana) SABİT olarak geri döner — ambient bir
+  // değeri (`const originalFlag = env.X402_USE_REAL_FACILITATOR` gibi) capture edip geri
+  // yazmak KIRILGAN: bu dosya çalıştığında env zaten kirlenmiş olabilir (ör. yerel bir .dev.vars
+  // dosyasında geliştirici manuel Chrome-uçtan-uca testi için X402_USE_REAL_FACILITATOR=true
+  // bırakmışsa — gitignored, CI'da yok ama yerel makinede miniflare/vitest-pool-workers bunu da
+  // wrangler.toml ile birlikte okuyor), o zaman "restore" aslında "true"ya geri dönüyor ve bu
+  // dosyadaki "stub yolu" describe'ına (aşağıda), hatta AYRI bir dosya olan
+  // x402StubEndpoints.test.ts'e bile sızıyordu (env aynı worker instance'ında dosya/describe
+  // sınırları arasında paylaşılıyor). Testin kendi varsayımı ("stub" davranışı sadece
+  // X402_USE_REAL_FACILITATOR !== "true" iken geçerli) burada açıkça, ambient duruma bakılmaksızın
+  // garanti ediliyor.
   afterEach(() => {
-    env.X402_USE_REAL_FACILITATOR = originalFlag;
+    env.X402_USE_REAL_FACILITATOR = "false";
     vi.unstubAllGlobals();
   });
 
@@ -119,10 +128,98 @@ describe("gerçek facilitator yolu (X402_USE_REAL_FACILITATOR=true)", () => {
       });
       expect(res.status).toBe(502);
     });
+
+    // Hata-yolu senaryoları (bkz. src/backend/__tests__/X402ProxyClient.test.ts — extension bu
+    // `error` alanını okuyup UserFacingError.ts'in x402 matcher'ları aracılığıyla anlaşılır bir
+    // mesaja çeviriyor). Burada endpoint seviyesinde yalnızca doğru durum kodu + ham `error`
+    // gövdesinin gerçekten sızmadan (ne kaybolmadan ne dönüştürülmeden) taşındığı kanıtlanıyor.
+    it("yetersiz bakiye (settle errorReason:'insufficient_funds') → 402, {error:'insufficient_funds'} aynen döner", async () => {
+      const fetchSpy = vi.fn(async (url: string) => {
+        if (String(url).includes("/verify")) return new Response(JSON.stringify({ isValid: true }), { status: 200 });
+        return new Response(
+          JSON.stringify({ success: false, network: "base-sepolia", transaction: "", errorReason: "insufficient_funds" }),
+          { status: 200 }
+        );
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const res = await postX402("/agent/x402/settle", {
+        resource: "https://api.example.com/weather",
+        paymentPayload: VALID_SIGNED_PAYLOAD,
+      });
+      expect(res.status).toBe(402);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toBe("insufficient_funds");
+    });
+
+    it("süresi geçmiş EIP-3009 yetkilendirmesi (settle errorReason:'...valid_before...') → 402, ham neden aynen döner", async () => {
+      const fetchSpy = vi.fn(async (url: string) => {
+        if (String(url).includes("/verify")) return new Response(JSON.stringify({ isValid: true }), { status: 200 });
+        return new Response(
+          JSON.stringify({
+            success: false,
+            network: "base-sepolia",
+            transaction: "",
+            errorReason: "invalid_exact_evm_payload_authorization_valid_before",
+          }),
+          { status: 200 }
+        );
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const res = await postX402("/agent/x402/settle", {
+        resource: "https://api.example.com/weather",
+        paymentPayload: VALID_SIGNED_PAYLOAD,
+      });
+      expect(res.status).toBe(402);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toBe("invalid_exact_evm_payload_authorization_valid_before");
+    });
+
+    it("invalid_exact_evm_token_name_mismatch (EIP-712 domain uyuşmazlığı, CONTEXT.md'de belgelenen gerçek bug) → 402, ham kod aynen döner", async () => {
+      const fetchSpy = vi.fn(async (url: string) => {
+        if (String(url).includes("/verify")) return new Response(JSON.stringify({ isValid: true }), { status: 200 });
+        return new Response(
+          JSON.stringify({ success: false, network: "base-sepolia", transaction: "", errorReason: "invalid_exact_evm_token_name_mismatch" }),
+          { status: 200 }
+        );
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const res = await postX402("/agent/x402/settle", {
+        resource: "https://api.example.com/weather",
+        paymentPayload: VALID_SIGNED_PAYLOAD,
+      });
+      expect(res.status).toBe(402);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toBe("invalid_exact_evm_token_name_mismatch");
+    });
+
+    it("facilitator genel bir 5xx ile bozuk/boş gövde dönerse → 502, JSON parse hatası çökmeye yol açmaz", async () => {
+      const fetchSpy = vi.fn(async () => new Response("Internal Server Error", { status: 500 }));
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const res = await postX402("/agent/x402/settle", {
+        resource: "https://api.example.com/weather",
+        paymentPayload: VALID_SIGNED_PAYLOAD,
+      });
+      expect(res.status).toBe(502);
+      const body = (await res.json()) as { error: string };
+      expect(typeof body.error).toBe("string");
+      expect(body.error.length).toBeGreaterThan(0);
+    });
   });
 });
 
 describe("stub yolu (X402_USE_REAL_FACILITATOR=false, varsayılan) hâlâ değişmedi", () => {
+  // Yukarıdaki "gerçek facilitator yolu" bloğunun sızdırmasına karşı defense-in-depth değil,
+  // bu describe'ın kendi doğruluğu için gerekli: "stub" davranışını test ediyoruz, o davranış
+  // yalnızca env !== "true" iken geçerli — bunu ambient duruma (wrangler.toml + yerel .dev.vars'ın
+  // birleşimi neyse) güvenmek yerine burada açıkça kuruyoruz.
+  beforeEach(() => {
+    env.X402_USE_REAL_FACILITATOR = "false";
+  });
+
   it("payment-required hâlâ _stub:true döner", async () => {
     const res = await postX402("/agent/x402/payment-required", { resource: "https://api.example.com/weather" });
     const body = (await res.json()) as { _stub: boolean };

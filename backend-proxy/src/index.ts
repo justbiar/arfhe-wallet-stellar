@@ -311,8 +311,11 @@ function parseX402SettleBody(raw: unknown): X402SettleRequestBody {
  * Real path: verifies then settles with the real facilitator (x402FacilitatorClient.ts),
  * translates its `transaction` field to `txHash` so X402ProxyClient.ts's contract on the
  * extension side never has to change, and maps a facilitator-side failure (bad signature,
- * expired authorization, etc.) to a 402 with a plain-text error — X402ProxyClient.
- * settleX402Payment() already throws on any non-2xx, so that behavior is preserved unchanged.
+ * expired authorization, etc.) to a 402 with `{ error: <raw facilitator reason> }`.
+ * X402ProxyClient.settleX402Payment() reads that `error` field on any non-2xx response and
+ * throws it verbatim (falling back to a generic status-code message only when the body isn't
+ * JSON or has no `error` string) — UserFacingError.ts's x402 matchers then turn that raw reason
+ * into a user-appropriate message instead of a generic "try again".
  * Stub path (default): x402Stub.ts's canned, always-succeeds data.
  */
 async function handleX402Settle(request: Request, env: Env, cors: HeadersInit): Promise<Response> {

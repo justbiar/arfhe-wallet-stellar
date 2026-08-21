@@ -388,6 +388,61 @@ describe('AgentOrchestrator', () => {
       const toolMessage = JSON.parse(secondInit.body).messages.find((m: ChatMessage) => m.role === 'tool');
       expect(JSON.parse(toolMessage.content)).toEqual({ error: '"tokenSymbol" parametresi zorunludur.' });
     });
+
+    // AgentPolicyEngine.evaluate()'in reasonKey/reasonParams'ı (kullanıcıya-gösterilen çeviri
+    // anahtarı, bkz. AgentProposalHistory.ts'in extractPolicyDenials()'ı) — bu tek noktadan
+    // (runOneToolCall) tool mesajının JSON gövdesine taşınıyor. Model'in okuduğu `error` alanı
+    // BİREBİR AYNI kalmalı; reasonKey/reasonParams sadece ek alanlar.
+    it('AgentToolRunner {error, reasonKey, reasonParams} dönerse (AgentPolicyEngine denial), reasonKey/reasonParams da tool mesajına taşınır, "error" değişmez', async () => {
+      const toolCallResponse = proxyResponse(
+        200,
+        assistantChoice({
+          content: '',
+          tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'propose_send', arguments: '{"to":"0xabc","amount":"0.6"}' } }],
+        })
+      );
+      const finalResponse = proxyResponse(200, assistantChoice({ content: 'Bu miktarı öneremem.' }));
+
+      const fetchSpy = stubFetchRouter([toolCallResponse, finalResponse]);
+      vi.mocked(executeToolCall).mockResolvedValueOnce({
+        error: 'Proposed amount is 60.0% of balance, exceeding the 50% limit.',
+        reasonKey: 'agent.policyReasonExceedsBalanceRatio',
+        reasonParams: { ratio: '60.0', limit: '50' },
+      });
+
+      await runAgentTurn('gönder', [], context);
+
+      const [, secondInit] = chatCalls(fetchSpy)[1];
+      const toolMessage = JSON.parse(secondInit.body).messages.find((m: ChatMessage) => m.role === 'tool');
+      expect(JSON.parse(toolMessage.content)).toEqual({
+        error: 'Proposed amount is 60.0% of balance, exceeding the 50% limit.',
+        reasonKey: 'agent.policyReasonExceedsBalanceRatio',
+        reasonParams: { ratio: '60.0', limit: '50' },
+      });
+    });
+
+    it('reasonKey olmayan sıradan bir {error} (ör. ToolArgumentError) tool mesajında fazladan alan üretmez — mevcut minimal {error} şekli korunur', async () => {
+      const toolCallResponse = proxyResponse(
+        200,
+        assistantChoice({
+          content: '',
+          tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'get_shielded_balance', arguments: '{}' } }],
+        })
+      );
+      const finalResponse = proxyResponse(200, assistantChoice({ content: 'tokenSymbol belirtmelisiniz.' }));
+
+      const fetchSpy = stubFetchRouter([toolCallResponse, finalResponse]);
+      vi.mocked(executeToolCall).mockResolvedValueOnce({ error: '"tokenSymbol" parametresi zorunludur.' });
+
+      await runAgentTurn('gizli bakiyem ne kadar', [], context);
+
+      const [, secondInit] = chatCalls(fetchSpy)[1];
+      const toolMessage = JSON.parse(secondInit.body).messages.find((m: ChatMessage) => m.role === 'tool');
+      const parsed = JSON.parse(toolMessage.content);
+      expect(parsed).toEqual({ error: '"tokenSymbol" parametresi zorunludur.' });
+      expect(parsed).not.toHaveProperty('reasonKey');
+      expect(parsed).not.toHaveProperty('reasonParams');
+    });
   });
 
   // ─── PROPOSAL_TOOLS sonrası döngü kırılması ─────────────────────

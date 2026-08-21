@@ -16,7 +16,7 @@ import { CheckCircle, Cancel, ErrorOutline, Block, OpenInNew, History as History
 import { useTranslation } from "react-i18next";
 import { WalletContext } from "../AppContext.js";
 import { useActiveAccount } from "../ActiveAccountProvider.js";
-import type { ProposalRecord, ProposalRecordStatus } from "../backend/AgentProposalHistory.js";
+import { toolNameLabelKey, type ProposalRecord, type ProposalRecordStatus } from "../backend/AgentProposalHistory.js";
 import { getExplorerBaseForNetwork } from "./panels/shared.js";
 
 export interface AgentProposalHistoryPanelProps {
@@ -25,19 +25,6 @@ export interface AgentProposalHistoryPanelProps {
 
 function shortenAddress(address: string): string {
   return address.length > 12 ? `${address.slice(0, 6)}…${address.slice(-4)}` : address;
-}
-
-function toolLabelKey(toolName: string): string {
-  switch (toolName) {
-    case "propose_send":
-      return "agent.historyToolSend";
-    case "propose_shield":
-      return "agent.historyToolShield";
-    case "propose_unshield":
-      return "agent.historyToolUnshield";
-    default:
-      return toolName;
-  }
 }
 
 function statusIcon(status: ProposalRecordStatus) {
@@ -110,7 +97,7 @@ function AgentProposalHistoryPanel({ records }: AgentProposalHistoryPanelProps) 
               <Box sx={{ flex: 1, minWidth: 0 }}>
                 <Stack direction="row" justifyContent="space-between" alignItems="baseline" gap={1}>
                   <Typography variant="body2" fontWeight={700}>
-                    {t(toolLabelKey(record.toolName))} — {t(STATUS_LABEL_KEY[record.status])}
+                    {t(toolNameLabelKey(record.toolName))} — {t(STATUS_LABEL_KEY[record.status])}
                   </Typography>
                   <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap", flexShrink: 0 }}>
                     {new Date(record.timestamp).toLocaleString()}
@@ -127,7 +114,13 @@ function AgentProposalHistoryPanel({ records }: AgentProposalHistoryPanelProps) 
 
                 {record.reason && (
                   <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontStyle: "italic" }}>
-                    {record.reason}
+                    {/* reasonKey (AgentPolicyEngine denial, see PolicyDecision's own docs) is the
+                        user-facing, already-localized counterpart to `reason` — that field stays
+                        English on purpose (model-facing). Older records / non-policy reasons
+                        (e.g. an approve failure's outcome.message, or ConfirmationCard's own
+                        account-changed reason, which is ALREADY translated at write time — see
+                        ACCOUNT_CHANGED_REASON_KEY) have no reasonKey and fall back to `reason` as-is. */}
+                    {record.reasonKey ? t(record.reasonKey, record.reasonParams) : record.reason}
                   </Typography>
                 )}
 

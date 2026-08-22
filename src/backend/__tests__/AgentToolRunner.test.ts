@@ -620,11 +620,18 @@ describe('AgentToolRunner', () => {
       expect(mockRecordPayment).not.toHaveBeenCalled();
     });
 
-    it('mevcut ağda x402 desteklenmiyorsa (getUsdcTokenIdentity undefined döner) otomatik ödeme yolunda {error} döner', async () => {
+    // Kök neden analizi: x402 ayarı gerçekten enabled:true olsa BİLE (bu describe bloğunun
+    // varsayılan mock'u, satır ~143), context.networkId Base Sepolia değilse auto-pay yolu bu
+    // ToolArgumentError'da biter — SettingsX402/X402SettingsService'te hiçbir kopukluk yok, bu
+    // sadece ayrı bir kısıt (x402 şu an yalnızca Base Sepolia'da çalışıyor). reasonKey artık
+    // taşınıyor ki AgentOrchestrator'ın sistem promptu bunu "ayarlar kapalı" mesajıyla
+    // karıştırmasın (bkz. AgentOrchestrator.ts'in ilgili talimatı).
+    it('mevcut ağda x402 desteklenmiyorsa (getUsdcTokenIdentity undefined döner) otomatik ödeme yolunda {error} + ayrı bir reasonKey döner', async () => {
       (deps.getUsdcTokenIdentity as ReturnType<typeof vi.fn>).mockReturnValueOnce(undefined);
       const res = await executeToolCall('pay_for_resource', { resource: RESOURCE }, context);
       expect(res.result).toBeUndefined();
       expect(res.error).toMatch(/desteklenmiyor/);
+      expect(res.reasonKey).toBe('agent.confirmationCardX402UnsupportedNetwork');
       expect(mockSignTransferWithAuthorization).not.toHaveBeenCalled();
     });
 

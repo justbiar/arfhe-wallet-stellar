@@ -105,7 +105,22 @@ export interface AgentToolRunnerDeps {
 }
 
 /** Raised for a malformed/unsupported tool_call argument — caught alongside Network.ts errors below. */
-class ToolArgumentError extends Error {}
+/**
+ * `reasonKey` is optional and only set where the caller has an existing i18n string worth
+ * reusing (e.g. the x402 unsupported-network case below, which shares
+ * "agent.confirmationCardX402UnsupportedNetwork" with ConfirmationCard's own manual-approve
+ * path) — threaded through to the `{error}` result the same way PolicyDenialError's is, so
+ * AgentOrchestrator's system prompt can react to it distinctly instead of every ToolArgumentError
+ * collapsing into the same unstructured English string.
+ */
+class ToolArgumentError extends Error {
+  reasonKey?: string;
+
+  constructor(message: string, reasonKey?: string) {
+    super(message);
+    this.reasonKey = reasonKey;
+  }
+}
 
 /**
  * Raised only for an AgentPolicyEngine denial inside handlePayForResource (x402_invalid_amount/
@@ -586,7 +601,10 @@ async function handlePayForResource(
   //    established this is within budget. Sign, settle, record; only then return. ──
   const tokenIdentity = deps!.getUsdcTokenIdentity(context.networkId);
   if (!tokenIdentity) {
-    throw new ToolArgumentError(`x402 ödemeleri bu ağda ("${context.networkId}") desteklenmiyor.`);
+    throw new ToolArgumentError(
+      `x402 ödemeleri bu ağda ("${context.networkId}") desteklenmiyor.`,
+      "agent.confirmationCardX402UnsupportedNetwork"
+    );
   }
   const account = requireAccount(context);
   if (!account.ethers_wallet) {
@@ -701,9 +719,16 @@ export async function executeToolCall(
     if (err instanceof PolicyDenialError) {
       return { error: err.message, reasonKey: err.reasonKey, reasonParams: err.reasonParams };
     }
-    // Covers ToolArgumentError, a determined-to-fail simulation (see simulateAndEnrich),
-    // and anything Network.ts throws (e.g. an FHE decrypt failure other than
-    // CiphertextNotFoundError, which Network.ts already normalizes to a "0.0" balance
+    // A ToolArgumentError MAY carry a reasonKey (see its own docs — currently only the x402
+    // unsupported-network case sets one); attach it the same way, so the model gets a
+    // structured signal to distinguish it from every other unstructured ToolArgumentError
+    // instead of having to guess from English prose alone.
+    if (err instanceof ToolArgumentError && err.reasonKey) {
+      return { error: err.message, reasonKey: err.reasonKey };
+    }
+    // Covers every other ToolArgumentError, a determined-to-fail simulation (see
+    // simulateAndEnrich), and anything Network.ts throws (e.g. an FHE decrypt failure other
+    // than CiphertextNotFoundError, which Network.ts already normalizes to a "0.0" balance
     // internally and never throws in the first place).
     return { error: errorMessage(err) };
   }

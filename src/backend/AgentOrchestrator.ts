@@ -127,7 +127,17 @@ export function buildSystemPrompt(): string {
       "cümlelik özet + DUR — kullanıcıya onay isteyen bir kart zaten gösterildi, sen ayrıca " +
       "metinle \"ödemeyi onaylıyor musunuz?\" diye SORMA, bu kartın işi. Sonuç autoPaid: true " +
       "içeriyorsa ödeme zaten (bütçe içi olduğu için onaysız) gerçekleşmiştir, bunu normal " +
-      "şekilde bildir.",
+      "şekilde bildir. Sonuç {error, reasonKey: \"agent.policyReasonX402Disabled\"} içeriyorsa, " +
+      "x402 ödemeleri kullanıcı tarafından kapatılmıştır (varsayılan durum budur) — \"bir " +
+      "problem oldu\" gibi belirsiz bir şey SÖYLEME; bunun yerine bu tür otomatik ödemelerin " +
+      "şu an kapalı olduğunu ve Ayarlar > x402 bölümünden açabileceğini net şekilde söyle. " +
+      "Sonuç {error, reasonKey: \"agent.confirmationCardX402UnsupportedNetwork\"} içeriyorsa BU " +
+      "AYRI VE FARKLI BİR DURUMDUR — ayarlarla hiçbir ilgisi yok, ödemeler kapalı DEĞİL: x402 " +
+      "ödemeleri şu an yalnızca Base Sepolia ağında çalışıyor ve kullanıcının cüzdanı başka bir " +
+      "ağa bağlı. Bunu \"kapalı\"/\"Ayarlar'dan aç\" diye ASLA anlatma — bunun yerine cüzdanını " +
+      "Base Sepolia ağına geçirmesi gerektiğini net şekilde söyle. Başka bir {error} dönerse " +
+      "(bütçe/tavan dışındaki teknik bir hata), nedenini olabildiğince anlaşılır şekilde özetle " +
+      "— yine de jenerik \"bir hata oluştu\" ile geçiştirme.",
     "- Bir aracın sonucunu almadan bakiye, adres veya miktar UYDURMA. Emin değilsen ilgili " +
       "aracı çağır ya da bilmediğini söyle.",
     "",

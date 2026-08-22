@@ -108,6 +108,29 @@ describe('AgentOrchestrator', () => {
       expect(prompt).toMatch(/ayrıca ödeme izni.*İSTEME/);
     });
 
+    it('x402 kapalıyken (varsayılan durum) modelin "bir problem oldu" gibi belirsiz bir şey değil, Ayarlar > x402\'yi işaret eden net bir açıklama vermesi gerektiğini belirtir', () => {
+      // Kök neden: X402SettingsService.DEFAULT_X402_SETTINGS.enabled = false — hiç Ayarlar >
+      // x402'ye gitmemiş bir kullanıcı için pay_for_resource HER ZAMAN {error, reasonKey:
+      // "agent.policyReasonX402Disabled"} döner (settle'a hiç ulaşmadan, bu doğru davranış).
+      // Bu talimat eksikken model bu terse JSON'u kendi başına yorumlayıp muğlak bir "problem
+      // oldu" cevabına çeviriyordu; kullanıcı x402'yi nasıl açacağını hiç öğrenmiyordu.
+      const prompt = buildSystemPrompt();
+      expect(prompt).toContain('agent.policyReasonX402Disabled');
+      expect(prompt).toMatch(/Ayarlar\s*>\s*x402/);
+    });
+
+    it('x402 "bu ağda desteklenmiyor" hatasını ayarların kapalı olmasıyla KARIŞTIRMAMASI gerektiğini, Base Sepolia\'ya geçiş gerektiğini belirtir', () => {
+      // Kök neden: kullanıcı x402'yi Ayarlar'dan açtıktan SONRA bile, aktif ağı Base Sepolia
+      // değilse handlePayForResource'un auto-pay yolu {error, reasonKey:
+      // "agent.confirmationCardX402UnsupportedNetwork"} döner (bkz. AgentToolRunner.ts) — bu
+      // "kapalı" değil, tamamen ayrı bir kısıt. Bu talimat olmadan model iki farklı hatayı
+      // aynı "Ayarlar'dan aç" cevabına indirgeyip kullanıcıyı yanlış yönlendiriyordu.
+      const prompt = buildSystemPrompt();
+      expect(prompt).toContain('agent.confirmationCardX402UnsupportedNetwork');
+      expect(prompt).toMatch(/Base Sepolia/);
+      expect(prompt).toMatch(/AYRI VE FARKLI/);
+    });
+
     it('gerçek sonuç gelmeden "işlem gönderildi/tamamlandı" dememesi ve tx hash uydurmaması gerektiğini belirtir', () => {
       const prompt = buildSystemPrompt();
       expect(prompt).toMatch(/ASLA.*tx hash.*uydurma|uydurman.*yanlış/i);

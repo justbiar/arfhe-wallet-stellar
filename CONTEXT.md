@@ -1,18 +1,26 @@
 # ArfheWallet — AI Agent Entegrasyonu: Bağlam Dosyası
 
 > Devir teslim / hatırlatma dosyası. Bir sonraki oturumda buradan devam edilecek.
-> Son güncelleme: 2026-08-20 (bkz. bölüm 16). **Faz 3 (x402) Chrome'da uçtan uca
-> BAŞARIYLA DOĞRULANDI** — hem auto-pay (bütçe içi) hem manuel onaylı
-> (`ConfirmationCard`, bütçe dışı) yollar gerçek Base Sepolia testnet
-> transaction'larıyla kanıtlandı. Bu oturumda 404'ten başlayıp beş ayrı bug zincirleme
-> bulunup düzeltildi (env/build, üç kopyalı token domain-name mismatch, eksik sistem
-> prompt talimatı, Settings input race condition, UI genişlik sorunu — detaylar bölüm
-> 16'da). Test amaçlı `X402SettingsService` local ayarları per-payment cap: 0.01,
-> daily budget: 1 olarak bırakıldı (varsayılanlara yakın, sorun değil).
-> `X402_USE_REAL_FACILITATOR` `.dev.vars`'ta `true` (local test için),
-> `wrangler.toml`'daki prod/dev varsayılanı hâlâ `false`. **Sıradaki oturum bölüm 16'nın
-> sonundaki "Yapılmadı" listesinden devam etmeli** (limit-dışı ret/hata yolu testi,
-> İngilizce başlık kalıntıları, Dependabot uyarıları, Wrangler güncelleme).
+> Son güncelleme: 2026-08-22 (bkz. bölüm 17). Bu oturumda dört ayrı iş yapıldı:
+> **(1) rewrite-omer branch analizi/entegrasyonu** — Omeraydognn'ın (Ömer) 9
+> blockchain/privacy commit'inin 8'i zaten `mustafa` branch'inin geçmişindeydi (`mustafa`
+> rewrite-omer'in `f7ded2d` commit'i üzerine kurulu), tek eksik olan `37af94a` (README.md)
+> cherry-pick edilip fast-forward merge edildi (`ed35d26`). biar'ın Agent-alternatifi
+> (`AgentService.ts` vb.) VE tema/onboarding/Explore/DAppRegistry değişiklikleri BİLİNÇLİ
+> OLARAK ALINMADI — ayrı bir ürün kararı bekliyor. **(2) Arfio'nun görsel kimliği** — nav
+> bar ikonu (Hub → AutoAwesome → **SupportAgent**) ve `AgentChatPanel.tsx`'teki 🤖 emoji
+> chat avatarı (→ **SupportAgent**, gerçek MUI `Avatar` component'i içinde) insansı bir
+> kimliğe taşındı. **(3) Chrome'da canlı x402 testinde ÜÇ ayrı gerçek bug** bulunup
+> düzeltildi: (a) deployment gap — backend-proxy'nin x402 route'ları hiç deploy
+> edilmemişti, `wrangler deploy` ile çözüldü; (b) `x402_disabled` durumunda modelin
+> belirsiz "bir problem oldu" demesi — sistem promptuna net talimat eklendi; (c)
+> network-unsupported hatasının `x402_disabled` şablonuyla karışıp yanlış mesaj üretmesi
+> — `ToolArgumentError`'a `reasonKey` eklendi, ayrı bir sistem prompt talimatı yazıldı.
+> **(4) AÇIK/ÇÖZÜLMEMİŞ SORUN — model hallüsinasyonu**: kullanıcı ağını Base Sepolia'ya
+> çevirip tekrar denedikten sonra OpenRouter modeli x402 ile ilgisiz/uydurma kavramlar
+> (ENS, DNS sağlayıcısı) ve yer yer anlamsız kelimeler üretti — bu KOD TARAFINDA
+> ÇÖZÜLMEDİ, **sıradaki oturumun ilk önceliği** (bkz. bölüm 17.4). Test durumu: 736/736
+> ana suite, 62/62 backend-proxy.
 
 ## 1. Genel Amaç
 
@@ -723,3 +731,168 @@ fix'i iki ayrı turda.
 - **Local test ortamı notu**: `X402SettingsService` local ayarları şu an per-payment cap:
   0.01, daily budget: 1 (varsayılana yakın bırakıldı, kasıtlı bir sorun değil, ama
   bir sonraki oturumda limit-dışı senaryo test edilecekse bu değerlerin bilinmesi gerekir).
+
+## 17. rewrite-omer entegrasyonu + Arfio görsel kimliği + x402 canlı testte üç bug + açık model hallüsinasyon sorunu (2026-08-22)
+
+> Not: Bu dosyada bölüm 16'dan sonra doğrudan bölüm 17'ye geçiliyor — "bölüm 17-21"
+> numaraları başka bir yerde (oturum dışı not/hafıza) anılmış olabilir ama bu dosyaya
+> hiç yazılmamış (git geçmişi de teyit ediyor, en son yazılan bölüm 16'ydı). Karışıklığı
+> önlemek için dosyanın kendi sırasına sadık kalınıp 17'den devam edildi.
+
+### 17.1 — rewrite-omer branch analizi ve entegrasyonu
+
+**İlk analiz (salt okunur inceleme):** `rewrite-omer` branch'inde en az üç iş akışının
+iç içe geçtiği görüldü:
+1. Agent sisteminin (Arfio) **iki ayrı, çakışan implementasyonu** olduğu keşfedildi —
+   `justbiar`'ın PR'ından (#22, `biar` branch'i, commit `36de521`) gelen basit
+   `AgentService.ts` / `Agent.tsx` / `AgentSettingsPanel.tsx` (RAG yok, policy engine yok,
+   x402 yok — kullanıcının kendi API key'ini bağladığı düz bir chat) **vs.** `mustafa`
+   branch'indeki mevcut Arfio (`AgentOrchestrator` / `AgentPolicyEngine` / x402 stack).
+2. Ömer'e (`Omeraydognn`) ait blockchain/privacy tarafı incelendi: 135 dosyalık FHE stack
+   migrasyon commit'i (`2a86ecb`, "Migrate FHE stack to @cofhe/sdk...", `@cofhe/sdk`'ya
+   geçiş, kontratlar, `PendingClaimQueue.ts`, `verify-fhe*.mjs`, `audit-privacy.mjs`) dahil
+   toplam **9 commit** — hepsinin Agent/x402 sistemine **sıfır dokunuşu** olduğu
+   doğrulandı (`git show <commit> --stat | grep -i "agent\|x402"` her commit için boş
+   döndü).
+3. Ömer'in 3. bir katkıcı olup olmadığı netleştirildi: `2a86ecb`'nin yazarı
+   `Omeraydognn <fastmers44@gmail.com>`; aynı e-posta bir merge commit'inde `relax44`
+   adıyla da görünüyor — muhtemelen aynı kişinin farklı GitHub display name'i, üçüncü bir
+   katkıcı değil.
+
+**Entegrasyon denemesi:** `integrate-omer-blockchain` branch'i açılıp Ömer'in 9
+commit'i sırayla cherry-pick edilmeye çalışıldı. İlk cherry-pick'te (`ed545d2`)
+AppContext.ts DIŞINDA 7 dosyada beklenmedik çakışma çıkınca durulup araştırıldı:
+`git merge-base mustafa origin/rewrite-omer` → `f7ded2d` döndü ve bu commit `mustafa`
+branch'inin **kendi doğrudan ata zincirinde** bulundu — yani `mustafa`, rewrite-omer'in
+bu noktasının üzerine zaten kuruluydu. **Sonuç: Ömer'in 9 commit'inden 8'i ZATEN
+entegreydi**, gerçek bir entegrasyon işi gerekmedi; tek eksik `37af94a` (sadece
+README.md, kod değil) idi. Bu cherry-pick edilip (README çakışması HEAD lehine + bir
+faydalı satır birleştirilerek çözüldü) `integrate-omer-blockchain` branch'ine
+işlendi, kullanıcı onayıyla `mustafa`'ya **fast-forward merge** edildi (`ed35d26`).
+`AppContext.ts`'teki `configureAgentToolRunner` bloğu (Bug-2 fix'ini içeren USDC
+domain-name düzeltmesi) de kendiliğinden sorunsuzdu — rewrite-omer'in `f7ded2d`
+içeriğinin üzerine eklenmişti, elle uzlaştırma gerekmedi.
+
+**Bilinçli olarak ALINMADI:** biar'ın Agent-alternatifi (`AgentService.ts`,
+`AgentSettingsPanel.tsx`, biar versiyonu `Agent.tsx`) VE biar'ın aynı commit'teki
+tema/onboarding/Explore/`DAppRegistry.ts` değişiklikleri — ikisi de ayrı birer ürün
+kararı gerektiriyor, henüz karar verilmedi (bkz. bölüm 17.5).
+
+`integrate-omer-blockchain` branch'i hâlâ repo'da duruyor (artık `mustafa` ile aynı
+noktada, temizlenebilir). `experiment/hardhat-v3-deploy` branch'i de (bölüm 21
+öncesinde/bir önceki oturumda oluşturulmuş, `deploy/`'u Hardhat v2→v3'e taşıyan,
+doğrulanmış branch) hâlâ merge edilmeden bekliyor.
+
+### 17.2 — Arfio'nun görsel kimliği: nav bar ikonu + chat avatarı
+
+İki ayrı istekle, iki adımda:
+1. Alt nav bar'daki Agent sekmesi ikonu **Hub** (ağ/node simgesi, AI asistanla alakasız)
+   → **AutoAwesome** (sparkles) olarak değiştirildi. Etiket zaten `t('agent.navTabLabel')`
+   kullanıyordu ve `en.json`/`tr.json`'da "Arfio" olarak tanımlıydı (önceki bir raporun
+   iddia ettiği hardcoded "Agent" string'i bulunamadı — muhtemelen ayrı bir oturumda
+   zaten düzeltilmişti).
+2. Kullanıcı "ikisi de daha insansı olsun" isteyince: nav bar ikonu **AutoAwesome →
+   SupportAgent**'a, `AgentChatPanel.tsx`'teki 🤖 emoji chat avatarı da **SupportAgent**'a
+   taşındı — kulaklıklı insan silueti, "yardımcı asistan" anlamını doğrudan taşıyor,
+   robot imgesinden kaçınıyor. Chat avatarındaki 5 tekrar eden emoji noktası, manuel
+   `<Box>` sarmalayıcılar yerine gerçek MUI `<Avatar variant="square">` component'ine
+   çevrildi (`variant="square"` bilinçli — uygulamanın "sharp terminal" temasında her yer
+   köşeli, MUI Avatar varsayılanı daire). Arka plan `bgcolor: 'action.hover'` (dosyada
+   zaten kullanılan mode-aware token), hardcode renk yok.
+   Değişen dosyalar: `src/components/ArfBottomBar.tsx`, `src/components/AgentChatPanel.tsx`.
+
+### 17.3 — Chrome'da canlı x402 testi: üç ayrı gerçek bug
+
+Bölüm 16'da "mekanizma doğrulandı" denen x402 akışı, bu oturumda gerçek kullanım
+sırasında üç ayrı yeni bug'a çarptı — hiçbiri bölüm 16'daki beş bug'la aynı değil:
+
+**Bug a) 404 — deployment gap.** `retrieve-context`/`chat` istekleri 200 dönerken
+`payment-required` isteği 404 döndü, initiator'ı da farklıydı (`index.js:31` — ana
+bundle, çünkü `X402ProxyClient.ts`, `AppContext.ts`'in statik `configureAgentToolRunner`
+importu üzerinden ana chunk'a giriyor). Kök neden **kod bug'ı değildi**: x402 route'ları
+(`4b0fb20`, `6b00ef0`) kaynak koda eklenmişti ama repo'da CI/CD yok
+(`.github/workflows/` boş, manuel deploy), deploy edilmiş Cloudflare Worker
+(`arfhewallet-agent-proxy`) o eklemelerden ÖNCEki bir sürümü çalıştırıyordu. Curl ile
+kanıtlandı: `/agent/chat` sahte origin'le bile 403 (path tanınıyor), `/agent/x402/
+payment-required` 404 (path tanınmıyor). **Fix:** kullanıcı onayıyla
+`cd backend-proxy && npx wrangler deploy` çalıştırıldı. Doğrulama: 404 → 403 (path
+tanındı) → gerçek origin'le 402 + doğru `accepts` gövdesi. Hedefli test: 44/44 +
+backend-proxy 62/62.
+
+**Bug b) `x402_disabled` UX sorunu.** Worker deploy edildikten sonra payment-required
+çalıştı ama settle'a hiç geçilmedi, kullanıcıya jenerik "bir problem oldu" mesajı
+geldi. Kod tarafı doğruydu: `X402SettingsService.DEFAULT_X402_SETTINGS.enabled = false`
+(kasıtlı opt-in güvenlik varsayılanı, dosyanın kendi docstring'i bunu açıkça
+belirtiyor), `handlePayForResource` bunu imzalama/settle'a hiç ulaşmadan
+`PolicyDenialError` olarak doğru şekilde durduruyordu — mevcut test zaten bunu
+kanıtlıyordu (yeşil). Asıl sorun: `AgentOrchestrator.ts`'in sistem promptu, modele bu
+`{error, reasonKey:"agent.policyReasonX402Disabled"}` sonucunda ne söylemesi
+gerektiğini hiç anlatmıyordu, model kendi başına belirsiz bir cevaba paraphrase
+ediyordu. **Fix:** sistem promptuna, bu `reasonKey` geldiğinde modelin net şekilde
+"otomatik ödemeler kapalı, Ayarlar > x402'den açabilirsin" demesi gerektiğini, jenerik
+"bir problem oldu" kullanmaması gerektiğini söyleyen bir talimat eklendi. Test: 735/735.
+
+**Bug c) network-unsupported / `x402_disabled` ile karışma.** Kullanıcı Settings →
+x402'den toggle'ı AÇTIKTAN SONRA (ekran görüntüsüyle doğrulandı) bile aynı "kapatılmış"
+mesajını almaya devam etti. Kök neden **storage senkron sorunu değildi** — kanıtlandı:
+`X402SettingsService.ts`'te okuma (`getSettings`) ve yazma (`saveSettings`) aynı sınıf,
+aynı `chrome.storage.local`, aynı `STORAGE_KEY`; repo'da bu anahtara dokunan başka hiçbir
+yer yok (`grep` ile doğrulandı, tek yazar `SettingsX402.tsx`, tek okuyucu
+`AgentToolRunner.ts`, network-bazlı ayrım da yok). Gerçek sorun: x402 yalnızca **Base
+Sepolia**'da destekleniyor (`AppContext.ts`'teki `getUsdcTokenIdentity`), kullanıcının
+cüzdanı başka bir ağa bağlıydı — `AgentToolRunner.ts:589`'daki bu network kontrolü
+`settings.enabled === true` VE bütçe içi olduktan SONRA (yani izin zaten verildikten
+sonra) tetikleniyor, ama kendi `reasonKey`'i yoktu; model, bölüm 17.3.b'de eklenen
+`x402_disabled` şablonunu buraya da uygulayıp yanlış paraphrase etti. **Fix:**
+`ToolArgumentError`'a opsiyonel `reasonKey` eklendi (14 mevcut çağrı yeriyle geriye
+dönük uyumlu), network hatası mevcut/zaten çevrilmiş
+`agent.confirmationCardX402UnsupportedNetwork` anahtarına bağlandı
+(`ConfirmationCard.tsx`'te zaten kullanılıyordu, sadece auto-pay yoluna bağlanmamıştı),
+sistem promptuna bu `reasonKey` için AYRI ve net bir talimat eklendi ("bu ayarlarla
+ilgili değil, ağını Base Sepolia'ya çevir" demesi gerektiği, "kapalı/Ayarlar" şablonunu
+KULLANMAMASI gerektiği). Test: 736/736.
+
+### 17.4 — AÇIK/ÇÖZÜLMEMİŞ SORUN: model hallüsinasyonu (OpenRouter)
+
+Kullanıcı ağını Base Sepolia'ya çevirip x402 akışını tekrar denedikten sonra, model
+(OpenRouter üzerinden) x402 ile hiçbir ilgisi olmayan uydurma teknik kavramlar üretti —
+ENS, DNS sağlayıcısı gibi terimler, yer yer tamamen anlamsız kelimeler ("teknokratik",
+daha önceki bir denemede "Hong'erte" gibi). **Bu oturumda kod tarafında ÇÖZÜLMEDİ.**
+Olası nedenler (netleştirilmedi): (a) kullanıcının OpenRouter'da hangi modeli
+kullandığı bilinmiyor ("openrouter kullanıyorum" dendi, spesifik model adı
+paylaşılmadı) — düşük kaliteli/free-tier bir model olabilir; (b) bu oturumda sistem
+promptuna eklenen çok sayıda yeni talimat (bölüm 17.3.b/c) promptu uzatıp bazı zayıf
+modellerin kafasını karıştırmış olabilir. **Sıradaki oturumun İLK önceliği**: hangi
+model kullanıldığını netleştirmek, gerekirse farklı bir model denemek, ve/veya sistem
+promptunun uzunluğunu/netliğini gözden geçirmek.
+
+### 17.5 — Değişen dosyalar (bu oturum)
+
+`src/backend/AgentToolRunner.ts` (`ToolArgumentError`'a `reasonKey` eklendi, network
+hatası buna bağlandı) + testleri, `src/backend/AgentOrchestrator.ts` (sistem promptuna
+iki yeni x402 hata talimatı: `x402_disabled` ve network-unsupported) + testleri,
+`src/components/ArfBottomBar.tsx` (nav bar ikonu), `src/components/AgentChatPanel.tsx`
+(chat avatarı, emoji → `Avatar` + `SupportAgent`), `README.md` (Ömer'in `37af94a`
+commit'inden cherry-pick, HEAD ile birleştirildi), `backend-proxy` (kod değişikliği
+yok — sadece `wrangler deploy` ile canlıya alındı). Test durumu sonu: **736/736** ana
+suite, **62/62** backend-proxy.
+
+### 17.6 — Yapılmadı / Sıradaki Adımlar (güncel liste)
+
+- **ÖNCELİK 1 — Model hallüsinasyon sorunu**: OpenRouter'da hangi model kullanılıyor
+  netleştirilmeli, gerekirse değiştirilmeli veya sistem promptu sadeleştirilmeli (bkz.
+  bölüm 17.4).
+- **Agent sistemi ürün kararı**: Arfio mu kalacak, biar'ın basit `AgentService`'i mi,
+  yoksa ikisi entegre mi edilecek — hâlâ karar verilmedi (bkz. bölüm 17.1).
+- **biar'ın tema/onboarding/Explore/`DAppRegistry.ts` değişiklikleri** — Agent'tan
+  bağımsız ama ayrı bir entegrasyon kararı gerektiriyor, henüz alınmadı.
+- **`experiment/hardhat-v3-deploy` branch'i** — doğrulanmış, merge edilmeyi bekliyor,
+  kullanıcı kararı bekleniyor.
+- **`deploy/` klasöründeki kalan 14 Dependabot uyarısı** (Hardhat v3 sonrası, elliptic
+  kaynaklı, upstream'de yama yok) — takipte kalmalı.
+- **Gerçek bir x402 kaynağı** (placeholder `api.example.com/weather` yerine) Arfio'ya
+  bağlanması — henüz yapılmadı, hangi gerçek kaynağın kullanılacağına karar verilmedi
+  (cybersecurity/kontrat analizi API'si önerilmişti, kesinleşmedi).
+- **Eski bölüm 16 listesinden hâlâ açık kalanlar**: limit-dışı ret senaryosu testi,
+  facilitator hata yolu testi, İngilizce başlık kalıntıları, GitHub Dependabot uyarısı
+  (113 vulnerabilities, genel), Wrangler güncelleme (3.114.17 → 4.x).

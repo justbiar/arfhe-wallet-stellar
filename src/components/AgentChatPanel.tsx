@@ -29,8 +29,8 @@
  */
 
 import * as React from "react";
-import { Box, Typography, TextField, IconButton, Stack, CircularProgress, Button } from "@mui/material";
-import { Send, Person, AddComment, CheckCircle, Cancel, ErrorOutline } from "@mui/icons-material";
+import { Avatar, Box, Typography, TextField, IconButton, Stack, CircularProgress, Button } from "@mui/material";
+import { Send, Person, SupportAgent, AddComment, CheckCircle, Cancel, ErrorOutline } from "@mui/icons-material";
 import { useTranslation } from "react-i18next";
 import { WalletContext } from "../AppContext.js";
 import { useActiveAccount } from "../ActiveAccountProvider.js";
@@ -60,8 +60,8 @@ const QUICK_ACTIONS = [
   "agent.quickActionShield",
 ] as const;
 
-/** 🤖 stand-in for Arfio until there's a real illustrated avatar — see AGENT_AVATAR usage below. */
-const AGENT_AVATAR = "🤖";
+/** Arfio's avatar icon — a human support-agent silhouette rather than a literal robot. */
+const AgentAvatarIcon = SupportAgent;
 
 /**
  * Amount/symbol/recipient for a "result" item's TransactionResultCard — derived straight from
@@ -541,9 +541,7 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
       <Box sx={{ flex: 1, overflowY: "auto", px: 2, py: 2 }}>
         {chatItems.length === 0 && (
           <Box sx={{ textAlign: "center", mt: 6 }}>
-            <Typography sx={{ fontSize: 40, lineHeight: 1, mb: 1, filter: "grayscale(1)", opacity: 0.5 }}>
-              {AGENT_AVATAR}
-            </Typography>
+            <AgentAvatarIcon sx={{ fontSize: 40, mb: 1, opacity: 0.5, color: "text.secondary" }} />
             <Typography variant="body2" color="text.secondary" sx={{ mb: hasContext ? 2 : 0 }}>
               {hasContext ? t("agent.panelEmptyState") : t("agent.panelNoAccount")}
             </Typography>
@@ -580,14 +578,13 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
                   ml: item.role === "user" ? "auto" : 0,
                 }}
               >
-                <Box
+                <Avatar
+                  variant="square"
                   sx={{
                     width: 26,
                     height: 26,
                     flexShrink: 0,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
+                    bgcolor: "action.hover",
                     border: "1px solid",
                     borderColor: "divider",
                     color: "text.primary",
@@ -596,9 +593,9 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
                   {item.role === "user" ? (
                     <Person sx={{ fontSize: 16 }} />
                   ) : (
-                    <Typography sx={{ fontSize: 14, lineHeight: 1 }}>{AGENT_AVATAR}</Typography>
+                    <AgentAvatarIcon sx={{ fontSize: 16 }} />
                   )}
-                </Box>
+                </Avatar>
                 <Box
                   sx={{
                     px: 1.5,
@@ -618,21 +615,20 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
               // left alignment) but interactive — this is the only point in the whole
               // pipeline where the user can actually authorize a proposed transaction.
               <Box key={item.key} sx={{ display: "flex", gap: 1, alignSelf: "flex-start", maxWidth: "100%", width: "100%" }}>
-                <Box
+                <Avatar
+                  variant="square"
                   sx={{
                     width: 26,
                     height: 26,
                     flexShrink: 0,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
+                    bgcolor: "action.hover",
                     border: "1px solid",
                     borderColor: "divider",
                     color: "text.primary",
                   }}
                 >
-                  <Typography sx={{ fontSize: 14, lineHeight: 1 }}>{AGENT_AVATAR}</Typography>
-                </Box>
+                  <AgentAvatarIcon sx={{ fontSize: 16 }} />
+                </Avatar>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <ConfirmationCard
                     preview={item.preview}
@@ -646,21 +642,20 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
               // docs for why this is built from the settled marker's own captured data rather
               // than rendered by ConfirmationCard itself (which has already unmounted by now).
               <Box key={item.key} sx={{ display: "flex", gap: 1, alignSelf: "flex-start", maxWidth: "100%", width: "100%" }}>
-                <Box
+                <Avatar
+                  variant="square"
                   sx={{
                     width: 26,
                     height: 26,
                     flexShrink: 0,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
+                    bgcolor: "action.hover",
                     border: "1px solid",
                     borderColor: "divider",
                     color: "text.primary",
                   }}
                 >
-                  <Typography sx={{ fontSize: 14, lineHeight: 1 }}>{AGENT_AVATAR}</Typography>
-                </Box>
+                  <AgentAvatarIcon sx={{ fontSize: 16 }} />
+                </Avatar>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <TransactionResultCard
                     phase={item.phase}
@@ -681,21 +676,20 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
               // this item ever existed (see isAutoPaidX402Result's docs). Never part of the
               // ConfirmationCard flow.
               <Box key={item.key} sx={{ display: "flex", gap: 1, alignSelf: "flex-start", maxWidth: "100%", width: "100%" }}>
-                <Box
+                <Avatar
+                  variant="square"
                   sx={{
                     width: 26,
                     height: 26,
                     flexShrink: 0,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
+                    bgcolor: "action.hover",
                     border: "1px solid",
                     borderColor: "divider",
                     color: "text.primary",
                   }}
                 >
-                  <Typography sx={{ fontSize: 14, lineHeight: 1 }}>{AGENT_AVATAR}</Typography>
-                </Box>
+                  <AgentAvatarIcon sx={{ fontSize: 16 }} />
+                </Avatar>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <X402PaymentCard
                     resource={item.resource}

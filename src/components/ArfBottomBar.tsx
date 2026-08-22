@@ -9,7 +9,7 @@ import {
   Stack,
 } from "@mui/material";
 import type { BoxProps } from "@mui/material";
-import { History, Home, Send, Hub, Explore } from "@mui/icons-material";
+import { History, Home, Send, SupportAgent, Explore } from "@mui/icons-material";
 import ArfBottomMenu from "./ArfBottomMenu";
 import ShieldPanel from "./panels/ShieldPanel.js";
 import { useNavigate, useLocation } from "react-router";
@@ -160,7 +160,7 @@ function ArfBottomBar() {
           />
           <BottomNavigationAction
             label={t('agent.navTabLabel')}
-            icon={<Hub sx={{ fontSize: 22 }} />}
+            icon={<SupportAgent sx={{ fontSize: 22 }} />}
             onClick={() => navigate('agent')}
           />
         </BottomNavigation>

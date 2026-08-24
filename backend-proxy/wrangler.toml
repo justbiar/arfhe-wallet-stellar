@@ -1,14 +1,12 @@
 name = "arfhewallet-agent-proxy"
 main = "src/index.ts"
 compatibility_date = "2024-11-01"
-
 [vars]
 # Exact origin of the published extension, e.g. "chrome-extension://abcdefghijklmnop".
 # Requests from any other origin are rejected before hitting OpenRouter.
 ALLOWED_ORIGIN = "chrome-extension://ajfpejolnhgeflhgjmboikiffpdlhngi"
 # Requests allowed per IP per 60 seconds.
 RATE_LIMIT_PER_MINUTE = "15"
-
 # x402 (Faz 3) — "true" routes /agent/x402/* through the real facilitator
 # (x402FacilitatorClient.ts) instead of the stub (x402Stub.ts). Default "false" until Chrome'da
 # elle uçtan uca test tamamlanır (bkz. CONTEXT.md bölüm 14).
@@ -20,7 +18,6 @@ X402_USDC_ASSET_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 # X402_FACILITATOR_URL is NOT set here — x402FacilitatorClient.ts defaults to the public
 # https://x402.org/facilitator (no auth required); uncomment only to override:
 # X402_FACILITATOR_URL = "https://x402.org/facilitator"
-
 # KV namespace used by src/rateLimiter.ts to track per-IP request counts.
 # Create with: wrangler kv namespace create RATE_LIMIT_KV
 #              wrangler kv namespace create RATE_LIMIT_KV --preview
@@ -29,10 +26,18 @@ X402_USDC_ASSET_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 binding = "RATE_LIMIT_KV"
 id = "dc1dcdbb178742ea94181d2e0260e6c8"
 preview_id = "e0bdca44a58d419494524c41f0d5ef4a"
-
+# D1 database for pseudonymous wallet/activity tracking — /users/register, /activity/log,
+# /admin/users, /admin/activity in src/index.ts. No amount/value column anywhere (see
+# migrations/0001_create_users_activity.sql).
+[[d1_databases]]
+binding = "USERS_DB"
+database_name = "arfio-users"
+database_id = "5927fb0c-38cb-4469-a07e-e2e84d649313"
+migrations_dir = "migrations"
+# ADMIN_SECRET is NOT set here — it's a secret, not a var:
+#   wrangler secret put ADMIN_SECRET
 # OPENROUTER_API_KEY is NOT set here — it's a secret, not a var:
 #   wrangler secret put OPENROUTER_API_KEY
-
 # Workers AI binding used to embed the user's message for RAG context retrieval
 # (src/knowledge/). No separate resource to create — this binding is available on any
 # Worker on the account as soon as it's declared here.

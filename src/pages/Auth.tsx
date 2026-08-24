@@ -50,6 +50,8 @@ interface WalletStepProps {
 interface PasswordScreenProps {
   storageManager: StorageManager | undefined;
   accountManager: AccountManager | undefined;
+  authMethod: 'password' | 'google' | null;
+  pendingEmail: string | null;
   onDone: () => void;
 }
 
@@ -344,7 +346,7 @@ function ImportWallet({ accountManager, onDone }: WalletStepProps) {
 /**
  * Set Password screen — shown AFTER wallet creation/import to encrypt account data.
  */
-function SetPasswordScreen({ storageManager, accountManager, onDone }: PasswordScreenProps) {
+function SetPasswordScreen({ storageManager, accountManager, authMethod, pendingEmail, onDone }: PasswordScreenProps) {
   const { t } = useTranslation();
   const context = React.useContext(WalletContext);
   const [password, setPassword] = React.useState("");
@@ -390,7 +392,26 @@ function SetPasswordScreen({ storageManager, accountManager, onDone }: PasswordS
       if (storageManager?.hasUnencryptedAccounts()) {
         await storageManager?.migrateToEncrypted();
       }
-      await accountManager?.persistToEncryptedStorage();
+      const persisted = await accountManager?.persistToEncryptedStorage();
+
+      // Fire-and-forget: registers this wallet with the pseudonymous user/activity backend
+      // (backend-proxy /users/register). Never blocks or fails the onboarding flow — the
+      // wallet is fully usable offline regardless of whether this call succeeds.
+      if (persisted) {
+        const address = accountManager?.GetActive()?.GetAddress();
+        const proxyBaseUrl = import.meta.env.VITE_AGENT_PROXY_URL as string | undefined;
+        if (address && proxyBaseUrl) {
+          fetch(`${proxyBaseUrl}/users/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              wallet_address: address,
+              email: authMethod === 'google' ? (pendingEmail ?? undefined) : undefined,
+              source: authMethod ?? 'password',
+            }),
+          }).catch(() => { /* best-effort telemetry only */ });
+        }
+      }
 
       onDone();
     } catch (e) {
@@ -710,6 +731,8 @@ export default function Auth() {
 
   const [step, setStep] = React.useState(AuthStep.CHOICE);
   const [isSocialLoading, setIsSocialLoading] = React.useState(false);
+  const [authMethod, setAuthMethod] = React.useState<'password' | 'google' | null>(null);
+  const [pendingEmail, setPendingEmail] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!storageManager) return;
@@ -749,8 +772,9 @@ export default function Auth() {
     initAuth();
   }, [storageManager, accountManager]);
 
-  const handleWalletCreated = () => {
+  const handleWalletCreated = (method: 'password' | 'google' = 'password') => {
     // After create/import, go to set password step
+    setAuthMethod(method);
     setStep(AuthStep.SET_PASSWORD);
   };
 
@@ -814,6 +838,8 @@ export default function Auth() {
             <SetPasswordScreen
               storageManager={storageManager}
               accountManager={accountManager}
+              authMethod={authMethod}
+              pendingEmail={pendingEmail}
               onDone={() => { window.location.hash = "#/home"; }}
             />
           )}
@@ -856,10 +882,12 @@ export default function Auth() {
                     if (web3auth.provider) {
                       const privateKey = await web3auth.provider.request({ method: "eth_private_key" }) as string;
                       let accountName = "Social Account";
+                      let socialEmail: string | null = null;
                       try {
                         const userInfo = await web3auth.getUserInfo();
                         if (userInfo.email) {
                           accountName = userInfo.email;
+                          socialEmail = userInfo.email;
                         } else if (userInfo.name) {
                           accountName = userInfo.name;
                         }
@@ -877,7 +905,8 @@ export default function Auth() {
                         ];
                         await accountManager?.AutoDiscoverAccounts(rpcs, 3, importedIndex);
 
-                        handleWalletCreated();
+                        setPendingEmail(socialEmail);
+                        handleWalletCreated('google');
                       }
                     }
                   } catch (error) {

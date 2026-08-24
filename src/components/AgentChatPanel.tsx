@@ -339,6 +339,30 @@ function buildChatItems(history: ChatMessage[]): ChatItem[] {
   return items;
 }
 
+/** Maps a confirmed proposal's toolName to the activity log's action_type — null for anything not tracked (e.g. pay_for_resource). */
+function mapToolNameToActionType(toolName: string): "send" | "shield" | "unshield" | null {
+  if (toolName === "propose_send") return "send";
+  if (toolName === "propose_shield") return "shield";
+  if (toolName === "propose_unshield") return "unshield";
+  return null;
+}
+
+/**
+ * Fire-and-forget POST to backend-proxy's /activity/log (see handleCardStatusChange). Never
+ * throws, never awaited by the caller, and never sends an amount — only that this wallet
+ * address performed a send/shield/unshield, which the backend can't turn into a balance
+ * without contradicting the FHE-shielded architecture.
+ */
+function logActivity(walletAddress: string, actionType: "send" | "shield" | "unshield"): void {
+  const proxyBaseUrl = import.meta.env.VITE_AGENT_PROXY_URL as string | undefined;
+  if (!proxyBaseUrl) return;
+  fetch(`${proxyBaseUrl}/activity/log`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ wallet_address: walletAddress, action_type: actionType }),
+  }).catch(() => { /* best-effort telemetry only */ });
+}
+
 function AgentChatPanel({ conversationHistory, setConversationHistory, setProposalHistory }: AgentChatPanelProps) {
   const { t } = useTranslation();
   const wallet = React.useContext(WalletContext);
@@ -470,6 +494,16 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
     );
     if (address) {
       setProposalHistory((prev) => appendProposalRecords(prev, [buildRecordFromOutcome(toolCallId, preview, status, address)]));
+    }
+
+    // Fire-and-forget activity log (backend-proxy /activity/log) — only for the terminal
+    // "confirmed" outcome, i.e. the real chain transaction actually landed. Never blocks or
+    // fails the confirmation flow, and never carries an amount — see logActivity's own docs.
+    if (status.status === "confirmed" && address) {
+      const actionType = mapToolNameToActionType(status.toolName);
+      if (actionType) {
+        logActivity(address, actionType);
+      }
     }
   };
 

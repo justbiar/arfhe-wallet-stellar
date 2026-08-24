@@ -11,6 +11,26 @@ secret. Two endpoints:
   `AgentOrchestrator` (extension side) to splice into the system prompt. Read-only
   enrichment only — this endpoint has no path to signing or sending anything.
 
+Plus pseudonymous wallet/activity tracking against a D1 database (`arfio-users`, see
+`migrations/0001_create_users_activity.sql`):
+
+- `POST /users/register` — `{ wallet_address, email?, source }` (`source` is `"google"` or
+  `"password"`). Upserts one row into `users`, keyed on `wallet_address`; `last_seen` is
+  bumped on every call, `email` is kept if the new call doesn't send one.
+- `POST /activity/log` — `{ wallet_address, action_type }` (`action_type` is `"send"`,
+  `"shield"`, or `"unshield"`). Appends one row to `activity`. Neither endpoint accepts or
+  stores an amount/value in any field — that's deliberate, so this table can never leak the
+  FHE-shielded balances the rest of the wallet exists to protect.
+- `GET /admin/users`, `GET /admin/activity` — read-only JSON dumps of the two tables above,
+  gated by `Authorization: Bearer <ADMIN_SECRET>` instead of the extension-origin CORS
+  check (these are for an operator, not the extension).
+- `GET /admin` — a static, dependency-free HTML/JS dashboard (inline in `src/index.ts` as
+  `ADMIN_PAGE_HTML`) with a secret-entry form, two tabs (Users/Activity), client-side
+  search and column sort. The route itself has no server-side auth — the page renders
+  empty until the operator types the secret, which is kept in `sessionStorage` only (never
+  `localStorage`) and sent as `Authorization: Bearer` on same-origin fetches to
+  `/admin/users`/`/admin/activity`, which enforce the real check.
+
 ## Development
 
 ```bash
@@ -19,6 +39,23 @@ npm run dev         # wrangler dev
 npm run typecheck   # tsc --noEmit
 npx vitest run      # test suite (Vitest + @cloudflare/vitest-pool-workers / Miniflare)
 ```
+
+## D1 setup (`arfio-users`)
+
+```bash
+wrangler d1 create arfio-users
+# paste the printed database_id into wrangler.toml's [[d1_databases]] block (USERS_DB)
+wrangler d1 migrations apply arfio-users --remote
+```
+
+`GET /admin/users` and `GET /admin/activity` are gated by an `ADMIN_SECRET` Worker secret —
+set it once per environment (never in `wrangler.toml` or `.dev.vars` committed to the repo):
+
+```bash
+wrangler secret put ADMIN_SECRET
+```
+
+Then call the admin endpoints with `Authorization: Bearer <the secret you just set>`.
 
 Tests that exercise the `AI` binding talk to the **real** Workers AI API (Miniflare can't
 simulate model inference locally), so `npx vitest run` needs a `wrangler login`'d session

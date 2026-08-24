@@ -80,6 +80,26 @@ export const FHE_NETWORK_IDS = new Set<NetworkId>([
     NetworkId.Base_Sepolia,
 ]);
 
+/**
+ * The real EVM chain id for a network.
+ *
+ * `NetworkId` is the wallet's internal identifier and is NOT always the chain id —
+ * `Ethereum_Sepolia` is 4 here while Sepolia's actual chain id is 11155111. Anything that
+ * leaves the wallet must use this: a transaction is signed against a chain id, a dApp is
+ * told one over EIP-1193, and a WalletConnect request names one. Passing the internal id
+ * instead signs for chain 4 and tells websites the wrong network.
+ *
+ * Custom networks are added by their real chain id, so they pass through unchanged.
+ */
+export function toChainId(networkId: NetworkId | number): number {
+    switch (Number(networkId)) {
+        case NetworkId.Ethereum_Sepolia: return 11155111;
+        case NetworkId.Ethereum_Hoodi: return 560048;
+        case NetworkId.Zama: return 8009;
+        default: return Number(networkId);
+    }
+}
+
 /** Check whether a given network supports FHE operations */
 export function isFheNetwork(networkId: NetworkId): boolean {
     return FHE_NETWORK_IDS.has(networkId);

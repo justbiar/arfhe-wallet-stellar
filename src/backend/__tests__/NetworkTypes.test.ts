@@ -5,6 +5,7 @@ import {
   isTestnetNetwork,
   FHE_NETWORK_IDS,
   TESTNET_IDS,
+  toChainId,
 } from '../NetworkTypes';
 
 describe('NetworkTypes helpers', () => {
@@ -131,5 +132,39 @@ describe('NetworkTypes helpers', () => {
       expect(NetworkId.Arbitrum_Sepolia).toBe(421614);
       expect(NetworkId.Base_Sepolia).toBe(84532);
     });
+  });
+});
+/**
+ * `NetworkId` is the wallet's internal identifier and does not always equal the chain id.
+ * Anything leaving the wallet — a signed transaction, an EIP-1193 answer, a WalletConnect
+ * comparison — must use the real one. Sepolia is the trap: internally 4, actually 11155111,
+ * and 4 is Rinkeby's old id.
+ */
+describe('toChainId', () => {
+  it('Sepolia için gerçek zincir kimliğini döner', () => {
+    expect(toChainId(NetworkId.Ethereum_Sepolia)).toBe(11155111);
+    expect(toChainId(NetworkId.Ethereum_Sepolia)).not.toBe(4);
+  });
+
+  it('zaten doğru olan kimlikleri değiştirmez', () => {
+    expect(toChainId(NetworkId.Ethereum_Mainnet)).toBe(1);
+    expect(toChainId(NetworkId.Arbitrum_Sepolia)).toBe(421614);
+    expect(toChainId(NetworkId.Base_Sepolia)).toBe(84532);
+    expect(toChainId(NetworkId.Arbitrum_One)).toBe(42161);
+    expect(toChainId(NetworkId.Base_Mainnet)).toBe(8453);
+    expect(toChainId(NetworkId.Polygon)).toBe(137);
+  });
+
+  it('özel ağlar kendi zincir kimliğiyle geçer', () => {
+    // Custom networks are added by real chain id, so they must pass through untouched.
+    expect(toChainId(59144)).toBe(59144);
+    expect(toChainId(1337)).toBe(1337);
+  });
+
+  it('FHE ağlarının hepsi CoFHE zincirleriyle eşleşir', () => {
+    // The three chains the coprocessor runs on. A mismatch here means encryption is
+    // attempted against a chain that has no coprocessor behind it.
+    const fheChainIds = [...FHE_NETWORK_IDS].map(toChainId).sort((a, b) => a - b);
+    expect(fheChainIds).toEqual([84532, 421614, 11155111].sort((a, b) => a - b));
   });
 });

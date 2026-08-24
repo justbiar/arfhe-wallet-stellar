@@ -1,5 +1,6 @@
 import React from "react";
 import { AppContext, WalletContext } from "./AppContext.js";
+import { toChainId } from "./backend/NetworkTypes.js";
 import { useNavigate, useLocation } from "react-router";
 
 import WalletConnectManager from "./components/WalletConnectManager";
@@ -44,7 +45,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         const net = appContext.networkProvider.getActiveNetwork();
         runtime.sendMessage?.({
           type: "SET_WALLET_STATE",
-          chainId: Number(net.network_id),
+          // The real chain id, not the wallet's internal NetworkId — this is what
+          // websites are told over EIP-1193.
+          chainId: toChainId(net.network_id),
           rpcUrl: net.rpc_url ?? null,
         });
       } catch {

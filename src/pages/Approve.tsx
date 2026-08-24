@@ -24,6 +24,7 @@ import {
 import { Language as LanguageIcon, GppBad, Shield as ShieldIcon } from "@mui/icons-material";
 import { JsonRpcProvider, formatEther, isAddress } from "ethers";
 import { WalletContext } from "../AppContext.js";
+import { toChainId } from "../backend/NetworkTypes.js";
 import { analyzeFheRisk } from "../backend/DAppConnectionService.js";
 import { PhishingDetector, type PhishingCheckResult } from "../backend/PhishingDetector.js";
 import { toUserMessage } from "../backend/UserFacingError.js";
@@ -167,9 +168,9 @@ export default function Approve() {
         // domain while the wallet is on a testnet produces a signature valid somewhere the
         // user was never shown.
         const domainChain = (data as { domain?: { chainId?: unknown } })?.domain?.chainId;
-        if (domainChain !== undefined && Number(domainChain) !== Number(network.network_id)) {
+        if (domainChain !== undefined && Number(domainChain) !== toChainId(network.network_id)) {
           throw new Error(
-            `This signature is for chain ${Number(domainChain)}, but the wallet is on chain ${Number(network.network_id)}.`
+            `This signature is for chain ${Number(domainChain)}, but the wallet is on chain ${toChainId(network.network_id)}.`
           );
         }
 
@@ -198,7 +199,8 @@ export default function Approve() {
           data: tx.data ?? "0x",
           gasLimit: tx.gasLimit ?? tx.gas,
           // Pin the chain rather than letting it be inferred.
-          chainId: Number(network.network_id),
+          // Pin the real chain id; the internal NetworkId would sign for the wrong chain.
+          chainId: toChainId(network.network_id),
         });
         await respond({ result: sent.hash });
         return;
@@ -208,7 +210,7 @@ export default function Approve() {
       if (method === "wallet_switchEthereumChain") {
         const target = Number((params[0] as { chainId?: string })?.chainId ?? NaN);
         if (!Number.isFinite(target)) throw new Error("The site did not say which chain to switch to.");
-        if (target === Number(network.network_id)) {
+        if (target === toChainId(network.network_id)) {
           await respond({ result: null });
           return;
         }

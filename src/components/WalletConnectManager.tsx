@@ -27,6 +27,7 @@ import type { WalletConnectRequest, WalletConnectProposal } from "../backend/Wal
 import type { Network } from "../backend/Network";
 import type Account from "../backend/Account";
 import { analyzeFheRisk, checkRequestMatchesWallet } from "../backend/DAppConnectionService";
+import { toChainId } from "../backend/NetworkTypes";
 
 // Icons
 import LinkIcon from '@mui/icons-material/Link';
@@ -208,7 +209,7 @@ export default function WalletConnectManager() {
             const assertSigner = (claimed: unknown) => {
                 const problem = checkRequestMatchesWallet(
                     chainId,
-                    network ? Number(network.network_id) : undefined,
+                    network ? toChainId(network.network_id) : undefined,
                     claimed,
                     account.GetAddress()
                 );
@@ -708,7 +709,7 @@ function RequestDialog({
     // which rejected every other chain the wallet actually supports — and, worse, passed a
     // mainnet request through while the wallet sat on a testnet.
     const requestedChain = Number(chainId?.split(":")?.[1]);
-    const activeChain = network ? Number(network.network_id) : NaN;
+    const activeChain = network ? toChainId(network.network_id) : NaN;
     const isChainSupported = Number.isFinite(requestedChain) && requestedChain === activeChain;
 
     const isTransaction = rpcReq.method === "eth_sendTransaction";

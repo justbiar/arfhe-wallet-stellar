@@ -198,8 +198,12 @@ export class DataCacheService {
      * here" would understate the user's holdings, which is the same mistake that once
      * made undecryptable shielded balances disappear.
      */
-    getCachedNetworks(address: string): { networkId: number; data: CachedPortfolio; ageMs: number }[] {
+    getCachedNetworks(
+        address: string,
+        knownNetworkIds?: Iterable<number>
+    ): { networkId: number; data: CachedPortfolio; ageMs: number }[] {
         const prefix = `${address.toLowerCase()}:`;
+        const known = knownNetworkIds ? new Set(knownNetworkIds) : null;
         const now = Date.now();
         const out: { networkId: number; data: CachedPortfolio; ageMs: number }[] = [];
 
@@ -207,10 +211,43 @@ export class DataCacheService {
             if (!key.startsWith(prefix)) continue;
             const networkId = Number(key.slice(prefix.length));
             if (!Number.isFinite(networkId)) continue;
+
+            // A snapshot for a network the wallet no longer has is not something the user
+            // can open, refresh or verify — it can only render as a nameless "Chain 143"
+            // row with a stale figure in it. Every wallet that upgrades past a removed
+            // built-in carries these, so they are filtered rather than displayed.
+            if (known && !known.has(networkId)) continue;
+
             out.push({ networkId, data, ageMs: now - data.balanceTimestamp });
         }
 
         return out.sort((a, b) => b.data.totalUsd - a.data.totalUsd);
+    }
+
+    /**
+     * Delete snapshots for networks the wallet no longer knows about.
+     *
+     * Filtering them out of reads is enough to keep them off screen, but they would go on
+     * occupying the persisted entry cap — evicting snapshots for networks the user
+     * actually uses in favour of ones that cannot be reached.
+     *
+     * @returns How many entries were dropped.
+     */
+    pruneUnknownNetworks(knownNetworkIds: Iterable<number>): number {
+        const known = new Set(knownNetworkIds);
+        let dropped = 0;
+
+        for (const key of [...this.cache.keys()]) {
+            const separator = key.lastIndexOf(":");
+            if (separator < 0) continue;
+            const networkId = Number(key.slice(separator + 1));
+            if (!Number.isFinite(networkId) || known.has(networkId)) continue;
+            this.cache.delete(key);
+            dropped++;
+        }
+
+        if (dropped > 0) this.schedulePersist();
+        return dropped;
     }
 
     /**

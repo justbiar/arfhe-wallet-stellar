@@ -44,10 +44,9 @@ import { ArrowBack, Shield, Visibility, VisibilityOff, Public } from "@mui/icons
 
 import { WalletContext } from "../AppContext";
 import { ActiveAccountContext } from "../ActiveAccountProvider";
-import AssetAllocationChart from "../components/AssetAllocationChart";
+import PortfolioHistoryChart, { DailyChangeBadge } from "../components/PortfolioHistoryChart";
+import type { HistoryRange } from "../backend/PortfolioHistoryService";
 import { isFheNetwork } from "../backend/NetworkTypes";
-
-const COLORS = ["#2563eb", "#10b981", "#f59e0b", "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6"];
 
 /** One chain's contribution to the total. */
 interface NetworkSlice {
@@ -76,6 +75,7 @@ export default function Portfolio() {
   const activeContext = useContext(ActiveAccountContext);
 
   const [hidden, setHidden] = useState(false);
+  const [range, setRange] = useState<HistoryRange>("1W");
 
   const address = activeContext?.activeAccount?.GetAddress() ?? "";
 
@@ -85,23 +85,34 @@ export default function Portfolio() {
     [wallet?.networkProvider]
   );
 
-  const { slices, assets, totalUsd, shieldedUsd, missing } = useMemo(
-    () => aggregatePortfolio(
-      address && wallet?.dataCacheService ? wallet.dataCacheService.getCachedNetworks(address) : [],
-      knownNetworks
-    ),
-    [wallet?.dataCacheService, address, knownNetworks]
+  const { slices, assets, totalUsd, shieldedUsd, missing } = useMemo(() => {
+    const cache = wallet?.dataCacheService;
+    if (!cache || !address) return aggregatePortfolio([], knownNetworks);
+
+    // Snapshots for networks the wallet has since dropped can only render as a nameless
+    // "Chain 143" row nobody can open or refresh. Clearing them also stops them occupying
+    // the persisted entry cap ahead of networks the user actually uses.
+    const knownIds = knownNetworks.map((n) => n.id);
+    cache.pruneUnknownNetworks(knownIds);
+
+    return aggregatePortfolio(cache.getCachedNetworks(address, knownIds), knownNetworks);
+  }, [wallet?.dataCacheService, address, knownNetworks]);
+
+  const points = useMemo(
+    () => (address ? wallet?.portfolioHistory?.getSeries(address, range) ?? [] : []),
+    [wallet?.portfolioHistory, address, range]
+  );
+
+  const dailyChange = useMemo(
+    () => wallet?.portfolioHistory?.getDailyChange(address ?? "")
+      ?? { absolute: 0, percent: 0, since: Date.now(), hasBaseline: false },
+    [wallet?.portfolioHistory, address]
   );
 
   const money = (v: number) =>
     hidden ? "•••" : `$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   const privacyPct = totalUsd > 0 ? (shieldedUsd / totalUsd) * 100 : 0;
-
-  const chartData = useMemo(
-    () => assets.slice(0, 7).map((a, i) => ({ name: a.symbol, value: a.valueUsd, color: COLORS[i % COLORS.length] })),
-    [assets]
-  );
 
   const cardSx = {
     p: 2,
@@ -140,9 +151,16 @@ export default function Portfolio() {
         <Typography variant="h4" fontWeight={800} sx={{ mt: 0.5 }}>
           {money(totalUsd)}
         </Typography>
-        <Typography variant="caption" color="text.secondary">
-          {t("portfolio.networkCount", { count: slices.length })}
-        </Typography>
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ mt: 0.5, flexWrap: "wrap" }} useFlexGap>
+          <DailyChangeBadge {...dailyChange} hidden={hidden} />
+          <Typography variant="caption" color="text.secondary">
+            {t("portfolio.networkCount", { count: slices.length })}
+          </Typography>
+        </Stack>
+
+        <Box sx={{ mt: 1.5 }}>
+          <PortfolioHistoryChart points={points} range={range} onRangeChange={setRange} hidden={hidden} />
+        </Box>
       </Paper>
 
       {/* A chain never opened has no snapshot. Saying so is the difference between a
@@ -245,17 +263,6 @@ export default function Portfolio() {
         </Stack>
       )}
 
-      {/* ── Allocation, summed over chains ────────────────────── */}
-      {chartData.length > 0 && (
-        <>
-          <Typography variant="subtitle2" fontWeight={800} sx={{ mb: 1, pl: 0.5 }}>
-            {t("portfolio.allocation")}
-          </Typography>
-          <Paper elevation={0} sx={{ ...cardSx, mb: 2, display: "flex", justifyContent: "center" }}>
-            <AssetAllocationChart data={chartData} isPrivacyMode={hidden} />
-          </Paper>
-        </>
-      )}
 
       {/* ── Assets, one row per holding regardless of chain ───── */}
       {assets.length > 0 && (

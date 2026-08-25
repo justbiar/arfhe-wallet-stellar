@@ -5,6 +5,7 @@ import TokenCache from "./backend/TokenCache.js";
 import NFTCache from "./backend/NFTCache.js";
 import StorageManager from "./backend/StorageManager.js";
 import DataCacheService from "./backend/DataCacheService.js";
+import PortfolioHistoryService from "./backend/PortfolioHistoryService.js";
 import { ContactManager } from "./backend/ContactManager.js";
 import FheCofheService from "./backend/FheCofheService.js";
 
@@ -30,6 +31,7 @@ export class AppContext {
   nftCache: NFTCache;
   // data cache (balances, prices with TTL)
   dataCacheService: DataCacheService;
+  portfolioHistory: PortfolioHistoryService;
   // contact manager
   contactManager: ContactManager;
   // wallet connect
@@ -49,6 +51,8 @@ export class AppContext {
     this.nftCache = new NFTCache(this.storageManager);
     this.dataCacheService = new DataCacheService();
     this.dataCacheService.attachStorage(this.storageManager);
+    this.portfolioHistory = new PortfolioHistoryService();
+    this.portfolioHistory.attachStorage(this.storageManager);
     this.contactManager = new ContactManager(this.storageManager);
     this.walletConnectService = new WalletConnectService(this.accountManager);
     this.spamFilter = new SpamFilter(this.storageManager);
@@ -71,6 +75,7 @@ export class AppContext {
       // Memory only. The encrypted snapshot on disk stays, so unlocking renders balances
       // straight away instead of starting from an empty list.
       this.dataCacheService.clearMemory();
+      this.portfolioHistory.clearMemory();
     });
 
     // The in-wallet AI Agent (AgentChatPanel -> AgentOrchestrator -> AgentToolRunner) needs

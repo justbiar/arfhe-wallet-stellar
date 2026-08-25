@@ -87,3 +87,15 @@ if (!globalThis.crypto?.subtle) {
   const { webcrypto } = require('crypto');
   Object.defineProperty(globalThis, 'crypto', { value: webcrypto });
 }
+
+// ─── ResizeObserver polyfill (jsdom doesn't implement it) ───────
+// recharts' ResponsiveContainer observes its parent to size the SVG. jsdom has no layout
+// engine, so the observed box is always zero — which is fine: these tests assert the text
+// and structure around a chart, never its pixels.
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+}

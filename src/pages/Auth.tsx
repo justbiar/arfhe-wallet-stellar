@@ -389,6 +389,7 @@ function SetPasswordScreen({ storageManager, accountManager, authMethod, pending
       // Balances are persisted encrypted; loading them here means Home renders with
       // real numbers instead of an empty list and a spinner.
       await context?.dataCacheService?.hydrate();
+      await context?.portfolioHistory?.hydrate();
       if (storageManager?.hasUnencryptedAccounts()) {
         await storageManager?.migrateToEncrypted();
       }
@@ -552,6 +553,7 @@ function LoginIntoWallet({ storageManager, accountManager }: LoginProps) {
       // Balances are persisted encrypted; loading them here means Home renders with
       // real numbers instead of an empty list and a spinner.
       await context?.dataCacheService?.hydrate();
+      await context?.portfolioHistory?.hydrate();
 
       navigate("/home");
     } catch (e) {
@@ -583,6 +585,7 @@ function LoginIntoWallet({ storageManager, accountManager }: LoginProps) {
       // Balances are persisted encrypted; loading them here means Home renders with
       // real numbers instead of an empty list and a spinner.
       await context?.dataCacheService?.hydrate();
+      await context?.portfolioHistory?.hydrate();
       navigate("/home");
     } catch (e) {
       setError(t('auth.biometricFailed'));
@@ -749,6 +752,7 @@ export default function Auth() {
       // Balances are persisted encrypted; loading them here means Home renders with
       // real numbers instead of an empty list and a spinner.
       await context?.dataCacheService?.hydrate();
+      await context?.portfolioHistory?.hydrate();
           window.location.hash = "#/home";
           return;
         } catch (e) {

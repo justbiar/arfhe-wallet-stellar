@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import {
   Typography,
   Box,
@@ -44,6 +44,7 @@ import { useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
 import { NetworkId, isFheNetwork as isFheCapableNetwork } from "../backend/NetworkTypes.js";
 import { onTxConfirmed } from "../backend/TxNotifier.js";
+import { DailyChangeBadge } from "../components/PortfolioHistoryChart.js";
 import { getAddress } from "ethers";
 import type { TypographyProps } from "@mui/material";
 import type { DisplayToken, BalanceMap, WrappedBalance } from "../types/index.js";
@@ -549,6 +550,7 @@ function Home() {
       setBalances(balanceMap);
       setTotalBalanceUsd(totalUsd);
 
+
       // ── Spam Filter + Display Data ──
       const spamFilter = wallet_context.spamFilter;
       const displayTokens: DisplayToken[] = [];
@@ -622,6 +624,22 @@ function Home() {
           prices: currentPrices,
           totalUsd,
         });
+
+        // Record what the wallet is worth, after the cache write — reading it before would
+        // sum this network's *previous* total and leave every point one refresh behind.
+        //
+        // This is the only source the portfolio chart has; there is no backfill, so a
+        // series exists only because these points were written as the wallet was used.
+        // The cross-network total is what gets recorded rather than this network's: a
+        // chart that jumped on every chain switch would describe navigation, not value.
+        try {
+          const known = wallet_context.networkProvider.listAllNetworks().map((n) => n.id);
+          const cached = dataCache.getCachedNetworks(address, known);
+          const acrossNetworks = cached.reduce((sum, entry) => sum + entry.data.totalUsd, 0);
+          wallet_context.portfolioHistory?.record(address, acrossNetworks, cached.length);
+        } catch {
+          // History is a nicety; failing to append a point must not fail the refresh.
+        }
       }
 
     } catch (err) {
@@ -668,6 +686,16 @@ function Home() {
   // looked like it had done nothing — the one moment a wallet must not appear stale. The
   // caches are already cleared by the time this fires, so the refetch reaches the network.
   useEffect(() => onTxConfirmed(() => { void fetchData(true); }), [active_context?.activeAccount, activeNetworkId]);
+
+  // Movement over the last 24 hours, from the recorded series rather than anything derived
+  // on the fly. Keyed on the total so it refreshes once a new point has been written.
+  const dailyChange = useMemo(
+    () => wallet_context?.portfolioHistory?.getDailyChange(
+      active_context?.activeAccount?.GetAddress() ?? ""
+    ) ?? { absolute: 0, percent: 0, since: Date.now(), hasBaseline: false },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [wallet_context?.portfolioHistory, active_context?.activeAccount, totalBalanceUsd]
+  );
 
   if (!active_context) return null;
 
@@ -833,6 +861,13 @@ function Home() {
                   {isBalanceHidden ? <Visibility fontSize="small" /> : <VisibilityOff fontSize="small" />}
                 </IconButton>
               </Tooltip>
+            </Box>
+
+            {/* How the wallet moved today, in money and in percent. Neither answers the
+                question alone: a percentage hides how much moved, an amount hides whether
+                that was a lot. */}
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 0.75 }}>
+              <DailyChangeBadge {...dailyChange} hidden={isBalanceHidden} compact />
             </Box>
 
             {/* Action Buttons */}

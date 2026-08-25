@@ -11,12 +11,14 @@ import { PageSkeleton } from "./components/SkeletonLoaders";
 // Lazy-loaded pages — only downloaded when navigated to
 const Home = React.lazy(() => import("./pages/Home"));
 const Portfolio = React.lazy(() => import("./pages/Portfolio"));
+const Privacy = React.lazy(() => import("./pages/Privacy"));
 const Explore = React.lazy(() => import("./pages/Explore"));
 const History = React.lazy(() => import("./pages/History"));
 const Revoke = React.lazy(() => import("./pages/Revoke"));
 const Agent = React.lazy(() => import("./pages/Agent"));
 const Settings = React.lazy(() => import("./pages/Settings"));
 const SettingsSecurity = React.lazy(() => import("./pages/SettingsSecurity"));
+const SettingsNetworks = React.lazy(() => import("./pages/SettingsNetworks"));
 const SettingsNotifications = React.lazy(() => import("./pages/SettingsNotifications"));
 const TokenDetail = React.lazy(() => import("./pages/TokenDetail"));
 const NotFound = React.lazy(() => import("./pages/NotFound"));
@@ -44,12 +46,14 @@ function AppRoutes() {
         <Route element={<AppLayout />}>
           <Route path="home" element={<FadePage><Home /></FadePage>} />
           <Route path="portfolio" element={<FadePage><Portfolio /></FadePage>} />
+          <Route path="privacy" element={<FadePage><Privacy /></FadePage>} />
           <Route path="explore" element={<FadePage><Explore /></FadePage>} />
           <Route path="history" element={<FadePage><History /></FadePage>} />
           <Route path="revoke" element={<FadePage><Revoke /></FadePage>} />
           <Route path="agent" element={<FadePage><Agent /></FadePage>} />
           <Route path="settings" element={<FadePage><Settings /></FadePage>} />
           <Route path="settings/security" element={<FadePage><SettingsSecurity /></FadePage>} />
+          <Route path="settings/networks" element={<FadePage><SettingsNetworks /></FadePage>} />
           <Route path="settings/notifications" element={<FadePage><SettingsNotifications /></FadePage>} />
           <Route path="token/:address" element={<FadePage><TokenDetail /></FadePage>} />
           <Route path="*" element={<FadePage><NotFound /></FadePage>} />

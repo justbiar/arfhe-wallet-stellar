@@ -77,9 +77,27 @@ async function main() {
     throw new Error(`Deployer ${deployer.address} has no ${target.name} ETH — fund it before deploying.`);
   }
 
+  // ERC20ConfidentialLib holds the claim bookkeeping and is an *external* library as of
+  // confidential-contracts 0.4 — it has to exist on-chain and be linked into every
+  // contract that uses it. The factory needs it too: it embeds the wrapper's creation
+  // code, so an unlinked factory would deploy wrappers that revert on first use.
+  console.log("\n--- ERC20ConfidentialLib ---");
+  const Lib = await hre.ethers.getContractFactory(
+    "fhenix-confidential-contracts/contracts/ERC20Confidential/ERC20ConfidentialLib.sol:ERC20ConfidentialLib"
+  );
+  const lib = await Lib.deploy();
+  await lib.waitForDeployment();
+  const libAddress = await lib.getAddress();
+  console.log(`deployed: ${libAddress}`);
+
+  const libraries = {
+    "fhenix-confidential-contracts/contracts/ERC20Confidential/ERC20ConfidentialLib.sol:ERC20ConfidentialLib":
+      libAddress,
+  };
+
   console.log("\n--- ArfheShieldedETH (aeETH) ---");
   console.log(`WETH: ${target.weth}`);
-  const ShieldedETH = await hre.ethers.getContractFactory("ArfheShieldedETH");
+  const ShieldedETH = await hre.ethers.getContractFactory("ArfheShieldedETH", { libraries });
   const shieldedETH = await ShieldedETH.deploy(target.weth);
   await shieldedETH.waitForDeployment();
   const ethAddress = await shieldedETH.getAddress();
@@ -88,7 +106,7 @@ async function main() {
   // The factory lets the wallet shield any standard ERC-20 on demand, instead of being
   // limited to the two wrappers deployed here.
   console.log("\n--- ArfheWrapperFactory ---");
-  const Factory = await hre.ethers.getContractFactory("ArfheWrapperFactory");
+  const Factory = await hre.ethers.getContractFactory("ArfheWrapperFactory", { libraries });
   const factory = await Factory.deploy();
   await factory.waitForDeployment();
   const factoryAddress = await factory.getAddress();
@@ -133,6 +151,7 @@ async function main() {
   console.log(`${target.ethEnvKey}=${ethAddress}`);
   console.log(`${target.usdcEnvKey}=${usdcAddress}`);
   console.log(`${target.factoryEnvKey}=${factoryAddress}`);
+  console.log(`# ERC20ConfidentialLib: ${libAddress}`);
   console.log("========================================");
 }
 

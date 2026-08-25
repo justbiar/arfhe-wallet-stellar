@@ -1,5 +1,6 @@
 import React, { useContext, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router";
 import {
   Box,
   Select,
@@ -42,11 +43,12 @@ import { isAddress, parseUnits, Interface, formatEther, toUtf8Bytes, hexlify } f
 import { isDomainName, resolveDomain } from "../../backend/DomainResolver.js";
 import { NetworkId, isFheNetwork } from "../../backend/NetworkTypes.js";
 import { TransactionSimulator, SimResult } from "../../backend/TransactionSimulator.js";
-import { getContractsForNetwork, getExplorerBaseForNetwork, getHiddenTokenAddresses, inputCardSx, ctaButtonSx } from "./shared.js";
+import { getContractsForNetwork, explorerTxUrl, getHiddenTokenAddresses, inputCardSx, ctaButtonSx } from "./shared.js";
 
 // --- Send Panel ---
 export default function SendPanel() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const context = useContext(WalletContext);
   const activeAccount = context?.accountManager?.GetActive();
   const network = context?.networkProvider?.getActiveNetwork();
@@ -314,7 +316,11 @@ export default function SendPanel() {
             const holdings = await network.getShieldedPortfolio(activeAccount);
             setOwnedShieldedTokens(
               holdings
-                .filter((h) => parseFloat(h.balance) > 0)
+                // A balance the wallet could not decrypt still exists on-chain, and a
+                // confidential transfer never needed the plaintext anyway — the contract
+                // does the arithmetic under encryption. Dropping these left the user
+                // unable to spend tokens they hold.
+                .filter((h) => parseFloat(h.balance) > 0 || h.decryptFailed)
                 .map((h) => ({
                   contractAddress: h.wrapper,
                   symbol: h.symbol,
@@ -626,8 +632,10 @@ export default function SendPanel() {
                 variant="text"
                 color="secondary"
                 onClick={() => {
-                  // Open Shield panel in a new drawer
-                  window.dispatchEvent(new CustomEvent('open-shield-panel'));
+                  // Shielding is a page now, not a drawer on top of a drawer. Close the
+                  // send menu first so it does not sit over the page being opened.
+                  window.dispatchEvent(new CustomEvent('close-arf-menu'));
+                  navigate('/privacy');
                 }}
                 sx={{ fontSize: '0.65rem', fontWeight: 700, minWidth: 'auto', ml: 1, whiteSpace: 'nowrap' }}
               >
@@ -642,9 +650,9 @@ export default function SendPanel() {
       {status === 'success' ? (
         <Stack spacing={1.5} alignItems="center" sx={{ py: 3 }}>
           <SuccessAnimation label={t("send.transferComplete")} size={80} />
-          {txHash && (
+          {txHash && explorerTxUrl(network, txHash) && (
             <Link
-              href={`${getExplorerBaseForNetwork(network)}/tx/${txHash}`}
+              href={explorerTxUrl(network, txHash)}
               target="_blank" rel="noopener"
               underline="hover"
               sx={{ fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 0.5 }}

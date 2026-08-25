@@ -29,7 +29,14 @@ const STORAGE_KEY = "arfhe_pending_claims";
 const MAX_ATTEMPTS = 5;
 
 export interface PendingClaimIntent {
-  /** Ciphertext handle identifying the claim on-chain. */
+  /**
+   * The claim's on-chain id — what `claimUnshielded` is called with.
+   *
+   * Separate from {@link ctHash} since confidential-contracts 0.4: the id keys the claim,
+   * the handle carries the amount. Settlement needs both.
+   */
+  claimId: string;
+  /** Burned ciphertext handle — decrypted off-chain to produce the settlement proof. */
   ctHash: string;
   /** Confidential wrapper the claim belongs to. */
   tokenAddress: string;
@@ -190,13 +197,15 @@ export default class PendingClaimQueue {
    * Covers claims settled from another device or session, so the queue does not retry
    * work that is already done.
    */
-  reconcile(accountAddress: string, networkId: number, onChainCtHashes: string[]): void {
-    const live = new Set(onChainCtHashes.map((h) => h.toLowerCase()));
+  reconcile(accountAddress: string, networkId: number, onChainClaimIds: string[]): void {
+    const live = new Set(onChainClaimIds.map((h) => h.toLowerCase()));
     const account = accountAddress.toLowerCase();
 
     const kept = this.getAll().filter((c) => {
       const isOurs = c.accountAddress.toLowerCase() === account && c.networkId === networkId;
-      return isOurs ? live.has(c.ctHash.toLowerCase()) : true;
+      // Matched on the claim id, which is what the chain lists. Two claims can share a
+      // handle, so matching on that would drop a still-owed claim as already settled.
+      return isOurs ? live.has(c.claimId.toLowerCase()) : true;
     });
 
     if (kept.length !== this.getAll().length) this.write(kept);

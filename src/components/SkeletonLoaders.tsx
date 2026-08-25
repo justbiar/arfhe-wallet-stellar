@@ -236,36 +236,3 @@ export function TokenListSkeleton({ rows = 5 }: { rows?: number }) {
   );
 }
 
-/** 2-column NFT card grid skeleton */
-export function NftGridSkeleton({ count = 4 }: { count?: number }) {
-  return (
-    <Box
-      sx={{
-        display: "grid",
-        gridTemplateColumns: "1fr 1fr",
-        gap: 1.5,
-        pb: 2,
-      }}
-    >
-      {Array.from({ length: count }).map((_, i) => (
-        <Paper
-          key={i}
-          elevation={0}
-          sx={{
-            borderRadius: 3,
-            overflow: "hidden",
-            bgcolor: "background.paper",
-            border: "1px solid",
-            borderColor: "divider",
-          }}
-        >
-          <Skeleton variant="rectangular" width="100%" height={120} animation="wave" />
-          <Box sx={{ p: 1.5 }}>
-            <Skeleton variant="text" width="70%" height={18} animation="wave" />
-            <Skeleton variant="text" width="40%" height={14} animation="wave" />
-          </Box>
-        </Paper>
-      ))}
-    </Box>
-  );
-}

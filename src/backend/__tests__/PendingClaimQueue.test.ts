@@ -33,6 +33,9 @@ const TOKEN_B = "0x2222222222222222222222222222222222222222";
 function seed(queue: PendingClaimQueue, entries: { ctHash: string; tokenAddress: string }[]) {
   for (const e of entries) {
     queue.add({
+      // The contracts key a claim by its own id, not by the handle. These tests only care
+      // about grouping and ownership, so a derived id keeps them one-to-one.
+      claimId: `${e.ctHash}-id`,
       ctHash: e.ctHash,
       tokenAddress: e.tokenAddress,
       accountAddress: ACCOUNT,
@@ -150,15 +153,15 @@ describe("PendingClaimQueue.drainGrouped", () => {
 
   it("başka hesabın veya ağın talebine dokunmaz", async () => {
     queue.add({
-      ctHash: "0xa1", tokenAddress: TOKEN_A, accountAddress: ACCOUNT,
+      claimId: "0xa1-id", ctHash: "0xa1", tokenAddress: TOKEN_A, accountAddress: ACCOUNT,
       networkId: NETWORK, symbol: "aeTEST",
     });
     queue.add({
-      ctHash: "0xz1", tokenAddress: TOKEN_A, accountAddress: "0xdead000000000000000000000000000000000000",
+      claimId: "0xz1-id", ctHash: "0xz1", tokenAddress: TOKEN_A, accountAddress: "0xdead000000000000000000000000000000000000",
       networkId: NETWORK, symbol: "aeTEST",
     });
     queue.add({
-      ctHash: "0xz2", tokenAddress: TOKEN_A, accountAddress: ACCOUNT,
+      claimId: "0xz2-id", ctHash: "0xz2", tokenAddress: TOKEN_A, accountAddress: ACCOUNT,
       networkId: 84532, symbol: "aeTEST",
     });
 

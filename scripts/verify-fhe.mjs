@@ -32,11 +32,11 @@ const ABI = [
   'function decimals() view returns (uint8)',
   'function rate() view returns (uint256)',
   'function confidentialBalanceOf(address) view returns (bytes32)',
-  'function getUserClaims(address) view returns (tuple(address to,bytes32 ctHash,uint64 requestedAmount,uint64 decryptedAmount,bool claimed)[])',
+  'function getUserClaims(address) view returns (tuple(bytes32 id,address to,bytes32 ctHash,uint64 decryptedAmount,bool claimed)[])',
   'function shieldNative(address to) payable returns (bytes32)',
   'function unshield(address from, address to, uint64 amount) returns (bytes32)',
-  'function claimUnshielded(bytes32 ctHash, uint64 decryptedAmount, bytes decryptionProof)',
-  'function confidentialTransfer(address to, (uint256 ctHash, uint8 securityZone, uint8 utype, bytes signature) encryptedAmount) returns (bytes32)',
+  'function claimUnshielded(bytes32 id, uint64 decryptedAmount, bytes decryptionProof)',
+  'function confidentialTransfer(address to, bytes32 encryptedAmount, bytes inputProof) returns (bytes32)',
 ];
 
 /** Override on thinly funded chains: VERIFY_SHIELD_ETH=0.0005 node scripts/verify-fhe.mjs base */
@@ -77,7 +77,7 @@ async function main() {
   // The account may already hold shielded funds from an earlier run, so every assertion
   // below is on the *delta* rather than an absolute. Makes the script safely re-runnable.
   log('Reading any existing shielded balance');
-  await client.permits.getOrCreateSelfPermit();
+  await client.acp.getOrCreateSelfACP();
   const startHandle = await token.confidentialBalanceOf(me);
   const startBalance = BigInt(startHandle) === 0n
     ? 0n
@@ -120,13 +120,17 @@ async function main() {
   const transferAmount = expectedDelta / 2n;
   log(`Confidential transfer of ${formatUnits(transferAmount, Number(decimals))} to ${recipient}`);
 
-  const [encrypted] = await client
-    .encryptInputs([Encryptable.uint64(transferAmount)])
+  // SDK 0.7 returns per-input hashes plus one batch proof, and binds the consuming
+  // contract into the signed digest. The struct below is what the wrapper's ABI takes.
+  const item = Encryptable.uint64(transferAmount);
+  const [hash, proof] = await client
+    .encryptInputs([item])
+    .setConsumingContract(target.wrapper)
     .onStep((s, ctx) => { if (ctx?.isStart) console.log(`    … ${s}`); })
     .execute();
   ok('amount encrypted (ZK proof verified)');
 
-  const transferTx = await token.confidentialTransfer(recipient, encrypted);
+  const transferTx = await token.confidentialTransfer(recipient, hash, proof);
   ok(`tx ${transferTx.hash}`);
   await transferTx.wait();
   ok('confirmed');
@@ -164,12 +168,12 @@ async function main() {
   // ── 5 + 6. Decrypt for tx, then claim ──────────────────────────────
   const claim = claims[claims.length - 1];
   log('Decrypting burned amount (decryptForTx, no permit)');
-  const { decryptedValue, signature } = await client.decryptForTx(BigInt(claim.ctHash)).withoutPermit().execute();
+  const { decryptedValue, signature } = await client.decryptForTx(BigInt(claim.ctHash)).withoutACP().execute();
   ok(`decrypted ${formatUnits(decryptedValue, Number(decimals))} with a verifiable signature`);
 
   log('Claiming unshielded ETH');
   const ethBefore = await provider.getBalance(me);
-  const claimTx = await token.claimUnshielded(claim.ctHash, decryptedValue, signature);
+  const claimTx = await token.claimUnshielded(claim.id, decryptedValue, signature);
   ok(`tx ${claimTx.hash}`);
   const receipt = await claimTx.wait();
   ok('confirmed — proof verified on-chain');

@@ -24,11 +24,14 @@ export function CustomTabPanel(props: { children: React.ReactNode; index: number
 export const CONTRACTS_SEPOLIA = {
   "USDC": {
     public: getAddress("0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"),
-    shielded: getAddress(import.meta.env.VITE_WRAPPED_USDC_ADDRESS || "0x730Bb4ee9EA1cdB0B45C1DB01cA67a616D2D3C88")
+    // No fallback address. A stale default here is worse than none: it points the wallet
+    // at a wrapper from an earlier deployment, which now rejects every proof the current
+    // SDK produces, and does so while looking like the real thing.
+    shielded: getAddress(import.meta.env.VITE_WRAPPED_USDC_ADDRESS || "0x0000000000000000000000000000000000000000")
   },
   "ETH": {
     public: getAddress(import.meta.env.VITE_SEPOLIA_WETH_ADDRESS || "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9"),
-    shielded: getAddress(import.meta.env.VITE_WRAPPED_ETH_ADDRESS || "0x17CecF8090B945932e2F592168B636F7A0c986e8")
+    shielded: getAddress(import.meta.env.VITE_WRAPPED_ETH_ADDRESS || "0x0000000000000000000000000000000000000000")
   },
   "LINK": {
     public: getAddress("0x779877A7B0D9E8603169DdbD7836e478b4624789"),
@@ -92,6 +95,16 @@ const LEGACY_HIDDEN_CONTRACTS = [
   "0x2210264a3775d5fbc51b1b73667f5590230ac2bd", // WrappedUSDC_V2
   "0x5396bc5ed8754a9e8c703021288fc07d1d91b99d", // WrappedETH_V4 (cofhejs era)
   "0x98271a408126bb7e0bc2af8d78a063feaa642f13", // WrappedUSDC_V3 (cofhejs era)
+
+  // Retired when CoFHE moved to ACPs and cofhe-contracts 0.2. These were built against
+  // the old `InEuint64` input struct, whose proof digest the current verifier no longer
+  // produces — they can still be read, but nothing new can be encrypted into them.
+  "0xf63b60286c8985af10d5bac8de2800d7256532c7", // aeETH  Sepolia
+  "0xd030b2aa70dc793208b2b97888e7c0fa702aa078", // aeUSDC Sepolia
+  "0x9d4fba144600b07c81deea2efc55bdbdd7d52c15", // aeETH  Arbitrum Sepolia
+  "0xb9433565063443967fcb5a5969695c836593f905", // aeUSDC Arbitrum Sepolia
+  "0x5ea8e9a8e317d6248ba64715699a217067d56a37", // aeETH  Base Sepolia
+  "0xecddcfb7aee65f5dab530cc85587ef86196b4302", // aeUSDC Base Sepolia
 ];
 
 /**
@@ -116,8 +129,14 @@ export function getHiddenTokenAddresses(networkId: NetworkId): Set<string> {
   return hidden;
 }
 
-// Get explorer URL for the active network — accepts the full Network object
-// so custom networks can return their own configured explorer_url.
+/**
+ * Explorer base URL for a network, or "" when there is none.
+ *
+ * Returning "" rather than guessing matters now that most networks are user-added: an
+ * etherscan.io fallback pointed every link for an unknown chain at the wrong explorer,
+ * where the hash either shows nothing or — worse — resolves to an unrelated transaction
+ * that happens to share it. Callers must treat "" as "offer no link".
+ */
 export function getExplorerBaseForNetwork(networkOrId: { network_id?: NetworkId; explorer_url?: string; isCustom?: boolean } | NetworkId | undefined) {
   // If a full Network object is passed and it's a custom network with its own URL, use it
   if (networkOrId && typeof networkOrId === 'object') {
@@ -139,9 +158,9 @@ export function getExplorerBaseForNetwork(networkOrId: { network_id?: NetworkId;
       case NetworkId.Monad_Testnet: return "https://testnet.monadexplorer.com";
       case NetworkId.Avalanche_Fuji: return "https://testnet.snowtrace.io";
       default:
-        // For other built-in or unknown networks, fall back to their explorer_url if set
+        // A user-added chain carries its own explorer, or none at all.
         if (networkOrId.explorer_url) return networkOrId.explorer_url.replace(/\/+$/, '');
-        return "https://etherscan.io";
+        return "";
     }
   }
   // Legacy: called with just a NetworkId enum value
@@ -160,8 +179,32 @@ export function getExplorerBaseForNetwork(networkOrId: { network_id?: NetworkId;
     case NetworkId.Sei: return "https://seitrace.com";
     case NetworkId.Monad_Testnet: return "https://testnet.monadexplorer.com";
     case NetworkId.Avalanche_Fuji: return "https://testnet.snowtrace.io";
-    default: return "https://etherscan.io";
+    default: return "";
   }
+}
+
+/**
+ * Explorer link for a transaction, or "" when this network has no explorer.
+ *
+ * The empty string is the signal to render no link at all. A link built on an empty base
+ * resolves inside the extension, which looks like a broken button rather than an absent
+ * feature.
+ */
+export function explorerTxUrl(
+  networkOrId: { network_id?: NetworkId; explorer_url?: string; isCustom?: boolean } | NetworkId | undefined,
+  txHash: string
+): string {
+  const base = getExplorerBaseForNetwork(networkOrId);
+  return base ? `${base}/tx/${txHash}` : "";
+}
+
+/** Explorer link for an address, or "" when this network has no explorer. */
+export function explorerAddressUrl(
+  networkOrId: { network_id?: NetworkId; explorer_url?: string; isCustom?: boolean } | NetworkId | undefined,
+  address: string
+): string {
+  const base = getExplorerBaseForNetwork(networkOrId);
+  return base ? `${base}/address/${address}` : "";
 }
 
 // Shared input card style
@@ -190,42 +233,3 @@ export const ctaButtonSx = {
   transition: 'all 0.2s ease',
 };
 
-/**
- * Marketplace link for a specific NFT, or "" when the chain has none.
- *
- * OpenSea uses a different slug per chain and runs a separate testnet site. Returning ""
- * rather than a guessed URL keeps the card from offering a link that 404s.
- */
-export function getNftMarketplaceUrl(
-    networkId: NetworkId | number,
-    contractAddress: string,
-    tokenId: string,
-): string {
-    if (!contractAddress || !tokenId) return "";
-
-    const MAINNET_SLUGS: Record<number, string> = {
-        [NetworkId.Ethereum_Mainnet]: "ethereum",
-        [NetworkId.Arbitrum_One]: "arbitrum",
-        [NetworkId.Base_Mainnet]: "base",
-        [NetworkId.Optimism]: "optimism",
-        [NetworkId.Polygon]: "matic",
-        [NetworkId.Avalanche]: "avalanche",
-        [NetworkId.BNB_Chain]: "bsc",
-    };
-
-    const TESTNET_SLUGS: Record<number, string> = {
-        [NetworkId.Ethereum_Sepolia]: "sepolia",
-        [NetworkId.Arbitrum_Sepolia]: "arbitrum-sepolia",
-        [NetworkId.Base_Sepolia]: "base-sepolia",
-    };
-
-    const id = Number(networkId);
-
-    if (MAINNET_SLUGS[id]) {
-        return `https://opensea.io/assets/${MAINNET_SLUGS[id]}/${contractAddress}/${tokenId}`;
-    }
-    if (TESTNET_SLUGS[id]) {
-        return `https://testnets.opensea.io/assets/${TESTNET_SLUGS[id]}/${contractAddress}/${tokenId}`;
-    }
-    return "";
-}

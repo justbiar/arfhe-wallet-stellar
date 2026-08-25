@@ -74,12 +74,12 @@ const WRAPPER_ABI = [
   'function balanceOf(address) view returns (uint256)',
   'function balanceOfIsIndicator() view returns (bool)',
   'function confidentialBalanceOf(address) view returns (bytes32)',
-  'function getUserClaims(address) view returns (tuple(address to,bytes32 ctHash,uint64 requestedAmount,uint64 decryptedAmount,bool claimed)[])',
+  'function getUserClaims(address) view returns (tuple(bytes32 id,address to,bytes32 ctHash,uint64 decryptedAmount,bool claimed)[])',
   'function shield(address to, uint256 amount) returns (bytes32)',
   'function unshield(address from, address to, uint64 amount) returns (bytes32)',
-  'function claimUnshielded(bytes32 ctHash, uint64 decryptedAmount, bytes decryptionProof)',
-  'function claimUnshieldedBatch(bytes32[] ctHashes, uint64[] decryptedAmounts, bytes[] decryptionProofs)',
-  'function confidentialTransfer(address to, (uint256 ctHash, uint8 securityZone, uint8 utype, bytes signature) encryptedAmount) returns (bytes32)',
+  'function claimUnshielded(bytes32 id, uint64 decryptedAmount, bytes decryptionProof)',
+  'function claimUnshieldedBatch(bytes32[] ids, uint64[] decryptedAmounts, bytes[] decryptionProofs)',
+  'function confidentialTransfer(address to, bytes32 encryptedAmount, bytes inputProof) returns (bytes32)',
 ];
 
 /** Amount of the underlying token to shield, in its own decimals. */
@@ -209,7 +209,7 @@ async function main() {
   const client = createCofheClient(createCofheConfig({ supportedChains: [target.chain] }));
   const { publicClient, walletClient } = await Ethers6Adapter(provider, signer);
   await client.connect(publicClient, walletClient);
-  await client.permits.getOrCreateSelfPermit();
+  await client.acp.getOrCreateSelfACP();
   ok(`connected as ${client.connection.account}`);
 
   const startHandle = await wrapper.confidentialBalanceOf(me);
@@ -226,13 +226,13 @@ async function main() {
     ok(`${stale.length} claim(s) left open by an earlier run — settling them first`);
     const proofs = [];
     for (const c of stale) {
-      const { decryptedValue, signature } = await client.decryptForTx(BigInt(c.ctHash)).withoutPermit().execute();
-      proofs.push({ ctHash: c.ctHash, value: decryptedValue, signature });
+      const { decryptedValue, signature } = await client.decryptForTx(BigInt(c.ctHash)).withoutACP().execute();
+      proofs.push({ id: c.id, value: decryptedValue, signature });
     }
     const cleanupTx = proofs.length === 1
-      ? await wrapper.claimUnshielded(proofs[0].ctHash, proofs[0].value, proofs[0].signature)
+      ? await wrapper.claimUnshielded(proofs[0].id, proofs[0].value, proofs[0].signature)
       : await wrapper.claimUnshieldedBatch(
-          proofs.map((p) => p.ctHash), proofs.map((p) => p.value), proofs.map((p) => p.signature));
+          proofs.map((p) => p.id), proofs.map((p) => p.value), proofs.map((p) => p.signature));
     await cleanupTx.wait();
     ok(`recovered ${formatUnits(proofs.reduce((s, p) => s + p.value, 0n), Number(wrapperDecimals))} ${wrapperSymbol}`);
   }
@@ -284,13 +284,17 @@ async function main() {
   const transferAmount = expectedDelta / 2n;
   log(`Confidential transfer of ${formatUnits(transferAmount, Number(wrapperDecimals))} to ${recipient}`);
 
-  const [encrypted] = await client
-    .encryptInputs([Encryptable.uint64(transferAmount)])
+  // SDK 0.7 returns per-input hashes plus one batch proof, and binds the consuming
+  // contract into the signed digest. The struct below is what the wrapper's ABI takes.
+  const item = Encryptable.uint64(transferAmount);
+  const [hash, proof] = await client
+    .encryptInputs([item])
+    .setConsumingContract(wrapperAddress)
     .onStep((s, ctx) => { if (ctx?.isStart) console.log(`    … ${s}`); })
     .execute();
   ok('amount encrypted (ZK proof verified)');
 
-  const transferTx = await wrapper.confidentialTransfer(recipient, encrypted);
+  const transferTx = await wrapper.confidentialTransfer(recipient, hash, proof);
   ok(`tx ${transferTx.hash}`);
   await transferTx.wait();
   ok('confirmed');
@@ -327,7 +331,7 @@ async function main() {
   // ── 5 + 6. Decrypt for tx, then claim ──────────────────────────────
   const claim = open[open.length - 1];
   log('Decrypting the burned amount (decryptForTx, no permit)');
-  const { decryptedValue, signature } = await client.decryptForTx(BigInt(claim.ctHash)).withoutPermit().execute();
+  const { decryptedValue, signature } = await client.decryptForTx(BigInt(claim.ctHash)).withoutACP().execute();
   ok(`decrypted ${formatUnits(decryptedValue, Number(wrapperDecimals))} with a verifiable signature`);
 
   if (decryptedValue !== unshieldAmount) {
@@ -337,7 +341,7 @@ async function main() {
 
   log(`Claiming the unshielded ${tokenSymbol}`);
   const before = await underlying.balanceOf(me);
-  const claimTx = await wrapper.claimUnshielded(claim.ctHash, decryptedValue, signature);
+  const claimTx = await wrapper.claimUnshielded(claim.id, decryptedValue, signature);
   ok(`tx ${claimTx.hash}`);
   await claimTx.wait();
   ok('confirmed — proof verified on-chain');
@@ -385,14 +389,15 @@ async function main() {
 
     const settled = [];
     for (const c of open) {
-      const { decryptedValue, signature } = await client.decryptForTx(BigInt(c.ctHash)).withoutPermit().execute();
-      settled.push({ ctHash: c.ctHash, value: decryptedValue, signature });
+      const { decryptedValue, signature } = await client.decryptForTx(BigInt(c.ctHash)).withoutACP().execute();
+      // Decrypted from the handle, settled against the id — they are different values.
+      settled.push({ id: c.id, value: decryptedValue, signature });
     }
     ok('both claims decrypted with verifiable signatures');
 
     const beforeBatch = await underlying.balanceOf(me);
     const batchTx = await wrapper.claimUnshieldedBatch(
-      settled.map((s) => s.ctHash),
+      settled.map((s) => s.id),
       settled.map((s) => s.value),
       settled.map((s) => s.signature)
     );

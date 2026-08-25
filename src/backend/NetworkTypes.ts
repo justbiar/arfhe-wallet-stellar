@@ -120,6 +120,26 @@ export function isTestnetNetwork(networkId: NetworkId): boolean {
 }
 
 /** User-defined custom network configuration (persisted in localStorage) */
+/**
+ * A user's edits to a network the wallet ships with.
+ *
+ * Kept separate from {@link CustomNetworkConfig}: a built-in network still has its own
+ * identity, Alchemy wiring and FHE capability, and the user is amending it rather than
+ * defining it. Storing a full config instead would silently promote every edited network
+ * to a custom one and lose all of that.
+ *
+ * Every field is optional — an absent field means "keep whatever the wallet ships".
+ */
+export type NetworkOverride = {
+    /** Replaces the JSON-RPC endpoint. The single most common reason to edit a network. */
+    rpcUrl?: string;
+    /** Used when the primary is unreachable, so one dead provider does not strand a chain. */
+    fallbackRpcUrl?: string;
+    explorerUrl?: string;
+    networkName?: string;
+    currencySymbol?: string;
+};
+
 export type CustomNetworkConfig = {
     chainId: number;           // EVM chain ID (used as NetworkId)
     networkName: string;       // Display name (e.g. "Polygon Mainnet")

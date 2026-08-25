@@ -8,6 +8,7 @@
  *  4. Heartbeat keepalive — prevent SW from being killed during active monitoring
  *
  * Communication protocol (popup → SW):
+ *  BROADCAST_TX    — Send an already-signed transaction, then watch it
  *  WATCH_TX        — Add a TX hash to the monitoring watchlist
  *  REMOVE_TX       — Remove a TX from the watchlist
  *  GET_STATUS      — Get current SW state (pending TXs, last price, uptime)
@@ -216,6 +217,55 @@ async function watchTransaction(txData) {
   await syncBadge();
 
   return entry;
+}
+
+/**
+ * Broadcast an already-signed transaction and take over watching it.
+ *
+ * Deliberately does not retry on failure. A send that the node rejects (bad nonce,
+ * underpriced, already known) must surface to the user rather than be resubmitted
+ * blindly — and one that succeeded but whose *response* was lost is already on the
+ * network, where resending would risk a duplicate.
+ *
+ * @returns The transaction hash, once the node has accepted it.
+ */
+async function broadcastRawTransaction({ rawTx, networkId, rpcUrl, meta }) {
+  if (typeof rawTx !== "string" || !rawTx.startsWith("0x")) {
+    throw new Error("BROADCAST_TX requires a signed raw transaction");
+  }
+
+  const url = rpcUrl || getRpcUrl(networkId || 1);
+  if (!url) throw new Error("No RPC URL available for broadcasting");
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "eth_sendRawTransaction",
+      params: [rawTx],
+    }),
+  });
+
+  const json = await res.json();
+  if (json.error) throw new Error(json.error.message || "Transaction rejected by the node");
+  if (!json.result) throw new Error("Node accepted the transaction but returned no hash");
+
+  // Watch it here rather than asking the popup to register it separately: the popup may
+  // already be gone, and an unwatched transaction is exactly the case this exists for.
+  await watchTransaction({
+    hash: json.result,
+    networkId,
+    rpcUrl: url,
+    from: meta?.from,
+    to: meta?.to,
+    value: meta?.value,
+    symbol: meta?.symbol,
+    type: meta?.type,
+  });
+
+  return json.result;
 }
 
 /**
@@ -742,6 +792,18 @@ async function handleMessage(message) {
     case "WATCH_TX": {
       const entry = await watchTransaction(message);
       return { success: true, entry };
+    }
+
+    // The popup signs, the worker sends. From the moment the user confirms, the
+    // transaction belongs to a context that outlives the window they confirmed it in —
+    // closing the popup mid-send used to abort the fetch and lose the transaction
+    // entirely, even though it had already been authorised.
+    //
+    // No key material is involved: a signed transaction is public the instant it is
+    // broadcast, so handing it over costs nothing the network is not about to learn.
+    case "BROADCAST_TX": {
+      const hash = await broadcastRawTransaction(message);
+      return { success: true, hash };
     }
 
     case "REMOVE_TX": {

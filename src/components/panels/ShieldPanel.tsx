@@ -26,7 +26,7 @@ import {
 import { Alert } from "@mui/material";
 import { WalletContext } from "../../AppContext.js";
 import FheEncryptingOverlay from "../FheEncryptingOverlay.js";
-import { getContractsForNetwork, getExplorerBaseForNetwork, inputCardSx, ctaButtonSx } from "./shared.js";
+import { getContractsForNetwork, explorerTxUrl, inputCardSx, ctaButtonSx } from "./shared.js";
 import { toUserMessage } from "../../backend/UserFacingError.js";
 import { isFheNetwork } from "../../backend/NetworkTypes.js";
 
@@ -44,12 +44,38 @@ interface ShieldableToken {
   isNative: boolean;
   /** Decrypted confidential balance, as a decimal string. "" when not yet known. */
   shieldedBalance: string;
+  /** Ciphertext exists but could not be decrypted this time. */
+  decryptFailed: boolean;
   /** Superseded wrapper: withdrawable, but never a shield target. */
   isLegacy: boolean;
 }
 
+/**
+ * A request from the surrounding page to focus a particular token and mode.
+ *
+ * `seq` is what makes it re-apply: clicking "Unshield" on the same row twice is two
+ * distinct requests, and comparing the mode/token alone would swallow the second.
+ */
+export interface ShieldFocusRequest {
+  mode: "shield" | "unshield";
+  /** "ETH" for native, the underlying address to shield, the wrapper to unshield. */
+  tokenKey?: string;
+  seq: number;
+}
+
+interface ShieldPanelProps {
+  /** Renders a back arrow in the header. Omitted on the Privacy page, which has its own. */
+  onBack?: () => void;
+  /** Drop the title row when the surrounding page already shows one. */
+  hideTitle?: boolean;
+  /** Focus a token/mode from outside — see `ShieldFocusRequest`. */
+  focus?: ShieldFocusRequest;
+  /** Fired after a shield or unshield settles, so the page can refresh its holdings. */
+  onCompleted?: () => void;
+}
+
 // --- Shield Panel (Privacy) ---
-export default function ShieldPanel() {
+export default function ShieldPanel({ onBack, hideTitle, focus, onCompleted }: ShieldPanelProps = {}) {
   const { t } = useTranslation();
   const context = useContext(WalletContext);
   const network = context?.networkProvider?.getActiveNetwork();
@@ -111,7 +137,7 @@ export default function ShieldPanel() {
     if (nativeWrapper && nativeWrapper !== ZERO_ADDRESS) {
       list.push({
         key: "ETH", symbol: "ETH", underlying: "",
-        wrapper: nativeWrapper, isNative: true, shieldedBalance: "", isLegacy: false,
+        wrapper: nativeWrapper, isNative: true, shieldedBalance: "", decryptFailed: false, isLegacy: false,
       });
     }
     setOptions([...list]);
@@ -124,7 +150,11 @@ export default function ShieldPanel() {
         const holdings = await network.getShieldedPortfolio(activeAccount);
         setShielded(
           holdings
-            .filter((h) => parseFloat(h.balance) > 0)
+            // Keep anything that holds value *or* that we simply could not read. Dropping
+            // the unreadable ones removed the only route to withdraw them: the wallet
+            // would show no shielded tokens and offer nothing to unshield, while the
+            // ciphertext sat on-chain the whole time.
+            .filter((h) => parseFloat(h.balance) > 0 || h.decryptFailed)
             .map((h) => ({
               key: h.wrapper,
               symbol: h.symbol,
@@ -132,6 +162,7 @@ export default function ShieldPanel() {
               wrapper: h.wrapper,
               isNative: h.isNative,
               shieldedBalance: h.balance,
+              decryptFailed: h.decryptFailed,
               isLegacy: h.isLegacy,
             }))
         );
@@ -166,6 +197,7 @@ export default function ShieldPanel() {
           wrapper: wrappers.get(b.contractAddress.toLowerCase()) ?? null,
           isNative: false,
           shieldedBalance: "",
+          decryptFailed: false,
           isLegacy: false,
         });
       }
@@ -178,6 +210,17 @@ export default function ShieldPanel() {
   }, [network, activeAccount, context]);
 
   useEffect(() => { void loadOptions(); }, [loadOptions]);
+
+  // Apply a focus request from the page. Keyed on `seq` so repeating the same request
+  // still lands, and deliberately not on `focus` itself — the object identity changes on
+  // every parent render, which would fight the user's own dropdown choice.
+  const appliedFocus = React.useRef<number>(-1);
+  useEffect(() => {
+    if (!focus || focus.seq === appliedFocus.current) return;
+    appliedFocus.current = focus.seq;
+    setMode(focus.mode);
+    if (focus.tokenKey) setToken(focus.tokenKey);
+  }, [focus]);
 
   // Fall back to the first available token if the current selection disappears
   // (network switch, or a token whose balance dropped to zero).
@@ -267,6 +310,10 @@ export default function ShieldPanel() {
 
       setPhase("idle");
       setLoading(false);
+      // Balances just moved between the public and confidential sides; whoever owns this
+      // panel needs to know before its own numbers go stale.
+      onCompleted?.();
+      void loadOptions();
       setTimeout(() => {
         setAmount("");
         setStatus("");
@@ -303,14 +350,18 @@ export default function ShieldPanel() {
       />
 
       {/* Header */}
+      {!hideTitle && (
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-        <IconButton
-          size="small"
-          onClick={() => window.dispatchEvent(new CustomEvent('return-to-send-menu'))}
-          sx={{ mr: -0.5, color: 'text.secondary', p: 0.5 }}
-        >
-          <ArrowBack sx={{ fontSize: 20 }} />
-        </IconButton>
+        {onBack && (
+          <IconButton
+            size="small"
+            onClick={onBack}
+            aria-label="Back"
+            sx={{ mr: -0.5, color: 'text.secondary', p: 0.5 }}
+          >
+            <ArrowBack sx={{ fontSize: 20 }} />
+          </IconButton>
+        )}
         <Shield sx={{ fontSize: 20, color: 'secondary.main' }} />
         <Typography variant="subtitle1" fontWeight={700}>
           {t("privacy.title")}
@@ -318,6 +369,7 @@ export default function ShieldPanel() {
         <Chip label="FHE" size="small" color="secondary" variant="outlined"
           sx={{ height: 20, fontSize: '0.65rem', fontWeight: 700 }} />
       </Stack>
+      )}
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
         {mode === "shield"
           ? t("privacy.shieldTokens")
@@ -328,9 +380,11 @@ export default function ShieldPanel() {
       {/* Mode Toggle */}
       <Paper elevation={0} sx={{
         display: 'flex',
-        borderRadius: 2.5,
+        borderRadius: '0px',
         p: 0.5,
         bgcolor: 'action.hover',
+        border: '1px solid',
+        borderColor: 'divider',
         mb: 1.5
       }}>
         <Button
@@ -341,11 +395,11 @@ export default function ShieldPanel() {
           onClick={() => setMode("shield")}
           startIcon={<LockOutlined sx={{ fontSize: 16 }} />}
           sx={{
-            borderRadius: 2,
+            borderRadius: '0px',
             py: 1,
             fontWeight: 600,
             fontSize: '0.8rem',
-            boxShadow: mode === "shield" ? '0 2px 8px rgba(16, 185, 129, 0.3)' : 'none',
+            boxShadow: 'none',
           }}
         >
           {t("privacy.shield")}
@@ -358,11 +412,11 @@ export default function ShieldPanel() {
           onClick={() => setMode("unshield")}
           startIcon={<LockOpen sx={{ fontSize: 16 }} />}
           sx={{
-            borderRadius: 2,
+            borderRadius: '0px',
             py: 1,
             fontWeight: 600,
             fontSize: '0.8rem',
-            boxShadow: mode === "unshield" ? '0 2px 8px rgba(245, 158, 11, 0.3)' : 'none',
+            boxShadow: 'none',
           }}
         >
           {t("privacy.unshield")}
@@ -370,7 +424,7 @@ export default function ShieldPanel() {
       </Paper>
 
       {/* Amount Input Card */}
-      <Paper elevation={0} sx={inputCardSx}>
+      <Paper elevation={0} sx={{ ...inputCardSx, borderRadius: '0px' }}>
         <Typography variant="caption" color="text.secondary" fontWeight={600}>
           {mode === "shield" ? t("privacy.amountToShield") : t("privacy.amountToUnshield")}
         </Typography>
@@ -397,7 +451,7 @@ export default function ShieldPanel() {
               fontWeight: 700,
               fontSize: '0.9rem',
               bgcolor: 'background.paper',
-              borderRadius: 2,
+              borderRadius: '0px',
               px: 1.5,
               py: 0.5,
               minWidth: 80,
@@ -417,7 +471,12 @@ export default function ShieldPanel() {
 
         {/* Unshielding more than the balance cannot revert on-chain — the protocol moves
             an encrypted zero instead — so the amount is shown rather than left to guess. */}
-        {mode === "unshield" && selected?.shieldedBalance && (
+        {mode === "unshield" && selected?.decryptFailed && (
+          <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 0.5 }}>
+            {t("privacy.couldNotDecryptHint")}
+          </Typography>
+        )}
+        {mode === "unshield" && !selected?.decryptFailed && selected?.shieldedBalance && (
           <Stack direction="row" alignItems="center" spacing={1} sx={{ mt: 0.5 }}>
             <Typography variant="caption" color="text.secondary">
               {t("privacy.available")}: {selected.shieldedBalance} {selected.symbol}
@@ -440,7 +499,7 @@ export default function ShieldPanel() {
           <Paper elevation={0} sx={{
             mt: 1.5,
             p: 1.5,
-            borderRadius: 2.5,
+            borderRadius: '0px',
             bgcolor: isError ? 'error.main' : isDone ? 'success.main' : 'primary.main',
             color: '#fff',
           }}>
@@ -452,14 +511,18 @@ export default function ShieldPanel() {
                 <Typography variant="caption" sx={{ fontFamily: 'monospace', opacity: 0.9 }}>
                   {txHash.slice(0, 10)}...{txHash.slice(-6)}
                 </Typography>
-                <Link
-                  href={`${getExplorerBaseForNetwork(network)}/tx/${txHash}`}
-                  target="_blank"
-                  rel="noopener"
-                  sx={{ color: '#fff', display: 'flex', alignItems: 'center' }}
-                >
-                  <OpenInNew sx={{ fontSize: 14 }} />
-                </Link>
+                {/* A user-added chain may have no explorer configured; showing a link
+                    that goes nowhere reads as a broken button. */}
+                {explorerTxUrl(network, txHash) && (
+                  <Link
+                    href={explorerTxUrl(network, txHash)}
+                    target="_blank"
+                    rel="noopener"
+                    sx={{ color: '#fff', display: 'flex', alignItems: 'center' }}
+                  >
+                    <OpenInNew sx={{ fontSize: 14 }} />
+                  </Link>
+                )}
               </Stack>
             )}
           </Paper>
@@ -471,14 +534,14 @@ export default function ShieldPanel() {
           withdrawable — but shielding more into it would keep growing a pool the rest of
           the wallet has moved off. Say what to do rather than just flagging it. */}
       {mode === "unshield" && selected?.isLegacy && (
-        <Alert severity="warning" sx={{ mt: 1.5, borderRadius: 2.5, fontSize: '0.78rem' }}>
+        <Alert severity="warning" sx={{ mt: 1.5, borderRadius: '0px', fontSize: '0.78rem' }}>
           {t("privacy.legacyWrapperHint", { symbol: selected.symbol })}
         </Alert>
       )}
 
       {/* Nothing shielded yet — say so instead of leaving an empty dropdown. */}
       {mode === "unshield" && !optionsLoading && shielded.length === 0 && (
-        <Alert severity="info" sx={{ mt: 1.5, borderRadius: 2.5, fontSize: '0.78rem' }}>
+        <Alert severity="info" sx={{ mt: 1.5, borderRadius: '0px', fontSize: '0.78rem' }}>
           {t("privacy.nothingShielded")}
         </Alert>
       )}
@@ -488,7 +551,7 @@ export default function ShieldPanel() {
       {mode === "shield" && selected && !selected.wrapper && !optionsLoading && (
         <Alert
           severity="info"
-          sx={{ mt: 1.5, borderRadius: 2.5, fontSize: '0.78rem' }}
+          sx={{ mt: 1.5, borderRadius: '0px', fontSize: '0.78rem' }}
           action={
             <Button
               size="small"
@@ -515,9 +578,9 @@ export default function ShieldPanel() {
         sx={{
           ...ctaButtonSx,
           mt: 2,
-          boxShadow: mode === "shield"
-            ? '0 4px 14px rgba(16, 185, 129, 0.3)'
-            : '0 4px 14px rgba(245, 158, 11, 0.3)',
+          borderRadius: '0px',
+          boxShadow: 'none',
+          '&:hover': { boxShadow: 'none', transform: 'none' },
         }}
         endIcon={loading ? <CircularProgress size={18} color="inherit" /> : <ArrowForward />}
       >

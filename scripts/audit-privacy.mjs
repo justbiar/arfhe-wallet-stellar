@@ -74,8 +74,8 @@ const SURFACE = new Interface([
   'function shieldWrappedNative(address to, uint256 value) returns (bytes32)',
   'function shield(address to, uint256 amount) returns (bytes32)',
   'function unshield(address from, address to, uint64 amount) returns (bytes32)',
-  'function claimUnshielded(bytes32 ctHash, uint64 decryptedAmount, bytes decryptionProof)',
-  'function confidentialTransfer(address to, (uint256 ctHash, uint8 securityZone, uint8 utype, bytes signature) encryptedAmount) returns (bytes32)',
+  'function claimUnshielded(bytes32 id, uint64 decryptedAmount, bytes decryptionProof)',
+  'function confidentialTransfer(address to, bytes32 encryptedAmount, bytes inputProof) returns (bytes32)',
   'event Transfer(address indexed from, address indexed to, uint256 value)',
   'event ConfidentialTransfer(address indexed from, address indexed to, bytes32 indexed amount)',
 ]);
@@ -117,7 +117,7 @@ async function main() {
   const client = createCofheClient(createCofheConfig({ supportedChains: [chains.sepolia] }));
   const { publicClient, walletClient } = await Ethers6Adapter(provider, attacker);
   await client.connect(publicClient, walletClient);
-  await client.permits.getOrCreateSelfPermit();
+  await client.acp.getOrCreateSelfACP();
 
   const tokens = await collectTokens(provider);
   console.log(`Kapsam     : ${tokens.length} sarmalayıcı (${tokens.map((t) => t.label).join(', ')})`);
@@ -146,12 +146,12 @@ async function main() {
       else pass('slot değeri tutamaç görünümünde, düz miktar değil');
     }
 
-    console.log(`\n  [2] İzinsiz çözme — decryptForTx().withoutPermit()`);
+    console.log(`\n  [2] İzinsiz çözme — decryptForTx().withoutACP()`);
     if (BigInt(handle) === 0n) {
       pass('bakiye tutamacı sıfır (hiç işlem yok) — çözecek bir şey yok');
     } else {
       try {
-        const r = await client.decryptForTx(handle).withoutPermit().set404RetryTimeout(4000).execute();
+        const r = await client.decryptForTx(handle).withoutACP().set404RetryTimeout(4000).execute();
         fail(`bakiye çözüldü: ${formatUnits(r.decryptedValue, decimals)}`);
       } catch (e) {
         pass(`reddedildi — ${short(e)}`);

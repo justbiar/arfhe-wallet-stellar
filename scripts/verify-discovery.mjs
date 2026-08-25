@@ -144,7 +144,7 @@ async function runOne(key) {
   const client = createCofheClient(createCofheConfig({ supportedChains: [target.chain] }));
   const { publicClient, walletClient } = await Ethers6Adapter(provider, signer);
   await client.connect(publicClient, walletClient);
-  await client.permits.getOrCreateSelfPermit();
+  await client.acp.getOrCreateSelfACP();
 
   const holdings = [];
   for (const address of active) {

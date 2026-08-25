@@ -12,10 +12,9 @@ const APP_VERSION: string = typeof __APP_VERSION__ === "string" ? __APP_VERSION_
 import { useContext, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Box, Typography, Container, Paper, List, ListItem, ListItemButton, ListItemText, ListItemIcon, Switch, Chip, IconButton, alpha, useTheme, Stack, Divider, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Button, CircularProgress } from '@mui/material';
-import { Notifications, DarkMode, Language, Security, Lock, AddCircleOutline, Delete, Wifi, Check, Close, Fingerprint, PrivacyTip, Gavel, Info, OpenInNew } from '@mui/icons-material';
+import { Notifications, DarkMode, Language, Security, Lock, Wifi, ChevronRight, Check, Close, Fingerprint, PrivacyTip, Gavel, Info, OpenInNew } from '@mui/icons-material';
 import { ColorModeContext } from '../ThemeContext';
 import { WalletContext } from '../AppContext';
-import AddNetworkModal from '../components/AddNetworkModal';
 import { CustomNetworkConfig } from '../backend/NetworkTypes';
 import { useToast } from '../components/ToastProvider';
 import { useTranslation } from 'react-i18next';
@@ -30,14 +29,14 @@ export default function Settings() {
     const theme = useTheme();
     const { t, i18n } = useTranslation();
 
-    const [addNetworkOpen, setAddNetworkOpen] = useState(false);
+    /** Just the count for the row's badge — the list itself lives on its own screen. */
+    const networkCount = walletContext?.networkProvider?.listAllNetworks().length ?? 0;
     const [langDialogOpen, setLangDialogOpen] = useState(false);
     const [biometricSupported, setBiometricSupported] = useState(false);
     const [biometricEnabled, setBiometricEnabled] = useState(BiometricService.isEnabled());
     const [biometricPasswordDialogOpen, setBiometricPasswordDialogOpen] = useState(false);
     const [biometricPassword, setBiometricPassword] = useState("");
     const [biometricLoading, setBiometricLoading] = useState(false);
-    const customNetworks = walletContext?.networkProvider?.getCustomNetworks() ?? [];
 
     const currentLang = LANGUAGES.find(l => l.code === i18n.language) || LANGUAGES[0];
 
@@ -79,20 +78,6 @@ export default function Settings() {
         } finally {
             setBiometricLoading(false);
         }
-    };
-
-    const handleAddNetwork = (config: CustomNetworkConfig) => {
-        try {
-            walletContext?.networkProvider?.addCustomNetwork(config);
-            showToast(`${config.networkName} ${t('settings.networkAdded')}`, "success");
-        } catch (err) {
-            showToast((err instanceof Error ? err.message : String(err)) || t('settings.failedAddNetwork'), "error");
-        }
-    };
-
-    const handleRemoveNetwork = (chainId: number, name: string) => {
-        walletContext?.networkProvider?.removeCustomNetwork(chainId);
-        showToast(`${name} ${t('settings.networkRemoved')}`, "info");
     };
 
     return (
@@ -138,80 +123,29 @@ export default function Settings() {
                     </List>
                 </Paper>
 
-                {/* Custom Networks Section */}
-                <Typography variant="h6" fontWeight={700} sx={{ mb: 1.5, mt: 2.5 }}>
-                    {t('settings.customNetworks')}
-                </Typography>
-
+                {/* Networks now have their own screen: the list grows with whatever the
+                    user adds, and each row carries an editable endpoint. Left inline it
+                    buried the rest of Settings under it. */}
                 <Paper
                     elevation={0}
-                    sx={{
-                        borderRadius: 4,
-                        overflow: 'hidden',
-                        mb: 1.5,
-                        border: '1px solid',
-                        borderColor: alpha(theme.palette.primary.main, 0.1),
-                    }}
+                    sx={{ borderRadius: 4, overflow: 'hidden', mb: 2, border: '1px solid rgba(0,0,0,0.05)' }}
                 >
-                    {/* Add Network Button */}
-                    <ListItemButton
-                        onClick={() => setAddNetworkOpen(true)}
-                        sx={{
-                            py: 1.5,
-                            gap: 1.5,
-                            borderBottom: customNetworks.length > 0 ? `1px solid ${alpha(theme.palette.divider, 0.5)}` : 'none',
-                        }}
-                    >
-                        <AddCircleOutline sx={{ color: 'primary.main', fontSize: 22 }} />
-                        <ListItemText
-                            primary={t('settings.addCustomNetwork')}
-                            secondary={t('settings.connectEvmChain')}
-                            primaryTypographyProps={{ fontWeight: 600, color: 'primary.main' }}
-                            secondaryTypographyProps={{ fontSize: 12 }}
-                        />
-                    </ListItemButton>
-
-                    {/* Custom Network List */}
-                    {customNetworks.map((net, index) => (
-                        <Box
-                            key={net.chainId}
-                            sx={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                px: 2,
-                                py: 1.5,
-                                borderBottom: index < customNetworks.length - 1 ? `1px solid ${alpha(theme.palette.divider, 0.3)}` : 'none',
-                            }}
-                        >
-                            <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: net.iconColor || '#404040', mr: 1.5, flexShrink: 0 }} />
-                            <Box sx={{ flex: 1, minWidth: 0 }}>
-                                <Typography fontWeight={600} fontSize={14} noWrap>
-                                    {net.networkName}
-                                </Typography>
-                                <Stack direction="row" spacing={0.5} alignItems="center" mt={0.3}>
-                                    <Chip label={`Chain ${net.chainId}`} size="small" variant="outlined" sx={{ height: 18, fontSize: 10, fontWeight: 600 }} />
-                                    <Chip label={net.currencySymbol} size="small" color="primary" variant="outlined" sx={{ height: 18, fontSize: 10, fontWeight: 600 }} />
-                                    <Wifi sx={{ fontSize: 12, color: 'success.main', ml: 0.5 }} />
-                                </Stack>
-                            </Box>
-                            <IconButton
+                    <List disablePadding>
+                        <ListItemButton onClick={() => navigate('/settings/networks')}>
+                            <ListItemIcon><Wifi /></ListItemIcon>
+                            <ListItemText
+                                primary={t('network.allNetworks')}
+                                secondary={t('network.allNetworksDesc')}
+                            />
+                            <Chip
+                                label={networkCount}
                                 size="small"
-                                aria-label={`Remove ${net.networkName} network`}
-                                onClick={() => handleRemoveNetwork(net.chainId, net.networkName)}
-                                sx={{ color: 'error.main', ml: 1 }}
-                            >
-                                <Delete sx={{ fontSize: 18 }} />
-                            </IconButton>
-                        </Box>
-                    ))}
-
-                    {customNetworks.length === 0 && (
-                        <Box sx={{ px: 3, py: 1.5, textAlign: 'center' }}>
-                            <Typography variant="caption" color="text.disabled">
-                                {t('settings.noCustomNetworks')}
-                            </Typography>
-                        </Box>
-                    )}
+                                variant="outlined"
+                                sx={{ height: 20, fontSize: 11, fontWeight: 700, mr: 1 }}
+                            />
+                            <ChevronRight sx={{ fontSize: 18, color: 'text.disabled' }} />
+                        </ListItemButton>
+                    </List>
                 </Paper>
 
                 {/* Legal Section */}
@@ -262,12 +196,6 @@ export default function Settings() {
                 </Box>
             </Container>
 
-            {/* Add Network Modal */}
-            <AddNetworkModal
-                open={addNetworkOpen}
-                onClose={() => setAddNetworkOpen(false)}
-                onAdd={handleAddNetwork}
-            />
 
             {/* Language Selector Dialog */}
             <Dialog open={langDialogOpen} onClose={() => setLangDialogOpen(false)} maxWidth="xs" fullWidth aria-labelledby="lang-dialog-title" PaperProps={{ sx: { borderRadius: 3 } }}>

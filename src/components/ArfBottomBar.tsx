@@ -6,12 +6,10 @@ import {
   Drawer,
   Box,
   Paper,
-  Stack,
 } from "@mui/material";
 import type { BoxProps } from "@mui/material";
 import { History, Home, Send, Hub, Explore } from "@mui/icons-material";
 import ArfBottomMenu from "./ArfBottomMenu";
-import ShieldPanel from "./panels/ShieldPanel.js";
 import { useNavigate, useLocation } from "react-router";
 import { useTheme } from "@mui/material";
 
@@ -28,7 +26,6 @@ function ArfBottomBar() {
   const location = useLocation();
   const theme = useTheme();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [shieldDrawerOpen, setShieldDrawerOpen] = useState(false);
 
   useEffect(() => {
     const handleOpen = (e: Event) => {
@@ -37,26 +34,15 @@ function ArfBottomBar() {
         window.dispatchEvent(new CustomEvent('arf-menu-set-tab', { detail: (e as CustomEvent).detail }));
       }, 100);
     };
-    const handleShieldOpen = () => {
-      setDrawerOpen(false); // Close send menu first
-      setTimeout(() => setShieldDrawerOpen(true), 200);
-    };
-    const handleReturnToSend = () => {
-      setShieldDrawerOpen(false);
-      setTimeout(() => setDrawerOpen(true), 200);
-    };
-    // Dismiss without reopening the send menu — used when navigating away to /privacy.
-    const handleShieldClose = () => setShieldDrawerOpen(false);
+    // Shielding lives on /privacy now. The drawer has to shut before the route changes,
+    // or the send menu stays mounted over the page the user just navigated to.
+    const handleClose = () => setDrawerOpen(false);
 
     window.addEventListener('open-arf-menu', handleOpen);
-    window.addEventListener('open-shield-panel', handleShieldOpen);
-    window.addEventListener('return-to-send-menu', handleReturnToSend);
-    window.addEventListener('close-shield-panel', handleShieldClose);
+    window.addEventListener('close-arf-menu', handleClose);
     return () => {
       window.removeEventListener('open-arf-menu', handleOpen);
-      window.removeEventListener('open-shield-panel', handleShieldOpen);
-      window.removeEventListener('return-to-send-menu', handleReturnToSend);
-      window.removeEventListener('close-shield-panel', handleShieldClose);
+      window.removeEventListener('close-arf-menu', handleClose);
     };
   }, []);
 
@@ -183,32 +169,6 @@ function ArfBottomBar() {
         <ArfBottomMenu />
       </Drawer>
 
-      {/* Shield Panel Drawer */}
-      <Drawer
-        anchor="bottom"
-        open={shieldDrawerOpen}
-        onClose={() => setShieldDrawerOpen(false)}
-        aria-label="Shield panel"
-        PaperProps={{
-          sx: {
-            borderTopLeftRadius: 24,
-            borderTopRightRadius: 24,
-            bgcolor: 'background.paper',
-            backgroundImage: 'none',
-            maxWidth: '600px',
-            mx: 'auto',
-            maxHeight: '80vh',
-            overflowY: 'auto',
-          }
-        }}
-      >
-        <Box sx={{ px: 2, pt: 1, pb: 2 }}>
-          <Stack direction="row" justifyContent="center" sx={{ mb: 1 }}>
-            <Box sx={{ width: 36, height: 4, borderRadius: 2, bgcolor: 'divider' }} />
-          </Stack>
-          <ShieldPanel />
-        </Box>
-      </Drawer>
     </Box>
   );
 }

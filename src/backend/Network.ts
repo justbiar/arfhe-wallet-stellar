@@ -10,6 +10,8 @@ import { ExplorerService } from "./ExplorerService.js";
 import { withRetry, fetchWithTimeout, wssRpcCall, classifyError, NetworkErrorType } from "./NetworkErrorHandler.js";
 import type { RetryOptions } from "./NetworkErrorHandler.js";
 import type { ShieldedTokenMeta, UnshieldClaim, ShieldedHolding } from "../types/fhe.js";
+import { rpcClient } from "./RpcClient.js";
+import { notifyTxConfirmed } from "./TxNotifier.js";
 import type { OwnedNftItem } from "../types/nft.js";
 import type PendingClaimQueue from "./PendingClaimQueue.js";
 
@@ -34,6 +36,14 @@ class Network {
 
   api_key?: string;
   rpc_url?: string;
+  /**
+   * Secondary endpoint, used only when the primary cannot be reached.
+   *
+   * A single RPC is a single point of failure for the whole chain: when it rate-limits or
+   * goes down, every balance, every gas estimate and every send fails at once. This is the
+   * user's escape hatch, set from the network editor.
+   */
+  fallbackRpcUrl?: string;
   explorer_url?: string;
   currency_symbol: string = "ETH";
   alchemy?: Alchemy;
@@ -222,27 +232,48 @@ class Network {
       );
     }
 
-    // HTTP / HTTPS — use fetch
+    // HTTP / HTTPS — use fetch.
+    //
+    // Everything read goes through the shared client, which serves a recent answer, joins
+    // an identical request already in flight, and caps how many connections this host has
+    // open. Without it, mounting three screens at once produced three identical bursts and
+    // the provider answered with 429.
     const body = JSON.stringify({ id: 1, jsonrpc: "2.0", method, params });
     const headers = this.FETCH_HEADERS;
 
-    return withRetry(
-      async () => {
-        const response = await fetchWithTimeout(rpcUrl, { method: "POST", headers, body }, 15_000);
-        const json = await response.json();
-        if (json.error) throw new Error(json.error.message);
-        return json.result;
-      },
-      {
-        maxRetries: 2,
-        initialDelayMs: 800,
-        onRetry: (_attempt, _max, _err) => { },
-        shouldRetry: (err) => {
-          if (err.type === NetworkErrorType.RpcError || err.type === NetworkErrorType.UserError) return false;
-          return err.retryable;
-        },
+    const post = async (url: string) => {
+      const response = await fetchWithTimeout(url, { method: "POST", headers, body }, 15_000);
+      const json = await response.json();
+      if (json.error) throw new Error(json.error.message);
+      return json.result;
+    };
+
+    return rpcClient.request(rpcUrl, method, params, async () => {
+      try {
+        return await withRetry(() => post(rpcUrl), {
+          maxRetries: 2,
+          initialDelayMs: 800,
+          onRetry: (_attempt, _max, err) => {
+            if (err.type === NetworkErrorType.RateLimited) rpcClient.noteRateLimited();
+          },
+          shouldRetry: (err) => {
+            if (err.type === NetworkErrorType.RpcError || err.type === NetworkErrorType.UserError) return false;
+            return err.retryable;
+          },
+        });
+      } catch (err) {
+        // Fall back only for transport-level failures. An RPC that answered with an error
+        // gave a real answer about the chain, and asking a different node would not change
+        // it — retrying there would just double the load for the same rejection.
+        const classified = classifyError(err);
+        const worthFailover =
+          classified.type !== NetworkErrorType.RpcError &&
+          classified.type !== NetworkErrorType.UserError;
+
+        if (!this.fallbackRpcUrl || !worthFailover) throw err;
+        return post(this.fallbackRpcUrl);
       }
-    );
+    });
   }
 
   /**
@@ -285,6 +316,10 @@ class Network {
         chunk.map((r, i) => ({ id: i, jsonrpc: "2.0", method: r.method, params: r.params }))
       );
 
+      // A batch is one connection carrying many calls, so it cannot be keyed or cached —
+      // but it must still queue behind the same per-host limit, or the largest requests
+      // would be the ones that bypass it.
+      const releaseSlot = await rpcClient.slot(rpcUrl);
       try {
         const response = await fetchWithTimeout(
           rpcUrl,
@@ -302,9 +337,15 @@ class Network {
           results[index] = entry.error ? null : entry.result;
         }
       } catch {
-        // Batch rejected or malformed — redo just this chunk one call at a time.
+        // Batch rejected or malformed — redo just this chunk one call at a time. The slot
+        // is handed back first: the retry re-enters through `call`, which takes its own,
+        // and holding both would deadlock a saturated host against itself.
+        releaseSlot();
         const individual = await this.callEachLimited(chunk);
         individual.forEach((value, i) => { results[offset + i] = value; });
+        continue;
+      } finally {
+        releaseSlot();
       }
     }
 
@@ -641,25 +682,34 @@ class Network {
             }
           }
 
-          // Query balanceOf for each discovered contract
+          // One batched request for every discovered contract.
+          //
+          // This used to be a sequential `await` per address, each with its own retry
+          // budget. A chain the user has been active on surfaces dozens of contracts, so
+          // adding a network meant dozens of serial round trips before the first balance
+          // appeared — and a burst the provider answers with 429.
           const balanceOfSig = "0x70a08231000000000000000000000000" + address.toLowerCase().replace("0x", "");
-          for (const contractAddr of discoveredContracts) {
-            try {
-              const result = await this.call("eth_call", [{
-                to: contractAddr,
-                data: balanceOfSig
-              }, "latest"]);
+          const contracts = [...discoveredContracts];
+          const balances = await this.callBatch(
+            contracts.map((to) => ({ method: "eth_call", params: [{ to, data: balanceOfSig }, "latest"] }))
+          );
 
-              if (result && result !== "0x" && BigInt(result) > 0n) {
+          contracts.forEach((contractAddr, i) => {
+            const result = balances[i];
+            // `null` here is a failed read, not a zero balance — skipping it is right
+            // either way, since a token we cannot price or read has nothing to show.
+            if (!result || result === "0x") return;
+            try {
+              if (BigInt(result) > 0n) {
                 tokenBalancesRaw.push({
                   contractAddress: contractAddr,
-                  tokenBalance: BigInt(result).toString()
+                  tokenBalance: BigInt(result).toString(),
                 });
               }
-            } catch (e) {
-              // Not a valid ERC20 or call failed — skip
+            } catch {
+              // Not a valid ERC-20 response — skip.
             }
-          }
+          });
         }
       } catch (e) {
       }
@@ -800,6 +850,67 @@ class Network {
     };
 
     return [nativeBalanceData, ...processedTokens];
+  }
+
+
+  /**
+   * Sign a transaction locally, then get it onto the network in a context that outlives
+   * this popup.
+   *
+   * @returns The hash, the nonce, and a `wait()` that resolves with the receipt — the same
+   *          surface `Wallet.sendTransaction` returns, so callers do not branch on which
+   *          path was taken.
+   */
+  private async signAndBroadcast(
+    connectedWallet: import("ethers").Wallet | import("ethers").HDNodeWallet,
+    txRequest: TransactionRequest,
+    meta: { from: string; to: string; value: string }
+  ): Promise<{ hash: string; nonce: number; wait: () => Promise<{ status: number | null } | null> }> {
+    const worker = (globalThis as { chrome?: typeof chrome }).chrome?.runtime;
+    const canHandOff = !!worker?.id && typeof worker.sendMessage === "function" && !!this.rpc_url;
+
+    if (!canHandOff) {
+      const sent = await connectedWallet.sendTransaction(txRequest);
+      return { hash: sent.hash, nonce: sent.nonce, wait: () => sent.wait() };
+    }
+
+    // `populateTransaction` fills nonce, chainId, gas and fee fields, so the signed blob is
+    // complete and the worker only has to relay bytes.
+    const populated = await connectedWallet.populateTransaction(txRequest);
+    const rawTx = await connectedWallet.signTransaction(populated);
+
+    let hash: string;
+    try {
+      const reply = await worker.sendMessage({
+        type: "BROADCAST_TX",
+        rawTx,
+        networkId: Number(this.network_id),
+        rpcUrl: this.rpc_url,
+        meta,
+      }) as { success?: boolean; hash?: string; error?: string } | undefined;
+
+      if (!reply?.success || !reply.hash) throw new Error(reply?.error || "Broadcast failed");
+      hash = reply.hash;
+    } catch (e) {
+      // The worker may be restarting, or the message channel may be unavailable. The
+      // transaction is signed but definitely not sent, so sending it from here is safe —
+      // and better than failing a send the user already approved.
+      const message = e instanceof Error ? e.message : String(e);
+      if (/already known|nonce too low|replacement/i.test(message)) throw e;
+
+      const sent = await connectedWallet.sendTransaction(txRequest);
+      return { hash: sent.hash, nonce: sent.nonce, wait: () => sent.wait() };
+    }
+
+    const nonce = Number(populated.nonce ?? 0);
+    return {
+      hash,
+      nonce,
+      // The worker is already polling for this receipt and will notify on its own. Waiting
+      // here as well is for the UI in front of the user right now; if this popup closes,
+      // the worker's copy of the job carries on regardless.
+      wait: () => this.waitForTransaction(hash) as Promise<{ status: number | null } | null>,
+    };
   }
 
   /**
@@ -1393,7 +1504,20 @@ class Network {
 
 
     try {
-      const sentTx = await connectedWallet.sendTransaction(txRequest);
+      // Sign here, broadcast in the service worker.
+      //
+      // Signing must stay in the popup — the key only exists in this context, and moving
+      // it would defeat the lock. Broadcasting must not: the popup can be dismissed at any
+      // moment, and a `fetch` that dies with it takes an already-authorised transaction
+      // with it. Splitting the two is what lets a send survive the window closing.
+      //
+      // Falls back to sending from here when no worker is reachable (dev server, tests),
+      // where nothing outlives the page anyway.
+      const sentTx = await this.signAndBroadcast(connectedWallet, txRequest, {
+        from: await connectedWallet.getAddress(),
+        to: tx.to,
+        value: (txRequest.value ?? 0n).toString(),
+      });
 
       // Hand the hash over before waiting. Everything after this point can take minutes,
       // and the transaction is already irreversible on the network.
@@ -1422,6 +1546,15 @@ class Network {
 
       // Remove from pending once confirmed
       this.pendingTransactions.delete(sentTx.hash);
+
+      // Every cached balance now describes the state before this transaction. Announce it
+      // before the revert check below: a reverted transaction still burned gas, so the
+      // native balance moved either way and the screens are stale either way.
+      notifyTxConfirmed({
+        hash: sentTx.hash,
+        networkId: Number(this.network_id),
+        address: account.GetAddress() ?? undefined,
+      });
 
       if (receipt && receipt.status === 0) {
         throw new Error(`Transaction reverted on-chain. TX: ${sentTx.hash}`);
@@ -1667,14 +1800,18 @@ class Network {
     "function name() view returns (string)",
     "function underlying() view returns (address)",
     "function confidentialBalanceOf(address account) view returns (bytes32)",
-    "function getUserClaims(address user) view returns (tuple(address to, bytes32 ctHash, uint64 requestedAmount, uint64 decryptedAmount, bool claimed)[])",
+    // Claims are keyed by `id`, not by the ciphertext handle — the two are different
+    // values and both are needed to settle. See `UnshieldClaim`.
+    "function getUserClaims(address user) view returns (tuple(bytes32 id, address to, bytes32 ctHash, uint64 decryptedAmount, bool claimed)[])",
     "function shieldNative(address to) payable returns (bytes32)",
     "function shieldWrappedNative(address to, uint256 value) returns (bytes32)",
     "function shield(address to, uint256 amount) returns (bytes32)",
     "function unshield(address from, address to, uint64 amount) returns (bytes32)",
-    "function claimUnshielded(bytes32 ctHash, uint64 decryptedAmount, bytes decryptionProof)",
-    "function claimUnshieldedBatch(bytes32[] ctHashes, uint64[] decryptedAmounts, bytes[] decryptionProofs)",
-    "function confidentialTransfer(address to, tuple(uint256 ctHash, uint8 securityZone, uint8 utype, bytes signature) encryptedAmount) returns (bytes32)",
+    "function claimUnshielded(bytes32 id, uint64 decryptedAmount, bytes decryptionProof)",
+    "function claimUnshieldedBatch(bytes32[] ids, uint64[] decryptedAmounts, bytes[] decryptionProofs)",
+    // `externalEuint64` handle plus its batch proof, as two arguments. The old single
+    // `InEuint64` struct is gone from cofhe-contracts and its digest is no longer valid.
+    "function confidentialTransfer(address to, bytes32 encryptedAmount, bytes inputProof) returns (bytes32)",
   ];
 
   /** Cached `balanceOfIsIndicator()` result per token address. */
@@ -1962,7 +2099,11 @@ class Network {
       this.registryWrappers = all;
       return all;
     } catch {
-      return [];
+      // An unreadable registry is not an empty one. Returning [] made every
+      // factory-created wrapper drop out of the wallet until the next successful read,
+      // which looks exactly like the tokens having been lost. Fall back to the last good
+      // answer if this session has one, and do not cache the failure.
+      return this.registryWrappers ?? [];
     }
   }
 
@@ -2007,11 +2148,17 @@ class Network {
       wrappers.map((to) => ({ method: "eth_call", params: [{ to, data: balanceData }, "latest"] }))
     );
 
+    // `callBatch` reports a per-item failure as null, which is not the same as a zero
+    // handle. Treating the two alike dropped wrappers whose balance read merely failed —
+    // the token vanished from the wallet on a transient RPC error. Keep them: the second,
+    // unbatched read inside `readShieldedBalance` settles it, and a genuinely zero handle
+    // costs nothing there because it returns before any decryption.
     const active: string[] = [];
     wrappers.forEach((wrapper, i) => {
       const hex = handles[i];
-      const hasHandle = !!hex && hex !== "0x" && BigInt(hex) !== 0n;
-      if (hasHandle || wrapper === native) active.push(wrapper);
+      const readFailed = hex === null || hex === undefined;
+      const hasHandle = !readFailed && hex !== "0x" && BigInt(hex) !== 0n;
+      if (hasHandle || readFailed || wrapper === native) active.push(wrapper);
     });
     if (active.length === 0) return [];
 
@@ -2024,7 +2171,7 @@ class Network {
     ]);
     const metaResults = await this.callBatch(metaCalls);
 
-    const parsed: (Omit<ShieldedHolding, "balance"> & { key: string })[] = [];
+    const parsed: (Omit<ShieldedHolding, "balance" | "decryptFailed"> & { key: string })[] = [];
 
     for (let i = 0; i < active.length; i++) {
       const wrapper = active[i];
@@ -2085,14 +2232,17 @@ class Network {
     const holdings: ShieldedHolding[] = await Promise.all(
       parsed.map(async ({ key, ...rest }) => ({
         ...rest,
-        balance: await this.getShieldedBalance(key, owner, account).catch(() => "0.0"),
+        ...(await this.readShieldedBalance(key, owner, account)),
       }))
     );
 
-    // Native first, superseded wrappers last, otherwise by balance.
+    // Native first, superseded wrappers last, otherwise by balance. Unreadable rows sort
+    // as if they had a balance, because they probably do — sinking them to the bottom
+    // among the empties is how they get overlooked.
     return holdings.sort((a, b) => {
       if (a.isNative !== b.isNative) return a.isNative ? -1 : 1;
       if (a.isLegacy !== b.isLegacy) return a.isLegacy ? 1 : -1;
+      if (a.decryptFailed !== b.decryptFailed) return a.decryptFailed ? -1 : 1;
       return parseFloat(b.balance) - parseFloat(a.balance);
     });
   }
@@ -2288,33 +2438,64 @@ class Network {
    * ciphertext exists yet). Any other failure propagates so the UI can report it.
    */
   async getShieldedBalance(contractAddress: string, userAddress: string, account?: Account): Promise<string> {
-    if (!this.isFheCapable()) return "0.0";
-    if (!account) return "0.0";
+    return (await this.readShieldedBalance(contractAddress, userAddress, account)).balance;
+  }
+
+  /**
+   * Read a confidential balance, keeping "empty" and "unreadable" apart.
+   *
+   * `getShieldedBalance` flattens both into "0.0", which is fine for a caller that only
+   * wants a number to display next to a token it is already showing. It is not fine for a
+   * caller that decides whether the token exists at all: every screen that hides
+   * zero-balance rows was also hiding shielded tokens whose decrypt had merely timed out,
+   * and the asset vanished from the wallet.
+   *
+   * A non-zero handle means the ciphertext is on-chain. Whatever went wrong after that
+   * point is a failure to read, never evidence that the balance is empty.
+   */
+  private async readShieldedBalance(
+    contractAddress: string,
+    userAddress: string,
+    account?: Account
+  ): Promise<{ balance: string; decryptFailed: boolean }> {
+    const empty = { balance: "0.0", decryptFailed: false };
+    const unreadable = { balance: "0.0", decryptFailed: true };
+
+    if (!this.isFheCapable()) return empty;
+    // No unlocked account means no permit and no decryption key. The balance is unknown,
+    // not zero — a locked wallet must not report its holdings as empty.
+    if (!account) return unreadable;
 
     const { Interface } = await import("ethers");
     const iface = new Interface(Network.SHIELDED_ABI);
 
-    const resultHex = await this.call("eth_call", [
-      { to: contractAddress, data: iface.encodeFunctionData("confidentialBalanceOf", [userAddress]) },
-      "latest",
-    ]);
+    let resultHex: string;
+    try {
+      resultHex = await this.call("eth_call", [
+        { to: contractAddress, data: iface.encodeFunctionData("confidentialBalanceOf", [userAddress]) },
+        "latest",
+      ]);
+    } catch {
+      // The RPC is down, so nothing is known about this wrapper either way.
+      return unreadable;
+    }
 
-    if (!resultHex || resultHex === "0x") return "0.0";
+    if (!resultHex || resultHex === "0x") return empty;
 
     const handle = BigInt(resultHex);
     // An uninitialised euint64 is the zero handle — no balance has ever been created.
-    if (handle === 0n) return "0.0";
-
-    const service = await this.ensureFhe(account);
-    const meta = await this.getShieldedTokenMeta(contractAddress);
+    // This is the one case that genuinely proves the balance is empty.
+    if (handle === 0n) return empty;
 
     try {
+      const service = await this.ensureFhe(account);
+      const meta = await this.getShieldedTokenMeta(contractAddress);
       const decrypted = await service.decryptForView(handle);
-      return this.formatTokenAmount(decrypted, meta.confidentialDecimals);
-    } catch (e) {
-      const { CiphertextNotFoundError } = await import("./FheCofheService.js");
-      if (e instanceof CiphertextNotFoundError) return "0.0";
-      throw e;
+      return { balance: this.formatTokenAmount(decrypted, meta.confidentialDecimals), decryptFailed: false };
+    } catch {
+      // Coprocessor ingestion lag, an expired permit, a threshold-network hiccup — all of
+      // them leave a real balance behind a handle we could not open this time.
+      return unreadable;
     }
   }
 
@@ -2481,11 +2662,11 @@ class Network {
 
     const [claims] = iface.decodeFunctionResult("getUserClaims", resultHex);
     return (claims as unknown[]).map((c) => {
-      const claim = c as { to: string; ctHash: string; requestedAmount: bigint; decryptedAmount: bigint; claimed: boolean };
+      const claim = c as { id: string; to: string; ctHash: string; decryptedAmount: bigint; claimed: boolean };
       return {
+        id: claim.id,
         to: claim.to,
         ctHash: claim.ctHash,
-        requestedAmount: BigInt(claim.requestedAmount),
         decryptedAmount: BigInt(claim.decryptedAmount),
         claimed: claim.claimed,
       };
@@ -2502,13 +2683,20 @@ class Network {
    * The payout always goes to the address stored on the claim, regardless of who submits
    * this transaction.
    */
-  async claimUnshielded(account: Account, shieldedTokenAddress: string, ctHash: string): Promise<string> {
+  async claimUnshielded(
+    account: Account,
+    shieldedTokenAddress: string,
+    claimId: string,
+    ctHash: string
+  ): Promise<string> {
     if (!this.isFheCapable()) throw new Error("FHE is not available on this network");
 
     const service = await this.ensureFhe(account);
     const { Interface } = await import("ethers");
     const iface = new Interface(Network.SHIELDED_ABI);
 
+    // Decrypt the handle; submit against the claim id. Using one for the other reverts —
+    // the proof is bound to the handle, while the claim is stored under the id.
     const { decryptedValue, signature } = await service.decryptForTx(BigInt(ctHash));
 
     // The contract reverts on an unverifiable proof. Checking first turns a burnt
@@ -2527,7 +2715,7 @@ class Network {
     return this.sendTransaction(account, {
       to: shieldedTokenAddress,
       value: "0",
-      data: iface.encodeFunctionData("claimUnshielded", [ctHash, decryptedValue, signature]),
+      data: iface.encodeFunctionData("claimUnshielded", [claimId, decryptedValue, signature]),
     });
   }
 
@@ -2548,21 +2736,21 @@ class Network {
   async claimUnshieldedMany(
     account: Account,
     shieldedTokenAddress: string,
-    ctHashes: string[]
+    claims: { claimId: string; ctHash: string }[]
   ): Promise<string> {
     if (!this.isFheCapable()) throw new Error("FHE is not available on this network");
-    if (ctHashes.length === 0) throw new Error("No claims to settle");
-    if (ctHashes.length === 1) {
-      return this.claimUnshielded(account, shieldedTokenAddress, ctHashes[0]);
+    if (claims.length === 0) throw new Error("No claims to settle");
+    if (claims.length === 1) {
+      return this.claimUnshielded(account, shieldedTokenAddress, claims[0].claimId, claims[0].ctHash);
     }
 
     const service = await this.ensureFhe(account);
     const { Interface } = await import("ethers");
     const iface = new Interface(Network.SHIELDED_ABI);
 
-    const decrypted: { ctHash: string; value: bigint; signature: `0x${string}` }[] = [];
+    const decrypted: { claimId: string; value: bigint; signature: `0x${string}` }[] = [];
 
-    for (const ctHash of ctHashes) {
+    for (const { claimId, ctHash } of claims) {
       const { decryptedValue, signature } = await service.decryptForTx(BigInt(ctHash));
 
       let verified = true;
@@ -2575,14 +2763,14 @@ class Network {
         throw new Error("Decryption proof failed verification — no claims were submitted.");
       }
 
-      decrypted.push({ ctHash, value: decryptedValue, signature });
+      decrypted.push({ claimId, value: decryptedValue, signature });
     }
 
     return this.sendTransaction(account, {
       to: shieldedTokenAddress,
       value: "0",
       data: iface.encodeFunctionData("claimUnshieldedBatch", [
-        decrypted.map((d) => d.ctHash),
+        decrypted.map((d) => d.claimId),
         decrypted.map((d) => d.value),
         decrypted.map((d) => d.signature),
       ]),
@@ -2631,6 +2819,7 @@ class Network {
     const fresh = claims[claims.length - 1];
     if (fresh) {
       queue.add({
+        claimId: fresh.id,
         ctHash: fresh.ctHash,
         tokenAddress: shieldedTokenAddress,
         accountAddress: owner,
@@ -2669,7 +2858,7 @@ class Network {
     for (const token of tokens) {
       try {
         const live = await this.getPendingClaims(token, owner);
-        queue.reconcile(owner, this.network_id, live.map((c) => c.ctHash));
+        queue.reconcile(owner, this.network_id, live.map((c) => c.id));
       } catch {
         // A failed read must not delete queued intents — leave them for the next pass.
       }
@@ -2678,7 +2867,7 @@ class Network {
     return queue.drainGrouped(owner, this.network_id, async (tokenAddress, intents) => {
       onPhase?.("claiming");
       const hash = await this.claimUnshieldedMany(
-        account, tokenAddress, intents.map((i) => i.ctHash)
+        account, tokenAddress, intents.map((i) => ({ claimId: i.claimId, ctHash: i.ctHash }))
       );
       await this.waitForTransaction(hash);
     });
@@ -2722,19 +2911,18 @@ class Network {
     // while moving encrypted zero (see assertSufficientShieldedBalance).
     await this.assertSufficientShieldedBalance(account, shieldedTokenAddress, amountValue);
 
-    const encrypted = await service.encryptUint64(amountValue, onStep);
+    // The wrapper is the contract that will consume this ciphertext, and the verifier
+    // binds that address into the proof — encrypting for one wrapper and submitting to
+    // another is rejected rather than silently accepted.
+    const encrypted = await service.encryptUint64(amountValue, shieldedTokenAddress, onStep);
 
     return this.sendTransaction(account, {
       to: shieldedTokenAddress,
       value: "0",
       data: iface.encodeFunctionData("confidentialTransfer", [
         to,
-        {
-          ctHash: encrypted.ctHash,
-          securityZone: encrypted.securityZone,
-          utype: encrypted.utype,
-          signature: encrypted.signature,
-        },
+        encrypted.handle,
+        encrypted.proof,
       ]),
     });
   }

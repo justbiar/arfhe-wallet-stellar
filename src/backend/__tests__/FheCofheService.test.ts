@@ -15,10 +15,10 @@ const mockClient = {
   decryptForView: vi.fn(),
   decryptForTx: vi.fn(),
   verifyDecryptResult: vi.fn(async () => true),
-  permits: {
-    getOrCreateSelfPermit: vi.fn(async () => ({ hash: '0xpermit', expiration: 9_999_999_999 })),
-    getActivePermit: vi.fn(() => undefined as unknown),
-    removeActivePermit: vi.fn(),
+  acp: {
+    getOrCreateSelfACP: vi.fn(async () => ({ hash: '0xacp', expiration: 9_999_999_999, sealingKey: '0xseal' })),
+    getActiveACP: vi.fn(() => undefined as unknown),
+    removeActiveACP: vi.fn(async () => {}),
   },
 };
 
@@ -40,16 +40,17 @@ vi.mock('@cofhe/sdk/chains', () => ({
   chains: { sepolia: { id: 11155111 }, arbSepolia: { id: 421614 }, baseSepolia: { id: 84532 } },
 }));
 
-vi.mock('@cofhe/sdk/permits', () => ({
+vi.mock('@cofhe/sdk/acps', () => ({
   ValidationUtils: { isValid: (...args: unknown[]) => mockIsValid(...(args as [])) },
 }));
 
 vi.mock('@cofhe/sdk', () => ({
-  Encryptable: { uint64: (v: bigint) => ({ kind: 'uint64', v }) },
+  // Mirrors the real shape: the item carries its own securityZone and utype, which is
+  // where the rebuilt InEuint64 struct reads them from.
+  Encryptable: { uint64: (v: bigint) => ({ data: v, securityZone: 0, utype: 5 }) },
   FheTypes: { Uint64: 5 },
-  CofheErrorCode: { PermitNotFound: 'PERMIT_NOT_FOUND' },
+  CofheErrorCode: { ACPNotFound: 'ACP_NOT_FOUND', SealOutputFailed: 'SEAL_OUTPUT_FAILED' },
   isCofheError: (e: unknown) => !!e && typeof e === 'object' && 'code' in (e as object),
-  assertCorrectEncryptedItemInput: vi.fn(),
 }));
 
 import FheCofheService, { COFHE_CHAIN_IDS, CiphertextNotFoundError } from '../FheCofheService';
@@ -70,7 +71,7 @@ describe('FheCofheService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsValid = vi.fn(() => ({ valid: true, error: null }));
-    mockClient.permits.getActivePermit = vi.fn(() => undefined as unknown);
+    mockClient.acp.getActiveACP = vi.fn(() => undefined as unknown);
     service = FheCofheService.getInstance();
     service.reset();
   });
@@ -133,36 +134,36 @@ describe('FheCofheService', () => {
 
     it('permit yoksa oluşturur', async () => {
       await service.ensurePermit();
-      expect(mockClient.permits.getOrCreateSelfPermit).toHaveBeenCalledTimes(1);
+      expect(mockClient.acp.getOrCreateSelfACP).toHaveBeenCalledTimes(1);
     });
 
     it('geçerli permit varsa yeniden imzalatmaz', async () => {
-      mockClient.permits.getActivePermit = vi.fn(() => ({ hash: '0x1', expiration: 9_999_999_999 }));
+      mockClient.acp.getActiveACP = vi.fn(() => ({ hash: '0x1', expiration: 9_999_999_999, sealingKey: '0xseal' }));
       await service.ensurePermit();
-      expect(mockClient.permits.getOrCreateSelfPermit).not.toHaveBeenCalled();
+      expect(mockClient.acp.getOrCreateSelfACP).not.toHaveBeenCalled();
     });
 
     it('süresi dolmuş permiti yeniler', async () => {
       // Regresyon: eskiden bir boolean cache'lendiği için süre dolduğunda fark edilmiyor,
       // her çözme işlemi hata veriyordu.
-      mockClient.permits.getActivePermit = vi.fn(() => ({ hash: '0x1', expiration: 1 }));
+      mockClient.acp.getActiveACP = vi.fn(() => ({ hash: '0x1', expiration: 1, sealingKey: '0xseal' }));
       mockIsValid = vi.fn(() => ({ valid: false, error: 'expired' }));
 
       await service.ensurePermit();
-      expect(mockClient.permits.getOrCreateSelfPermit).toHaveBeenCalledTimes(1);
+      expect(mockClient.acp.getOrCreateSelfACP).toHaveBeenCalledTimes(1);
     });
 
     it('bozuk şemalı permiti silip yeniden oluşturur', async () => {
-      mockClient.permits.getActivePermit = vi.fn(() => ({ hash: '0x1', expiration: 9_999_999_999 }));
+      mockClient.acp.getActiveACP = vi.fn(() => ({ hash: '0x1', expiration: 9_999_999_999, sealingKey: '0xseal' }));
       mockIsValid = vi.fn(() => ({ valid: false, error: 'invalid-schema' }));
 
       await service.ensurePermit();
-      expect(mockClient.permits.removeActivePermit).toHaveBeenCalled();
-      expect(mockClient.permits.getOrCreateSelfPermit).toHaveBeenCalledTimes(1);
+      expect(mockClient.acp.removeActiveACP).toHaveBeenCalled();
+      expect(mockClient.acp.getOrCreateSelfACP).toHaveBeenCalledTimes(1);
     });
 
     it('hasPermit süre bilgisini canlı okur', () => {
-      mockClient.permits.getActivePermit = vi.fn(() => ({ hash: '0x1', expiration: 9_999_999_999 }));
+      mockClient.acp.getActiveACP = vi.fn(() => ({ hash: '0x1', expiration: 9_999_999_999, sealingKey: '0xseal' }));
       expect(service.hasPermit()).toBe(true);
 
       mockIsValid = vi.fn(() => ({ valid: false, error: 'expired' }));
@@ -170,7 +171,7 @@ describe('FheCofheService', () => {
     });
 
     it('getPermitExpiry saniye cinsinden döner', () => {
-      mockClient.permits.getActivePermit = vi.fn(() => ({ hash: '0x1', expiration: 1893456000 }));
+      mockClient.acp.getActiveACP = vi.fn(() => ({ hash: '0x1', expiration: 1893456000, sealingKey: '0xseal' }));
       expect(service.getPermitExpiry()).toBe(1893456000);
     });
   });
@@ -181,16 +182,34 @@ describe('FheCofheService', () => {
       await service.init(makeProvider(SEPOLIA), makeSigner(ALICE), 2);
     });
 
-    it('şifreli girdiyi döner', async () => {
-      const encrypted = { ctHash: 1n, securityZone: 0, utype: 5, signature: '0xsig' };
-      mockClient.encryptInputs = vi.fn(() => ({ execute: async () => [encrypted] }));
+    const WRAPPER = '0x000000000000000000000000000000000000dEaD';
 
-      await expect(service.encryptUint64(1000n)).resolves.toEqual(encrypted);
+    it('handle ve proof ikilisini döner', async () => {
+      // 0.7 returns bare hashes plus one batch proof, matching the contract's
+      // (externalEuint64, bytes) parameters one-for-one.
+      const setConsumingContract = vi.fn(() => ({ execute: async () => ['0x01', '0xproof'] }));
+      mockClient.encryptInputs = vi.fn(() => ({ setConsumingContract }));
+
+      await expect(service.encryptUint64(1000n, WRAPPER)).resolves.toEqual({
+        handle: '0x01',
+        proof: '0xproof',
+      });
+      // The verifier binds this address into the digest, so it must actually be passed.
+      expect(setConsumingContract).toHaveBeenCalledWith(WRAPPER);
+    });
+
+    it('eksik proof ile sessizce devam etmez', async () => {
+      // A missing proof would otherwise reach the chain as an empty signature and revert
+      // with nothing to explain it.
+      mockClient.encryptInputs = vi.fn(() => ({
+        setConsumingContract: () => ({ execute: async () => ['0x01'] }),
+      }));
+      await expect(service.encryptUint64(1n, WRAPPER)).rejects.toThrow(/incomplete/i);
     });
 
     it('bağlantı yokken şifrelemeyi reddeder', async () => {
       service.reset();
-      await expect(service.encryptUint64(1n)).rejects.toThrow(/not initialized/);
+      await expect(service.encryptUint64(1n, WRAPPER)).rejects.toThrow(/not initialized/);
     });
   });
 
@@ -234,13 +253,29 @@ describe('FheCofheService', () => {
       await expect(service.decryptForView(123n)).rejects.toBeInstanceOf(CiphertextNotFoundError);
     });
 
-    it('ağ permiti reddederse saklanan permiti siler', async () => {
-      mockClient.permits.getActivePermit = vi.fn(() => ({ hash: '0x1', expiration: 9_999_999_999 }));
+    it('ağ ACP yi reddederse saklanan ACP silinir', async () => {
+      mockClient.acp.getActiveACP = vi.fn(() => ({ hash: '0x1', expiration: 9_999_999_999, sealingKey: '0xseal' }));
       mockClient.decryptForView = vi.fn(() =>
-        viewBuilder(async () => { throw Object.assign(new Error('denied'), { code: 'PERMIT_NOT_FOUND' }); }));
+        viewBuilder(async () => { throw Object.assign(new Error('denied'), { code: 'ACP_NOT_FOUND' }); }));
 
       await expect(service.decryptForView(123n)).rejects.toThrow();
-      expect(mockClient.permits.removeActivePermit).toHaveBeenCalled();
+      expect(mockClient.acp.removeActiveACP).toHaveBeenCalled();
+    });
+
+    it('sealOutput reddi saklanan ACP yi siler', async () => {
+      // The exact failure that broke every balance in the wallet: the network refused a
+      // stored permit for lacking a sealing key. Replaying it forever would keep the
+      // wallet stuck, so it has to be dropped and re-signed.
+      mockClient.acp.getActiveACP = vi.fn(() => ({ hash: '0x1', expiration: 9_999_999_999, sealingKey: '0xseal' }));
+      mockClient.decryptForView = vi.fn(() =>
+        viewBuilder(async () => {
+          throw Object.assign(new Error('sealoutput requires an ACP with a sealingKey'), {
+            code: 'SEAL_OUTPUT_FAILED',
+          });
+        }));
+
+      await expect(service.decryptForView(123n)).rejects.toThrow();
+      expect(mockClient.acp.removeActiveACP).toHaveBeenCalled();
     });
   });
 
@@ -249,15 +284,16 @@ describe('FheCofheService', () => {
       await service.init(makeProvider(SEPOLIA), makeSigner(ALICE), 2);
     });
 
-    it('permitsiz çözer ve imzayı döner', async () => {
+    it('ACP siz çözer ve imzayı döner', async () => {
       const result = { ctHash: 1n, decryptedValue: 500n, signature: '0xproof' };
-      const withoutPermit = vi.fn(() => ({ execute: async () => result }));
-      const builder: Record<string, unknown> = { withoutPermit };
+      // The burned handle is allowPublic'd on-chain, so no ACP applies to it.
+      const withoutACP = vi.fn(() => ({ execute: async () => result }));
+      const builder: Record<string, unknown> = { withoutACP };
       builder.set404RetryTimeout = vi.fn(() => builder);
       mockClient.decryptForTx = vi.fn(() => builder);
 
       await expect(service.decryptForTx(1n)).resolves.toEqual(result);
-      expect(withoutPermit).toHaveBeenCalled();
+      expect(withoutACP).toHaveBeenCalled();
       // Claims get a longer window: giving up leaves burned balance unsettled.
       expect(builder.set404RetryTimeout).toHaveBeenCalledWith(expect.any(Number));
     });

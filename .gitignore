@@ -26,6 +26,9 @@ vite.config.js
 
 # Bone-headed .env xD
 .env
+# Backups and per-environment copies carry the same secrets as .env itself.
+.env.*
+!.env.example
 bun.lockb
 
 *.xpi

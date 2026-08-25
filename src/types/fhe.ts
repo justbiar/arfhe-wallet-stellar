@@ -43,6 +43,20 @@ export interface ShieldedHolding {
   /** Decrypted balance in confidential units, as a decimal string ("0.0" when empty). */
   balance: string;
   /**
+   * True when a ciphertext exists on-chain but could not be decrypted on this attempt.
+   *
+   * The two cases are not the same and must never be collapsed: an empty balance is a
+   * fact, while a failed decrypt is a missing answer. The coprocessor lags behind the
+   * chain for a few seconds after a shield, a permit can expire, the threshold network can
+   * be briefly unreachable — in every one of those the tokens are still there.
+   *
+   * `balance` reads "0.0" in this state so arithmetic downstream stays safe, which is
+   * precisely why callers must check this flag before filtering a row out or showing the
+   * figure as real. A wallet that hides an asset because it could not read it has lost
+   * the asset as far as the user is concerned.
+   */
+  decryptFailed: boolean;
+  /**
    * True when a *different* wrapper is the registry's canonical one for this underlying.
    *
    * Two wrappers around one token hold two separate backing pools: what was shielded
@@ -63,12 +77,21 @@ export interface ShieldedHolding {
  * decryption proof before the underlying tokens are released.
  */
 export interface UnshieldClaim {
+  /**
+   * How the claim is referenced on-chain — the argument `claimUnshielded` takes.
+   *
+   * Deliberately NOT the ciphertext handle. The contracts derive it from the claimant and
+   * a per-claimant nonce, so one address can hold several claims against the same handle.
+   * Passing the handle here reverts with `ClaimNotFound`.
+   */
+  id: string;
   /** Address that receives the underlying tokens once claimed. */
   to: string;
-  /** Ciphertext handle identifying this claim — the id passed to `claimUnshielded`. */
+  /**
+   * The burned ciphertext handle. This is what gets decrypted, and the proof is bound to
+   * it — so settlement needs both this and {@link id}, for different arguments.
+   */
   ctHash: string;
-  /** Amount requested at unshield time, in confidential units. */
-  requestedAmount: bigint;
   /** Actual decrypted amount; only meaningful once `claimed` is true. */
   decryptedAmount: bigint;
   /** Whether the underlying tokens have already been released. */

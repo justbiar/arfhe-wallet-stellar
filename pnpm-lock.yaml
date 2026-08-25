@@ -16,8 +16,8 @@ importers:
   .:
     dependencies:
       '@cofhe/sdk':
-        specifier: ^0.5.2
-        version: 0.5.2(@types/react@19.1.13)(ethers@6.15.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(react@19.1.1)(use-sync-external-store@1.6.0(react@19.1.1))(viem@2.47.0(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.0.0))
+        specifier: ^0.7.1
+        version: 0.7.1(@types/react@19.1.13)(ethers@6.15.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(react@19.1.1)(use-sync-external-store@1.6.0(react@19.1.1))(viem@2.47.0(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.0.0))
       '@emotion/react':
         specifier: ^11.14.0
         version: 11.14.0(@types/react@19.1.13)(react@19.1.1)
@@ -306,8 +306,8 @@ packages:
     resolution: {integrity: sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw==}
     hasBin: true
 
-  '@cofhe/sdk@0.5.2':
-    resolution: {integrity: sha512-OJ1c6GF5CmpumQhWg4GLxx0V+Gyo3N5XcjuAfXzVy5g9PEGq4VpkfvnDBqmwc0K6+m9kff29Jtw/KfUE5v+xQw==}
+  '@cofhe/sdk@0.7.1':
+    resolution: {integrity: sha512-FlwJE4KY9+9bnhQS6ZXmy8ukZDtxQRkxFuWEzKRID44EOAE71YFYXukmPsf1S+5esJs6/zzmpUBYlYKLRi3xzw==}
     peerDependencies:
       '@nomicfoundation/hardhat-ethers': ^3.0.0
       '@wagmi/core': ^2.0.0
@@ -4293,8 +4293,8 @@ packages:
   zod@4.0.0:
     resolution: {integrity: sha512-9diLdTPc/L7w/5jI4C3gHYNiGHDV9IZYxo1e5LSD8cabi65WVTWWb+g2BGPEpUUCOxR4D+6O5B0AzyMdUAXwrw==}
 
-  zustand@5.0.1:
-    resolution: {integrity: sha512-pRET7Lao2z+n5R/HduXMio35TncTlSW68WsYBq2Lg1ASspsNGjpwLAsij3RpouyV6+kHMwwwzP0bZPD70/Jx/w==}
+  zustand@5.0.13:
+    resolution: {integrity: sha512-efI2tVaVQPqtOh114loML/Z80Y4NP3yc+Ff0fYiZJPauNeWZeIp/bRFD7I9bfmCOYBh/PHxlglQ9+wvlwnPikQ==}
     engines: {node: '>=12.20.0'}
     peerDependencies:
       '@types/react': '>=18.0.0'
@@ -4467,7 +4467,7 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@cofhe/sdk@0.5.2(@types/react@19.1.13)(ethers@6.15.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(react@19.1.1)(use-sync-external-store@1.6.0(react@19.1.1))(viem@2.47.0(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.0.0))':
+  '@cofhe/sdk@0.7.1(@types/react@19.1.13)(ethers@6.15.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(react@19.1.1)(use-sync-external-store@1.6.0(react@19.1.1))(viem@2.47.0(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.0.0))':
     dependencies:
       iframe-shared-storage: 1.0.34
       immer: 10.1.1
@@ -4476,7 +4476,7 @@ snapshots:
       tweetnacl: 1.0.3
       viem: 2.47.0(bufferutil@4.0.9)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.0.0)
       zod: 4.0.0
-      zustand: 5.0.1(@types/react@19.1.13)(immer@10.1.1)(react@19.1.1)(use-sync-external-store@1.6.0(react@19.1.1))
+      zustand: 5.0.13(@types/react@19.1.13)(immer@10.1.1)(react@19.1.1)(use-sync-external-store@1.6.0(react@19.1.1))
     optionalDependencies:
       ethers: 6.15.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
     transitivePeerDependencies:
@@ -9231,7 +9231,7 @@ snapshots:
 
   zod@4.0.0: {}
 
-  zustand@5.0.1(@types/react@19.1.13)(immer@10.1.1)(react@19.1.1)(use-sync-external-store@1.6.0(react@19.1.1)):
+  zustand@5.0.13(@types/react@19.1.13)(immer@10.1.1)(react@19.1.1)(use-sync-external-store@1.6.0(react@19.1.1)):
     optionalDependencies:
       '@types/react': 19.1.13
       immer: 10.1.1

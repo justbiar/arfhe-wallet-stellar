@@ -1,40 +1,39 @@
 import SepoliaNetwork from "./Sepolia.js";
-import MainnetNetwork from "./Mainnet.js";
-import ArbitrumOneNetwork from "./ArbitrumOne.js";
 import ArbitrumSepoliaNetwork from "./ArbitrumSepolia.js";
-import BaseMainnetNetwork from "./BaseMainnet.js";
 import BaseSepoliaNetwork from "./BaseSepolia.js";
-import PolygonNetwork from "./Polygon.js";
-import OptimismNetwork from "./Optimism.js";
-import AvalancheNetwork from "./Avalanche.js";
-import AvalancheFujiNetwork from "./AvalancheFuji.js";
-import BNBChainNetwork from "./BNBChain.js";
-import LineaNetwork from "./Linea.js";
-import SeiNetwork from "./Sei.js";
-import MonadTestnetNetwork from "./MonadTestnet.js";
 import { Network } from "./Network.js";
-import { NetworkId, CustomNetworkConfig } from "./NetworkTypes.js";
+import { NetworkId, CustomNetworkConfig, NetworkOverride, toChainId } from "./NetworkTypes.js";
+import { rpcClient } from "./RpcClient.js";
+import { getExplorerBaseForNetwork } from "../components/panels/shared.js";
 
 const CUSTOM_NETWORKS_STORAGE_KEY = "arfhe_custom_networks";
+const NETWORK_OVERRIDES_STORAGE_KEY = "arfhe_network_overrides";
 const ACTIVE_NETWORK_SESSION_KEY = "arfhe_ps_active_network";
 
 type Listener = () => void;
 
 class NetworkProvider {
+  /**
+   * The networks the wallet ships with — the three chains the CoFHE coprocessor runs on.
+   *
+   * Confidential balances only exist on these, so they are the only ones the wallet has a
+   * reason to guarantee. Every other chain is the user's to add.
+   */
+  static readonly BUILT_IN_NETWORKS = [
+    NetworkId.Ethereum_Sepolia,
+    NetworkId.Arbitrum_Sepolia,
+    NetworkId.Base_Sepolia,
+  ] as const;
+
+  // Only the chains CoFHE runs on ship with the wallet.
+  //
+  // Bundling a dozen more made the wallet look complete while quietly committing it to
+  // provider keys, explorer mappings and indexer coverage for each one. Everything the
+  // user actually needs elsewhere is one "Add network" away, and a network added that way
+  // is not second-class: the same balance discovery, history scan and send path serve it.
   private sepoliaNetwork?: SepoliaNetwork;
-  private mainnetNetwork?: MainnetNetwork;
-  private arbitrumOneNetwork?: ArbitrumOneNetwork;
   private arbitrumSepoliaNetwork?: ArbitrumSepoliaNetwork;
-  private baseMainnetNetwork?: BaseMainnetNetwork;
   private baseSepoliaNetwork?: BaseSepoliaNetwork;
-  private polygonNetwork?: PolygonNetwork;
-  private optimismNetwork?: OptimismNetwork;
-  private avalancheNetwork?: AvalancheNetwork;
-  private avalancheFujiNetwork?: AvalancheFujiNetwork;
-  private bnbChainNetwork?: BNBChainNetwork;
-  private lineaNetwork?: LineaNetwork;
-  private seiNetwork?: SeiNetwork;
-  private monadTestnetNetwork?: MonadTestnetNetwork;
 
   /** User-added custom networks keyed by chainId */
   private customNetworks: Map<number, Network> = new Map();
@@ -42,27 +41,23 @@ class NetworkProvider {
   private activeNetworkId: NetworkId = NetworkId.Ethereum_Sepolia; // Default to Ethereum Sepolia
   private listeners: Listener[] = [];
 
+  /** User edits to built-in networks, keyed by NetworkId. */
+  private overrides: Map<number, NetworkOverride> = new Map();
+
   constructor() {
     this.init();
+    this.loadOverrides();
     this.loadCustomNetworks();
+    // Overrides are applied after both sets exist, so an edited RPC survives a reload
+    // rather than being reset to the shipped default on every construction.
+    this.applyAllOverrides();
     this.restoreActiveNetwork();
   }
 
   init() {
     if (!this.sepoliaNetwork) this.sepoliaNetwork = new SepoliaNetwork();
-    if (!this.mainnetNetwork) this.mainnetNetwork = new MainnetNetwork();
-    if (!this.arbitrumOneNetwork) this.arbitrumOneNetwork = new ArbitrumOneNetwork();
     if (!this.arbitrumSepoliaNetwork) this.arbitrumSepoliaNetwork = new ArbitrumSepoliaNetwork();
-    if (!this.baseMainnetNetwork) this.baseMainnetNetwork = new BaseMainnetNetwork();
     if (!this.baseSepoliaNetwork) this.baseSepoliaNetwork = new BaseSepoliaNetwork();
-    if (!this.polygonNetwork) this.polygonNetwork = new PolygonNetwork();
-    if (!this.optimismNetwork) this.optimismNetwork = new OptimismNetwork();
-    if (!this.avalancheNetwork) this.avalancheNetwork = new AvalancheNetwork();
-    if (!this.avalancheFujiNetwork) this.avalancheFujiNetwork = new AvalancheFujiNetwork();
-    if (!this.bnbChainNetwork) this.bnbChainNetwork = new BNBChainNetwork();
-    if (!this.lineaNetwork) this.lineaNetwork = new LineaNetwork();
-    if (!this.seiNetwork) this.seiNetwork = new SeiNetwork();
-    if (!this.monadTestnetNetwork) this.monadTestnetNetwork = new MonadTestnetNetwork();
   }
 
   getSepoliaNetwork(): SepoliaNetwork {
@@ -70,24 +65,9 @@ class NetworkProvider {
     return this.sepoliaNetwork;
   }
 
-  getMainnetNetwork(): MainnetNetwork {
-    if (!this.mainnetNetwork) this.mainnetNetwork = new MainnetNetwork();
-    return this.mainnetNetwork;
-  }
-
-  getArbitrumOneNetwork(): ArbitrumOneNetwork {
-    if (!this.arbitrumOneNetwork) this.arbitrumOneNetwork = new ArbitrumOneNetwork();
-    return this.arbitrumOneNetwork;
-  }
-
   getArbitrumSepoliaNetwork(): ArbitrumSepoliaNetwork {
     if (!this.arbitrumSepoliaNetwork) this.arbitrumSepoliaNetwork = new ArbitrumSepoliaNetwork();
     return this.arbitrumSepoliaNetwork;
-  }
-
-  getBaseMainnetNetwork(): BaseMainnetNetwork {
-    if (!this.baseMainnetNetwork) this.baseMainnetNetwork = new BaseMainnetNetwork();
-    return this.baseMainnetNetwork;
   }
 
   getBaseSepoliaNetwork(): BaseSepoliaNetwork {
@@ -95,82 +75,21 @@ class NetworkProvider {
     return this.baseSepoliaNetwork;
   }
 
-  getPolygonNetwork(): PolygonNetwork {
-    if (!this.polygonNetwork) this.polygonNetwork = new PolygonNetwork();
-    return this.polygonNetwork;
-  }
-
-  getOptimismNetwork(): OptimismNetwork {
-    if (!this.optimismNetwork) this.optimismNetwork = new OptimismNetwork();
-    return this.optimismNetwork;
-  }
-
-  getAvalancheNetwork(): AvalancheNetwork {
-    if (!this.avalancheNetwork) this.avalancheNetwork = new AvalancheNetwork();
-    return this.avalancheNetwork;
-  }
-
-  getBNBChainNetwork(): BNBChainNetwork {
-    if (!this.bnbChainNetwork) this.bnbChainNetwork = new BNBChainNetwork();
-    return this.bnbChainNetwork;
-  }
-
-  getLineaNetwork(): LineaNetwork {
-    if (!this.lineaNetwork) this.lineaNetwork = new LineaNetwork();
-    return this.lineaNetwork;
-  }
-
-  getSeiNetwork(): SeiNetwork {
-    if (!this.seiNetwork) this.seiNetwork = new SeiNetwork();
-    return this.seiNetwork;
-  }
-
-  getMonadTestnetNetwork(): MonadTestnetNetwork {
-    if (!this.monadTestnetNetwork) this.monadTestnetNetwork = new MonadTestnetNetwork();
-    return this.monadTestnetNetwork;
-  }
-
-
-  getAvalancheFujiNetwork(): AvalancheFujiNetwork {
-    if (!this.avalancheFujiNetwork) this.avalancheFujiNetwork = new AvalancheFujiNetwork();
-    return this.avalancheFujiNetwork;
-  }
-
   getActiveNetwork(): Network {
     switch (this.activeNetworkId) {
-      case NetworkId.Ethereum_Mainnet:
-        return this.getMainnetNetwork();
       case NetworkId.Ethereum_Sepolia:
         return this.getSepoliaNetwork();
-      case NetworkId.Arbitrum_One:
-        return this.getArbitrumOneNetwork();
       case NetworkId.Arbitrum_Sepolia:
         return this.getArbitrumSepoliaNetwork();
-      case NetworkId.Base_Mainnet:
-        return this.getBaseMainnetNetwork();
       case NetworkId.Base_Sepolia:
         return this.getBaseSepoliaNetwork();
-      case NetworkId.Polygon:
-        return this.getPolygonNetwork();
-      case NetworkId.Optimism:
-        return this.getOptimismNetwork();
-      case NetworkId.Avalanche:
-        return this.getAvalancheNetwork();
-      case NetworkId.BNB_Chain:
-        return this.getBNBChainNetwork();
-      case NetworkId.Linea:
-        return this.getLineaNetwork();
-      case NetworkId.Sei:
-        return this.getSeiNetwork();
-      case NetworkId.Monad_Testnet:
-        return this.getMonadTestnetNetwork();
-      case NetworkId.Avalanche_Fuji:
-        return this.getAvalancheFujiNetwork();
       default: {
-        // Check custom networks
         const custom = this.customNetworks.get(this.activeNetworkId as number);
         if (custom) return custom;
-        return this.getSepoliaNetwork(); // Fallback
+        // A network the wallet no longer ships — a removed built-in left in session
+        // storage, or a custom one the user deleted. Falling back keeps the wallet usable
+        // instead of rendering against a network that does not exist.
+        return this.getSepoliaNetwork();
       }
     }
   }
@@ -223,15 +142,14 @@ class NetworkProvider {
   /** Add a custom network and persist */
   addCustomNetwork(config: CustomNetworkConfig): void {
     // Prevent overriding built-in networks
-    const builtIn = [
-      NetworkId.Ethereum_Mainnet, NetworkId.Ethereum_Sepolia,
-      NetworkId.Arbitrum_One, NetworkId.Arbitrum_Sepolia,
-      NetworkId.Base_Mainnet, NetworkId.Base_Sepolia,
-      NetworkId.Polygon, NetworkId.Optimism, NetworkId.Avalanche,
-      NetworkId.Avalanche_Fuji, NetworkId.BNB_Chain, NetworkId.Linea,
-      NetworkId.Sei, NetworkId.Monad_Testnet
-    ] as number[];
-    if (builtIn.includes(config.chainId)) {
+    // A built-in cannot be shadowed by a custom entry with the same chain id: two
+    // Networks answering for one chain would disagree about FHE support and wrappers.
+    // Editing the built-in is the supported route, which is what the network editor does.
+    // Guard on both forms: a user pasting Sepolia's real chain id (11155111) and one
+    // pasting the wallet's internal id must both be refused.
+    const reserved = new Set<number>(NetworkProvider.BUILT_IN_NETWORKS.map((id) => Number(id)));
+    for (const id of NetworkProvider.BUILT_IN_NETWORKS) reserved.add(toChainId(id));
+    if (reserved.has(config.chainId)) {
       throw new Error(`Chain ID ${config.chainId} is a built-in network and cannot be overridden.`);
     }
 
@@ -267,6 +185,186 @@ class NetworkProvider {
       });
     }
     return configs;
+  }
+
+
+  // --- Built-in Network Overrides ---
+
+  /** Every network the user can edit: the ones we ship, plus the ones they added. */
+  listAllNetworks(): {
+    /** Internal NetworkId — the key an override is stored under. */
+    id: number;
+    /** The real EVM chain id, which is what an endpoint reports and a user recognises. */
+    chainId: number;
+    name: string;
+    rpcUrl: string;
+    explorerUrl: string;
+    currencySymbol: string;
+    isCustom: boolean;
+    isOverridden: boolean;
+  }[] {
+    const builtIn = NetworkProvider.BUILT_IN_NETWORKS;
+
+    const rows = builtIn.map((id) => {
+      const net = this.networkFor(id);
+      return {
+        id: id as number,
+        // Sepolia is NetworkId 4 but chain 11155111. Showing the internal id would label
+        // it wrongly, and the editor's endpoint check would call every correct RPC a
+        // mismatch.
+        chainId: toChainId(id),
+        name: net.network_name,
+        rpcUrl: net.rpc_url ?? "",
+        // Built-in networks resolve their explorer through a lookup rather than storing
+        // one, so reading the field directly showed an empty box the user could only make
+        // worse by typing in it.
+        explorerUrl: net.explorer_url ?? getExplorerBaseForNetwork(id),
+        currencySymbol: net.currency_symbol,
+        isCustom: false,
+        isOverridden: this.overrides.has(id as number),
+      };
+    });
+
+    for (const config of this.getCustomNetworks()) {
+      rows.push({
+        id: config.chainId,
+        // Custom networks are registered by their real chain id, so the two coincide.
+        chainId: config.chainId,
+        name: config.networkName,
+        rpcUrl: config.rpcUrl,
+        explorerUrl: config.explorerUrl,
+        currencySymbol: config.currencySymbol,
+        isCustom: true,
+        isOverridden: false,
+      });
+    }
+
+    return rows;
+  }
+
+  /** The Network instance for an id, built-in or custom. */
+  private networkFor(id: NetworkId): Network {
+    const previous = this.activeNetworkId;
+    this.activeNetworkId = id;
+    try {
+      return this.getActiveNetwork();
+    } finally {
+      this.activeNetworkId = previous;
+    }
+  }
+
+  getNetworkOverride(networkId: number): NetworkOverride | undefined {
+    return this.overrides.get(networkId);
+  }
+
+  /**
+   * Apply the user's edits to a built-in network and persist them.
+   *
+   * Custom networks are not handled here — they are fully user-defined already, so editing
+   * one is a rewrite of its config rather than an overlay on a shipped default.
+   */
+  setNetworkOverride(networkId: number, override: NetworkOverride): void {
+    const cleaned: NetworkOverride = {};
+    if (override.rpcUrl?.trim()) cleaned.rpcUrl = override.rpcUrl.trim();
+    if (override.fallbackRpcUrl?.trim()) cleaned.fallbackRpcUrl = override.fallbackRpcUrl.trim();
+    if (override.explorerUrl?.trim()) cleaned.explorerUrl = override.explorerUrl.trim().replace(/\/+$/, "");
+    if (override.networkName?.trim()) cleaned.networkName = override.networkName.trim();
+    if (override.currencySymbol?.trim()) cleaned.currencySymbol = override.currencySymbol.trim();
+
+    if (Object.keys(cleaned).length === 0) {
+      this.clearNetworkOverride(networkId);
+      return;
+    }
+
+    this.overrides.set(networkId, cleaned);
+    this.saveOverrides();
+    this.applyOverride(networkId as NetworkId, cleaned);
+    // Answers cached against the previous endpoint describe a node the wallet is no
+    // longer talking to; keeping them would mix two providers' views of the chain.
+    rpcClient.invalidate();
+    this.notifyListeners();
+  }
+
+  /** Drop the user's edits and return the network to what the wallet ships. */
+  clearNetworkOverride(networkId: number): void {
+    if (!this.overrides.delete(networkId)) return;
+    this.saveOverrides();
+    // Rebuilding is the only reliable reset: the shipped values live in each subclass's
+    // constructor, and there is nowhere else to read them back from.
+    this.rebuild(networkId as NetworkId);
+    rpcClient.invalidate();
+    this.notifyListeners();
+  }
+
+  /** Discard and reconstruct one built-in network from its shipped definition. */
+  private rebuild(networkId: NetworkId): void {
+    switch (networkId) {
+      case NetworkId.Ethereum_Sepolia: this.sepoliaNetwork = new SepoliaNetwork(); break;
+      case NetworkId.Arbitrum_Sepolia: this.arbitrumSepoliaNetwork = new ArbitrumSepoliaNetwork(); break;
+      case NetworkId.Base_Sepolia: this.baseSepoliaNetwork = new BaseSepoliaNetwork(); break;
+      default: break;
+    }
+  }
+
+  /** Overlay one override onto its live Network instance. */
+  private applyOverride(networkId: NetworkId, override: NetworkOverride): void {
+    const net = this.networkFor(networkId);
+    if (!net) return;
+
+    if (override.networkName) net.network_name = override.networkName;
+    if (override.currencySymbol) net.currency_symbol = override.currencySymbol;
+    if (override.explorerUrl) net.explorer_url = override.explorerUrl;
+
+    if (override.rpcUrl) {
+      net.rpc_url = override.rpcUrl;
+      net.fallbackRpcUrl = override.fallbackRpcUrl;
+
+      // The Alchemy SDK talks to its own endpoint, not `rpc_url`. Leaving it attached to a
+      // network the user has pointed elsewhere would split the wallet across two
+      // providers — balances from one, transaction history from the other — which is worse
+      // than losing the SDK's extras. Keep it only when the new endpoint is still Alchemy.
+      if (!/\.g\.alchemy\.com/i.test(override.rpcUrl)) {
+        net.alchemy = undefined;
+        net.api_key = "CUSTOM_URL";
+      }
+    } else if (override.fallbackRpcUrl) {
+      net.fallbackRpcUrl = override.fallbackRpcUrl;
+    }
+  }
+
+  /** Re-apply every stored override; used at construction. */
+  private applyAllOverrides(): void {
+    for (const [id, override] of this.overrides) {
+      try {
+        this.applyOverride(id as NetworkId, override);
+      } catch {
+        // A malformed override must not stop the wallet from starting.
+      }
+    }
+  }
+
+  private loadOverrides(): void {
+    try {
+      const raw = localStorage.getItem(NETWORK_OVERRIDES_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Record<string, NetworkOverride>;
+      for (const [id, override] of Object.entries(parsed)) {
+        const numeric = Number(id);
+        if (Number.isFinite(numeric)) this.overrides.set(numeric, override);
+      }
+    } catch {
+      // Unreadable overrides fall back to the shipped defaults rather than blocking start.
+    }
+  }
+
+  private saveOverrides(): void {
+    try {
+      const out: Record<string, NetworkOverride> = {};
+      for (const [id, override] of this.overrides) out[String(id)] = override;
+      localStorage.setItem(NETWORK_OVERRIDES_STORAGE_KEY, JSON.stringify(out));
+    } catch {
+      // Storage full or unavailable — the in-memory override still applies this session.
+    }
   }
 
   subscribe(listener: Listener): () => void {

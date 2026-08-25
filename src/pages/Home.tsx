@@ -10,8 +10,6 @@ import {
   IconButton,
   Menu,
   MenuItem,
-  Tabs,
-  Tab,
   Tooltip,
   useTheme,
   alpha,
@@ -20,9 +18,9 @@ import {
 } from "@mui/material";
 import {
   TrendingUp,
+  LinkOff,
   History,
   Shield,
-  Hub,
   ExpandMore,
   Refresh,
   Add,
@@ -34,8 +32,6 @@ import {
 } from "@mui/icons-material";
 import { useMatrixText } from "../hooks/useMatrixText.js";
 import ImportTokenModal from "../components/ImportTokenModal.js";
-import ImportNftModal from "../components/ImportNftModal.js";
-import NftGalleryCard from "../components/NftGalleryCard.js";
 import OnboardingTour, {
   BackupReminderBanner,
   isOnboardingCompleted,
@@ -47,15 +43,16 @@ import { ActiveAccountContext } from "../ActiveAccountProvider.js";
 import { useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
 import { NetworkId, isFheNetwork as isFheCapableNetwork } from "../backend/NetworkTypes.js";
+import { onTxConfirmed } from "../backend/TxNotifier.js";
 import { getAddress } from "ethers";
 import type { TypographyProps } from "@mui/material";
-import type { DisplayToken, BalanceMap, WrappedBalance, NFTDisplayItem } from "../types/index.js";
-import { TokenListSkeleton, NftGridSkeleton } from "../components/SkeletonLoaders.js";
+import type { DisplayToken, BalanceMap, WrappedBalance } from "../types/index.js";
+import { TokenListSkeleton } from "../components/SkeletonLoaders.js";
 import { useToast } from "../components/ToastProvider.js";
 import { classifyError, NetworkError, NetworkErrorType, getErrorFallbackMessage } from "../backend/NetworkErrorHandler.js";
 import { getCoinGeckoBase } from "../backend/Network.js";
 import { usePersistedState } from "../hooks/usePersistedState.js";
-import { getHiddenTokenAddresses, getNftMarketplaceUrl } from "../components/panels/shared.js";
+import { getHiddenTokenAddresses } from "../components/panels/shared.js";
 
 const KNOWN_LOGOS: Record<string, string> = {
   "ETH": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png",
@@ -171,18 +168,12 @@ function Home() {
       return cached.map(t => ({ ...t, isShielded: false, isSpam: false, isSuspicious: false, isHidden: false, spamScore: 0 }));
     } catch { return []; }
   });
-  // NFTs come from the indexer, which is the only thing that knows which token ids this
-  // address holds. The metadata cache stores contracts without ids, so it cannot seed a
-  // renderable card — starting empty is honest and the fetch below fills it.
-  const [nfts, setNfts] = useState<NFTDisplayItem[]>([]);
   const [totalBalanceUsd, setTotalBalanceUsd] = useState(0.00);
   const [prices, setPrices] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(false);
   // Persisted state: survives popup close/reopen
-  const [tabIndex, setTabIndex] = usePersistedState("home_tab", 0);
   const [isBalanceHidden, setIsBalanceHidden] = usePersistedState("balance_hidden", false);
   const [importTokenModalOpen, setImportTokenModalOpen] = useState(false);
-  const [importNftModalOpen, setImportNftModalOpen] = useState(false);
   const [showHiddenTokens, setShowHiddenTokens] = useState(false);
 
   // Onboarding tour (first-time UX)
@@ -334,6 +325,7 @@ function Home() {
               tokenBalance: h.balance,
               isNative: false,
               isShielded: true,
+              decryptFailed: h.decryptFailed,
             });
 
             wallet_context.tokenCache.setToken(activeNetworkId, {
@@ -542,8 +534,10 @@ function Home() {
           ? (currentPrices[underlying] ?? symbolPriceMap[underlyingSymbol] ?? 0)
           : (currentPrices["ETH"] ?? symbolPriceMap["ETH"] ?? 0);
 
-        const valUsd = parseFloat(wb.tokenBalance) * p;
-        totalUsd += valUsd;
+        // A balance we could not decrypt contributes an unknown amount, not zero. Adding
+        // it as zero would quietly understate the wallet's worth.
+        const valUsd = wb.decryptFailed ? 0 : parseFloat(wb.tokenBalance) * p;
+        if (!wb.decryptFailed) totalUsd += valUsd;
 
         balanceMap[wb.contractAddress] = {
           ...wb,
@@ -584,6 +578,7 @@ function Home() {
           contractAddress: b.contractAddress,
           decimals: meta?.decimals ?? 18,
           isShielded: b.isShielded ?? false,
+          decryptFailed: b.decryptFailed ?? false,
           isSpam: spamResult.isSpam,
           isSuspicious: spamResult.isSuspicious,
           isHidden: spamResult.isHidden,
@@ -606,25 +601,6 @@ function Home() {
 
       setTokens(displayTokens);
 
-      // ── NFTs ──
-      // Ask the indexer what this address actually owns. The previous approach walked a
-      // list of manually-imported contracts and called `balanceOf`, which yields a count
-      // but no token id — so every card guessed at token #1, showed a broken image and
-      // had nothing to link to.
-      try {
-        const owned = await net.getOwnedNfts(address);
-        setNfts(owned.map((nft) => ({
-          contractAddress: nft.contractAddress,
-          tokenId: nft.tokenId,
-          name: nft.name,
-          symbol: nft.symbol,
-          logoSrc: nft.imageUrl,
-          imageUrl: nft.imageUrl,
-          balance: parseInt(nft.balance, 10) || 1,
-        })));
-      } catch {
-        // No NFT indexing on this network; the gallery stays empty rather than guessing.
-      }
 
       // ── Persist to cache for next mount ──
       // Clear any previous error on successful fetch
@@ -685,6 +661,13 @@ function Home() {
     setFetchError(null);
     fetchData();
   }, [active_context?.activeAccount, activeNetworkId]);
+
+  // Refetch the moment a transaction is mined.
+  //
+  // Without this the balance sat on its cached value for the rest of the TTL, so a send
+  // looked like it had done nothing — the one moment a wallet must not appear stale. The
+  // caches are already cleared by the time this fires, so the refetch reaches the network.
+  useEffect(() => onTxConfirmed(() => { void fetchData(true); }), [active_context?.activeAccount, activeNetworkId]);
 
   if (!active_context) return null;
 
@@ -854,10 +837,14 @@ function Home() {
 
             {/* Action Buttons */}
             <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1, mt: 2 }}>
+              {/* Everything confidential lives behind this: what is shielded, what is
+                  still owed from an interrupted unshield, and the shield form itself.
+                  It takes the slot Portfolio used to hold — Portfolio moved next to the
+                  asset tabs below, where a breakdown of holdings actually belongs. */}
               <Button
                 variant="contained"
-                onClick={() => navigate('/portfolio')}
-                startIcon={<TrendingUp sx={{ fontSize: 14 }} />}
+                onClick={() => navigate('/privacy')}
+                startIcon={<Shield sx={{ fontSize: 14 }} />}
                 sx={{
                   bgcolor: 'transparent',
                   color: 'text.primary',
@@ -878,12 +865,12 @@ function Home() {
                   },
                 }}
               >
-                Portfolio
+                Privacy
               </Button>
               <Button
                 variant="contained"
                 onClick={() => navigate('/revoke')}
-                startIcon={<Shield sx={{ fontSize: 14 }} />}
+                startIcon={<LinkOff sx={{ fontSize: 14 }} />}
                 sx={{
                   bgcolor: 'transparent',
                   color: 'text.primary',
@@ -968,44 +955,45 @@ function Home() {
 
       {/* 3. Assets Tab List */}
       <Box sx={{ px: 2 }}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between">
-          <Tabs
-            value={tabIndex}
-            onChange={(e, v) => setTabIndex(v)}
-            sx={{
-              mb: 1,
-              minHeight: 32,
-              flex: 1,
-              '& .MuiTabs-indicator': { backgroundColor: 'text.primary', height: 2, borderRadius: '0px' },
-              '& .MuiTab-root': { minHeight: 32, textTransform: 'none', fontWeight: 700, fontSize: '0.85rem', color: 'text.primary', opacity: 0.5, '&.Mui-selected': { color: 'text.primary', opacity: 1 } }
-            }}
-          >
-            <Tab
-              label={
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <span>{t('home.tokens')}</span>
-                  {visibleTokenCount > 0 && (
-                    <Chip
-                      label={visibleTokenCount}
-                      size="small"
-                      sx={{ height: 18, fontSize: '0.65rem', fontWeight: 800, bgcolor: 'transparent', border: '1px solid', borderColor: 'divider', color: 'text.primary', borderRadius: '0px' }}
-                    />
-                  )}
-                </Stack>
-              }
-            />
-            <Tab label={t('home.nfts')} />
-          </Tabs>
+        {/* One list, so no tab strip. The NFT gallery is out for the testnet release —
+            it depends on the indexer, which user-added chains do not have. */}
+        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Typography variant="subtitle2" fontWeight={800} sx={{ fontSize: '0.85rem' }}>
+              {t('home.tokens')}
+            </Typography>
+            {visibleTokenCount > 0 && (
+              <Chip
+                label={visibleTokenCount}
+                size="small"
+                sx={{ height: 18, fontSize: '0.65rem', fontWeight: 800, bgcolor: 'transparent', border: '1px solid', borderColor: 'divider', color: 'text.primary', borderRadius: '0px' }}
+              />
+            )}
+          </Stack>
+          <Tooltip title="Portfolio">
+            <IconButton
+              size="small"
+              onClick={() => navigate('/portfolio')}
+              aria-label="Portfolio"
+              sx={{ borderRadius: '0px', color: 'text.primary', opacity: 0.6, '&:hover': { opacity: 1 } }}
+            >
+              <TrendingUp sx={{ fontSize: 18 }} />
+            </IconButton>
+          </Tooltip>
         </Stack>
 
-        {tabIndex === 0 && (
-          <Box>
+        <Box>
             {(() => {
               // The balance provider returns every token it has ever seen for this
               // address, which buries the few that matter. Keep the native token (it is
               // the network's unit of account even at zero) and anything with a balance.
               const hasBalance = (tk: DisplayToken) => {
                 if (tk.contractAddress === "ETH") return true;
+                // A confidential balance that could not be decrypted reads as "0.0". It is
+                // not zero — it is unknown, and the ciphertext proving it exists is on
+                // chain. Filtering it out here is what made shielded tokens disappear from
+                // the wallet after a coprocessor hiccup or an expired permit.
+                if (tk.decryptFailed) return true;
                 const bal = balances[tk.contractAddress];
                 return !!bal && parseFloat(bal.tokenBalance) > 0;
               };
@@ -1020,11 +1008,15 @@ function Home() {
                   {displayList.map((token, idx: number) => {
                     const b = balances[token.contractAddress];
                     const rawBalance = b ? parseFloat(b.tokenBalance) : 0;
-                    const balanceStr = rawBalance > 0
-                      ? (rawBalance < 0.0001 ? '<0.0001' : rawBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }))
-                      : '0';
+                    const balanceStr = token.decryptFailed
+                      ? t('privacy.couldNotDecrypt')
+                      : rawBalance > 0
+                        ? (rawBalance < 0.0001 ? '<0.0001' : rawBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }))
+                        : '0';
                     const valUsd = b?.totalValueUsd ?? 0;
-                    const valStr = valUsd > 0 ? `$${valUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '$0.00';
+                    const valStr = token.decryptFailed
+                      ? '—'
+                      : valUsd > 0 ? `$${valUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '$0.00';
 
                     return (
                       <AssetItem
@@ -1109,105 +1101,13 @@ function Home() {
                 {t('home.importCustomToken')}
               </Button>
             </Box>
-          </Box>
-        )}
+        </Box>
 
-        {tabIndex === 1 && (
-          <Box>
-            {nfts.length > 0 ? (
-              <Box
-                sx={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
-                  gap: 1.5,
-                  pb: 2,
-                }}
-              >
-                {nfts.map((nft) => (
-                  <NftGalleryCard
-                    key={`${nft.contractAddress}-${nft.tokenId}`}
-                    contractAddress={nft.contractAddress}
-                    tokenId={nft.tokenId}
-                    symbol={nft.symbol}
-                    name={nft.name}
-                    imageUrl={nft.imageUrl}
-                    balance={nft.balance ?? 1}
-                    isShielded={false}
-                    marketplaceUrl={getNftMarketplaceUrl(activeNetworkId, nft.contractAddress, nft.tokenId)}
-                  />
-                ))}
-              </Box>
-            ) : loading ? (
-              <NftGridSkeleton count={4} />
-            ) : (
-              <Box sx={{
-                textAlign: 'center',
-                py: 8,
-                px: 3,
-                borderRadius: 3,
-                background: theme.palette.mode === 'dark'
-                  ? 'linear-gradient(135deg, rgba(17,29,43,0.5) 0%, rgba(26,47,69,0.3) 100%)'
-                  : 'linear-gradient(135deg, rgba(239,246,255,0.8) 0%, rgba(217,226,236,0.4) 100%)',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: 1
-              }}>
-                <Box sx={{
-                  width: 64, height: 64, borderRadius: 4,
-                  background: theme.palette.mode === 'dark'
-                    ? 'linear-gradient(45deg, #172554, #1d4ed8)'
-                    : 'linear-gradient(45deg, #dbeafe, #bfdbfe)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  mb: 1
-                }}>
-                  <Hub sx={{ color: 'text.disabled', fontSize: 32 }} />
-                </Box>
-                <Typography variant="subtitle1" color="text.primary" fontWeight={700}>
-                  {t('home.noNftsTitle')}
-                </Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                  {t('home.noNftsDesc')}
-                </Typography>
-              </Box>
-            )}
-
-            <Box sx={{ mt: 3, display: 'flex', justifyContent: 'center' }}>
-              <Button
-                variant="outlined"
-                startIcon={<Add />}
-                onClick={() => setImportNftModalOpen(true)}
-                sx={{
-                  fontWeight: 600,
-                  px: 3,
-                  py: 1,
-                  borderRadius: 3,
-                  fontSize: '0.8rem',
-                  textTransform: 'none',
-                  borderColor: 'divider',
-                  color: 'text.secondary',
-                  '&:hover': {
-                    borderColor: 'primary.main',
-                    color: 'primary.main',
-                    bgcolor: theme.palette.mode === 'dark' ? 'rgba(96,165,250,0.04)' : 'rgba(37,99,235,0.03)',
-                  },
-                }}
-              >
-                {t('home.importCustomNft')}
-              </Button>
-            </Box>
-          </Box>
-        )}
       </Box>
 
       <ImportTokenModal
         open={importTokenModalOpen}
         onClose={() => setImportTokenModalOpen(false)}
-        onImportSuccess={fetchData}
-      />
-      <ImportNftModal
-        open={importNftModalOpen}
-        onClose={() => setImportNftModalOpen(false)}
         onImportSuccess={fetchData}
       />
 

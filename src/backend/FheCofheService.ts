@@ -11,9 +11,26 @@
  *   4. first encryptInputs() lazily boots TFHE WASM and fetches FHE keys
  *
  * Decryption is split by intent, and the two are not interchangeable:
- *   - decryptForView → plaintext for the UI only. Always needs a permit.
+ *   - decryptForView → plaintext for the UI only. Always needs an ACP.
  *   - decryptForTx   → plaintext + Threshold Network signature that a contract can
  *                      verify. Used to settle unshield claims.
+ *
+ * ── Permits became ACPs (SDK 0.7) ────────────────────────────────────────────────
+ *
+ * The coprocessor now refuses `sealOutput` for anything but an Access Control Permission
+ * carrying a sealing key: the plaintext is sealed *to* that key rather than returned in
+ * the clear, so a permit without one has nothing to seal against. Older permits are not
+ * upgradeable — the field simply does not exist in them.
+ *
+ * That is a network-side requirement, not a client preference, so every SDK at or below
+ * 0.6.x fails every view-decrypt with `SEAL_OUTPUT_FAILED: sealoutput requires an ACP with
+ * a sealingKey`, no matter what the wallet does. Balances stay safely on-chain and remain
+ * fully spendable; they just cannot be read back. Hence the migration here.
+ *
+ * Encryption changed shape in the same release: `execute()` returns bare per-input hashes
+ * followed by one batch proof, and the consuming contract must be declared up front
+ * because the verifier binds it into the signed digest. `toInEuint64` reassembles the
+ * struct our deployed wrappers expect.
  *
  * @see https://cofhe-docs.fhenix.zone/client-sdk/introduction/overview
  */
@@ -27,10 +44,23 @@ import {
   FheTypes,
   CofheErrorCode,
   isCofheError,
-  assertCorrectEncryptedItemInput,
 } from "@cofhe/sdk";
-import { ValidationUtils } from "@cofhe/sdk/permits";
-import type { CofheClient, EncryptedUint64Input } from "@cofhe/sdk";
+import { ValidationUtils } from "@cofhe/sdk/acps";
+import type { CofheClient } from "@cofhe/sdk";
+
+/**
+ * An encrypted uint64 ready to pass to `confidentialTransfer(address, bytes32, bytes)`.
+ *
+ * Two values, not one struct: cofhe-contracts replaced `InEuint64` with an
+ * `externalEuint64` handle plus a separate batch proof, and the SDK returns them the same
+ * way. They travel together and mean nothing apart.
+ */
+export interface EncryptedUint64Input {
+  /** `externalEuint64` — the ciphertext handle, as bytes32. */
+  handle: `0x${string}`;
+  /** Verifier signature authorising this batch for this account, chain and contract. */
+  proof: `0x${string}`;
+}
 
 /** Result of decrypting a handle for on-chain publication (unshield claims). */
 export interface DecryptForTxResult {
@@ -102,21 +132,21 @@ class FheCofheService {
   }
 
   /**
-   * Whether a usable permit exists right now for the connected account.
+   * Whether a usable ACP exists right now for the connected account.
    *
-   * Derived from the stored permit rather than cached: permits expire (7 days by default),
-   * so a boolean set once at creation time silently goes stale and every later decrypt
-   * fails with a permit error the wallet could have prevented.
+   * Derived from the stored ACP rather than cached: they expire (7 days by default), so a
+   * boolean set once at creation time silently goes stale and every later decrypt fails
+   * with an error the wallet could have prevented.
    */
   hasPermit(): boolean {
-    const permit = this.getActivePermit();
-    return !!permit && ValidationUtils.isValid(permit).valid;
+    const acp = this.getActivePermit();
+    return !!acp && ValidationUtils.isValid(acp).valid;
   }
 
   /**
    * Whether the SDK is connected as `accountAddress` on `networkId`.
    *
-   * Permits and encrypted inputs are both scoped to `chainId + account`; reusing a
+   * ACPs and encrypted inputs are both scoped to `chainId + account`; reusing a
    * connection across either boundary produces inputs the contract will reject, so a
    * mismatch must force a reconnect rather than being tolerated.
    */
@@ -203,33 +233,39 @@ class FheCofheService {
   // ============ PERMITS ============
 
   /**
-   * Ensure an active self-permit exists for the connected account.
+   * Ensure an active self-ACP exists for the connected account.
    *
-   * Prompts the signer for an EIP-712 signature the first time. Permits default to a
-   * 7-day expiry and are persisted by the SDK, so this is cheap on repeat calls.
+   * Prompts the signer for an EIP-712 signature the first time. ACPs default to a 7-day
+   * expiry and are persisted by the SDK, so this is cheap on repeat calls.
    *
-   * @see https://cofhe-docs.fhenix.zone/client-sdk/guides/permits
+   * An ACP left over from the permit era is kept out of the way here: it validates fine
+   * against the local schema but carries no sealing key, so the coprocessor refuses every
+   * decrypt made with it. Dropping it is the only way forward — the field cannot be
+   * back-filled onto a signed structure.
+   *
+   * @see https://cofhe-docs.fhenix.zone/client-sdk/guides/acps
    */
   async ensurePermit(): Promise<void> {
     const client = this.requireClient();
 
-    const active = client.permits.getActivePermit();
+    const active = client.acp.getActiveACP();
     if (active) {
       const check = ValidationUtils.isValid(active);
-      if (check.valid) return;
+      const sealable = !!(active as { sealingKey?: string }).sealingKey;
+      if (check.valid && sealable) return;
 
-      // A malformed stored permit is never recoverable by re-signing; drop it so
-      // getOrCreateSelfPermit starts clean instead of failing on the same payload.
-      if (check.error === "invalid-schema") client.permits.removeActivePermit();
+      // Neither a malformed ACP nor a pre-0.7 one is recoverable by re-signing the same
+      // payload; drop it so getOrCreateSelfACP starts clean.
+      await client.acp.removeActiveACP();
     }
 
-    await client.permits.getOrCreateSelfPermit();
+    await client.acp.getOrCreateSelfACP();
   }
 
-  /** Expose the active permit so the UI can surface its expiry. */
+  /** Expose the active ACP so the UI can surface its expiry. */
   getActivePermit() {
     if (!this.client || !this._isReady) return undefined;
-    return this.client.permits.getActivePermit();
+    return this.client.acp.getActiveACP();
   }
 
   /**
@@ -244,48 +280,57 @@ class FheCofheService {
     return client.verifyDecryptResult(ctHash, cleartext, signature);
   }
 
-  /** Unix seconds at which the active permit expires, if any. */
+  /** Unix seconds at which the active ACP expires, if any. */
   getPermitExpiry(): number | undefined {
-    const permit = this.getActivePermit();
-    return permit ? Number(permit.expiration) : undefined;
+    const acp = this.getActivePermit();
+    return acp ? Number(acp.expiration) : undefined;
   }
 
   // ============ ENCRYPTION ============
 
   /**
-   * Encrypt a uint64 for a contract parameter of type `InEuint64`.
+   * Encrypt a uint64 for an `externalEuint64` contract parameter.
    *
-   * The returned object carries the verifier signature that authorizes this ciphertext
-   * for *this* account on *this* chain — it cannot be reused elsewhere.
+   * The proof authorizes this ciphertext for *this* account, on *this* chain, against
+   * *this* contract — it cannot be replayed anywhere else.
    *
    * @param value Amount in confidential units (6 decimals), not underlying token units.
    * @see https://cofhe-docs.fhenix.zone/client-sdk/guides/encrypting-inputs
    */
   async encryptUint64(
     value: bigint,
+    consumingContract: string,
     onStep?: (step: string) => void
   ): Promise<EncryptedUint64Input> {
     const client = this.requireClient();
 
-    let builder = client.encryptInputs([Encryptable.uint64(value)]);
+    const item = Encryptable.uint64(value);
+
+    // The consuming contract is bound into the verifier's signed digest, so a batch signed
+    // for one wrapper cannot be replayed into another. It is also mandatory: `execute()`
+    // is not even exposed until it is set.
+    let builder = client.encryptInputs([item]).setConsumingContract(consumingContract);
     if (onStep) {
       builder = builder.onStep((step, ctx) => {
         if (ctx?.isStart) onStep(String(step));
       });
     }
 
-    const [encrypted] = await builder.execute();
+    // One hash per input, then a single proof authenticating the whole batch. With one
+    // input that is exactly two entries.
+    const [hash, proof] = await builder.execute();
 
-    // Catches a malformed/mistyped input here rather than as an opaque on-chain revert.
-    assertCorrectEncryptedItemInput(encrypted);
+    if (!hash || !proof) {
+      throw new Error("Encryption returned an incomplete result");
+    }
 
-    return encrypted;
+    return { handle: hash as `0x${string}`, proof: proof as `0x${string}` };
   }
 
   // ============ DECRYPTION ============
 
   /**
-   * Decrypt a handle for UI display. Requires a permit; never publishable on-chain.
+   * Decrypt a handle for UI display. Requires an ACP; never publishable on-chain.
    *
    * @see https://cofhe-docs.fhenix.zone/client-sdk/guides/decrypt-to-view
    */
@@ -299,11 +344,14 @@ class FheCofheService {
         .set404RetryTimeout(VIEW_404_RETRY_MS)
         .execute();
     } catch (err) {
-      // The Threshold Network can reject a permit the local schema check accepted (for
-      // example after an ACL change). Drop it so the next call re-signs instead of
-      // replaying a permit the network has already refused.
-      if (isCofheError(err) && err.code === CofheErrorCode.PermitNotFound) {
-        try { client.permits.removeActivePermit(); } catch { /* nothing to remove */ }
+      // The Threshold Network can reject an ACP the local schema check accepted — after an
+      // ACL change, or because the network now demands a field this one predates. Drop it
+      // so the next call re-signs instead of replaying something already refused.
+      if (
+        isCofheError(err) &&
+        (err.code === CofheErrorCode.ACPNotFound || err.code === CofheErrorCode.SealOutputFailed)
+      ) {
+        try { await client.acp.removeActiveACP(); } catch { /* nothing to remove */ }
       }
       throw this.normalizeDecryptError(err);
     }
@@ -313,7 +361,7 @@ class FheCofheService {
    * Decrypt a handle together with a Threshold Network signature a contract can verify.
    *
    * Used to settle unshield claims: `unshield` calls `FHE.allowPublic` on the burned
-   * handle, so no permit is needed — the ACL already permits anyone to decrypt it.
+   * handle, so no ACP is needed — the ACL already permits anyone to decrypt it.
    *
    * @see https://cofhe-docs.fhenix.zone/client-sdk/guides/decrypt-to-tx
    */
@@ -324,7 +372,7 @@ class FheCofheService {
       const result = await client
         .decryptForTx(ctHash)
         .set404RetryTimeout(TX_404_RETRY_MS)
-        .withoutPermit()
+        .withoutACP()
         .execute();
       return result as DecryptForTxResult;
     } catch (err) {

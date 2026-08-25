@@ -16,6 +16,8 @@ export interface DisplayToken {
   contractAddress: string;
   decimals: number;
   isShielded: boolean;
+  /** Ciphertext exists but could not be decrypted — see `ShieldedHolding.decryptFailed`. */
+  decryptFailed?: boolean;
   isSpam: boolean;
   isSuspicious: boolean;
   isHidden: boolean;
@@ -27,6 +29,7 @@ export interface DisplayToken {
 /** Extended balance entry stored in the Home balanceMap */
 export interface BalanceEntry extends TokenBalance {
   isShielded?: boolean;
+  decryptFailed?: boolean;
   symbol?: string;
   name?: string;
 }
@@ -40,6 +43,8 @@ export interface WrappedBalance {
   tokenBalance: string;
   isNative: boolean;
   isShielded: boolean;
+  /** Ciphertext exists but could not be decrypted — see `ShieldedHolding.decryptFailed`. */
+  decryptFailed?: boolean;
   priceUsd?: number;
   totalValueUsd?: number;
 }

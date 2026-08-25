@@ -24,6 +24,11 @@ vite.config.js
 *.sln
 *.sw?
 
+# Chrome extension signing key. Whoever holds it can publish an extension that Chrome
+# treats as this one — it must never be committed. Back it up outside the repo.
+extension-key.pem
+*.pem
+
 # Bone-headed .env xD
 .env
 # Backups and per-environment copies carry the same secrets as .env itself.

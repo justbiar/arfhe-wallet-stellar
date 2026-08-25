@@ -2,9 +2,14 @@ name = "arfhewallet-agent-proxy"
 main = "src/index.ts"
 compatibility_date = "2024-11-01"
 [vars]
-# Exact origin of the published extension, e.g. "chrome-extension://abcdefghijklmnop".
+# Exact origin of the extension, derived from the `key` pinned in extension/manifest.json.
+# Because that key is committed, every install — each developer's, CI's, a packed build's —
+# resolves to this same id, so one origin covers all of them. Without the key Chrome derives
+# the id from the install path instead, which is why every machine had a different one and
+# only whoever's id happened to be here could reach the agent.
+#
 # Requests from any other origin are rejected before hitting OpenRouter.
-ALLOWED_ORIGIN = "chrome-extension://ajfpejolnhgeflhgjmboikiffpdlhngi"
+ALLOWED_ORIGIN = "chrome-extension://cdhfecdlpblpdngkadiigjmodedapoih"
 # Requests allowed per IP per 60 seconds.
 RATE_LIMIT_PER_MINUTE = "15"
 # x402 (Faz 3) — "true" routes /agent/x402/* through the real facilitator

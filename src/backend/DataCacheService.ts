@@ -187,6 +187,33 @@ export class DataCacheService {
     }
 
     /**
+     * Every network this account has a cached snapshot for.
+     *
+     * The cache is keyed by account *and* network, so it already holds a picture of each
+     * chain the wallet has visited. Home only ever renders one of them; this is what lets
+     * a cross-network view exist without issuing a single new request.
+     *
+     * A network absent from this list is not empty — it is unknown, and callers must say
+     * so rather than counting it as zero. Silently treating "never loaded" as "nothing
+     * here" would understate the user's holdings, which is the same mistake that once
+     * made undecryptable shielded balances disappear.
+     */
+    getCachedNetworks(address: string): { networkId: number; data: CachedPortfolio; ageMs: number }[] {
+        const prefix = `${address.toLowerCase()}:`;
+        const now = Date.now();
+        const out: { networkId: number; data: CachedPortfolio; ageMs: number }[] = [];
+
+        for (const [key, data] of this.cache) {
+            if (!key.startsWith(prefix)) continue;
+            const networkId = Number(key.slice(prefix.length));
+            if (!Number.isFinite(networkId)) continue;
+            out.push({ networkId, data, ageMs: now - data.balanceTimestamp });
+        }
+
+        return out.sort((a, b) => b.data.totalUsd - a.data.totalUsd);
+    }
+
+    /**
      * Check if prices are still fresh (separate longer TTL).
      */
     arePricesFresh(address: string, networkId: string | number): boolean {

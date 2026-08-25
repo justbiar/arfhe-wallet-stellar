@@ -523,12 +523,30 @@
     "welcomeTitle": "Welcome to ArfheWallet"
   },
   "portfolio": {
-    "allocation": "Asset Allocation",
+    "acrossNetworks": "Across all networks",
+    "allocation": "Allocation",
+    "assets": "Assets",
+    "byNetwork": "By network",
+    "daysAgo_one": "{{count}} day ago",
+    "daysAgo_other": "{{count}} days ago",
+    "hoursAgo_one": "{{count}} hr ago",
+    "hoursAgo_other": "{{count}} hrs ago",
+    "justNow": "just now",
+    "minutesAgo_one": "{{count}} min ago",
+    "minutesAgo_other": "{{count}} min ago",
+    "networkCount_one": "{{count}} network",
+    "networkCount_other": "{{count}} networks",
+    "notLoaded": "Not counted yet: {{networks}}. Open a network once and its balances join this total.",
+    "nothingCached": "No balances cached yet. Visit a network from the home screen and it will appear here.",
     "overview": "Overview",
     "performance": "Performance",
+    "privacySplit": "Private vs public",
+    "public": "Public",
+    "shielded": "Shielded",
     "staleData": "Showing recent data — refreshes when you open Home",
     "title": "Portfolio",
-    "totalValue": "Total Value"
+    "totalValue": "Total Value",
+    "updated": "Updated {{ago}}"
   },
   "privacy": {
     "allBalances": "All balances",

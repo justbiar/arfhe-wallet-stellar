@@ -523,12 +523,30 @@
     "welcomeTitle": "ArfheWallet'a Hoşgeldiniz"
   },
   "portfolio": {
-    "allocation": "Varlık Dağılımı",
+    "acrossNetworks": "Tüm ağlarda",
+    "allocation": "Dağılım",
+    "assets": "Varlıklar",
+    "byNetwork": "Ağlara göre",
+    "daysAgo_one": "{{count}} gün önce",
+    "daysAgo_other": "{{count}} gün önce",
+    "hoursAgo_one": "{{count}} sa önce",
+    "hoursAgo_other": "{{count}} sa önce",
+    "justNow": "az önce",
+    "minutesAgo_one": "{{count}} dk önce",
+    "minutesAgo_other": "{{count}} dk önce",
+    "networkCount_one": "{{count}} ağ",
+    "networkCount_other": "{{count}} ağ",
+    "notLoaded": "Henüz sayılmadı: {{networks}}. Bir ağı bir kez açın, bakiyeleri bu toplama katılsın.",
+    "nothingCached": "Henüz önbelleğe alınmış bakiye yok. Ana ekrandan bir ağa girin, burada görünecek.",
     "overview": "Genel Bakış",
     "performance": "Performans",
+    "privacySplit": "Gizli / açık",
+    "public": "Açık",
+    "shielded": "Gizli",
     "staleData": "Son alınan veriler gösteriliyor — Ana sayfayı açınca yenilenir",
     "title": "Portföy",
-    "totalValue": "Toplam Değer"
+    "totalValue": "Toplam Değer",
+    "updated": "{{ago}} güncellendi"
   },
   "privacy": {
     "allBalances": "Tüm bakiyeler",

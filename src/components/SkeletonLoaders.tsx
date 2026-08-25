@@ -165,65 +165,6 @@ export function HistoryListSkeleton({ rows = 5 }: { rows?: number }) {
   );
 }
 
-/** Portfolio page skeleton — 3 stat cards + charts + asset list */
-export function PortfolioSkeleton() {
-  return (
-    <Box sx={{ pb: 10, px: 2, pt: 3 }}>
-      {/* Header */}
-      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 4 }}>
-        <Skeleton variant="circular" width={36} height={36} animation="wave" />
-        <Skeleton variant="text" width="45%" height={32} animation="wave" />
-      </Stack>
-
-      {/* Stat cards row */}
-      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2, mb: 4 }}>
-        {[1, 2, 3].map((i) => (
-          <Box key={i} sx={{ flex: { xs: "1 1 100%", sm: "1 1 calc(33.333% - 16px)" } }}>
-            <StatCardSkeleton />
-          </Box>
-        ))}
-      </Box>
-
-      {/* Charts row */}
-      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 3, mb: 4 }}>
-        <Box sx={{ flex: { xs: "1 1 100%", md: "1 1 calc(66.666% - 24px)" } }}>
-          <Paper elevation={0} sx={{ p: 3, borderRadius: 4, bgcolor: "background.paper", border: "1px solid", borderColor: "divider" }}>
-            <Skeleton variant="text" width="30%" height={24} animation="wave" sx={{ mb: 2 }} />
-            <Skeleton variant="rectangular" width="100%" height={180} animation="wave" sx={{ borderRadius: 2 }} />
-          </Paper>
-        </Box>
-        <Box sx={{ flex: { xs: "1 1 100%", md: "1 1 calc(33.333% - 24px)" } }}>
-          <Paper elevation={0} sx={{ p: 3, borderRadius: 4, bgcolor: "background.paper", border: "1px solid", borderColor: "divider" }}>
-            <Skeleton variant="text" width="50%" height={24} animation="wave" sx={{ mb: 2 }} />
-            <Skeleton variant="circular" width={140} height={140} animation="wave" sx={{ mx: "auto" }} />
-          </Paper>
-        </Box>
-      </Box>
-
-      {/* Asset list */}
-      <Skeleton variant="text" width="25%" height={28} animation="wave" sx={{ mb: 2, px: 1 }} />
-      <Stack spacing={1.5}>
-        {Array.from({ length: 4 }).map((_, i) => (
-          <Paper key={i} elevation={0} sx={{ p: 2, borderRadius: 3, bgcolor: "background.paper", border: "1px solid", borderColor: "divider" }}>
-            <Stack direction="row" alignItems="center" justifyContent="space-between">
-              <Stack direction="row" alignItems="center" spacing={2}>
-                <Skeleton variant="circular" width={40} height={40} animation="wave" />
-                <Box>
-                  <Skeleton variant="text" width={60} height={20} animation="wave" />
-                  <Skeleton variant="text" width={90} height={16} animation="wave" />
-                </Box>
-              </Stack>
-              <Box sx={{ textAlign: "right" }}>
-                <Skeleton variant="text" width={70} height={20} animation="wave" />
-                <Skeleton variant="text" width={50} height={16} animation="wave" />
-              </Box>
-            </Stack>
-          </Paper>
-        ))}
-      </Stack>
-    </Box>
-  );
-}
 
 /** Standalone token list skeleton (reusable in Home, Privacy, etc.) */
 export function TokenListSkeleton({ rows = 5 }: { rows?: number }) {

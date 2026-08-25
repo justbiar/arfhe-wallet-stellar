@@ -118,9 +118,32 @@ const MATCHERS: Array<{ test: (m: string) => boolean; key: string; retryable: bo
     retryable: true,
   },
   {
-    test: (m) => m.includes("insufficient funds") || m.includes("insufficient balance"),
+    test: (m) => m.includes("insufficient funds") || m.includes("insufficient balance") || m.includes("insufficient_funds"),
     key: "errors.insufficientFunds",
     retryable: false,
+  },
+
+  // ── x402 facilitator (real settle failures, Faz 3 — bkz. X402ProxyClient.settleX402Payment,
+  // backend-proxy/src/x402FacilitatorClient.ts). The facilitator's `invalidReason`/`errorReason`
+  // codes are raw machine strings ("invalid_exact_evm_signature" etc.) — never shown as-is.
+  // Listed before the generic "expired"-less invalid_exact_evm_* catch-all so the specific
+  // deadline case gets its own (retryable — a retry re-signs with a fresh validBefore, see
+  // ConfirmationCard's handleApprove) message instead of the generic non-retryable one.
+  {
+    test: (m) =>
+      m.includes("valid_before") || (m.includes("authorization") && m.includes("expired")) || m.includes("authorization_expired"),
+    key: "errors.x402AuthorizationExpired",
+    retryable: true,
+  },
+  {
+    test: (m) => m.includes("invalid_exact_evm"),
+    key: "errors.x402PaymentRejected",
+    retryable: false,
+  },
+  {
+    test: (m) => m.includes("unexpected_error"),
+    key: "errors.x402FacilitatorError",
+    retryable: true,
   },
   {
     test: (m) => m.includes("nonce too low") || m.includes("replacement transaction underpriced"),

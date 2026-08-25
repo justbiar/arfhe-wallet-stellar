@@ -170,30 +170,48 @@ overselling; we would rather tell you where the line is.
 A built-in assistant, designed so that using it does not undo the privacy of the wallet
 it lives in.
 
-**Two modes**
+**Three modes**
 
 - **Local (`arfhe`)** — answers questions about your balance, address and network from
   wallet state **on your device**. No API key, no network request, nothing leaves.
 - **Bring your own model** — OpenAI, Anthropic, or any OpenAI-compatible endpoint, called
   directly from your browser with **your** key. Also configurable with MCP servers.
+- **Hosted (Arfio)** — a Cloudflare Worker in `backend-proxy/` fronts OpenRouter so the
+  agent works without the user holding a key. This one does involve an Arfhe-operated
+  server; see below.
 
-**What is sent, exactly:** in BYO-model mode, only the system prompt, chat history and your
-message. Wallet state — balances, addresses, shielded holdings — is passed **only** to the
-local assistant and is never included in an outbound request. If you type your own address
-into the chat, that goes out, because you sent it.
+**What is sent, exactly:** the system prompt, chat history and your message. Wallet state —
+balances, addresses, shielded holdings — is passed **only** to the local assistant and is
+never included in an outbound request. If you type your own address into the chat, that
+goes out, because you sent it.
 
-There is no Arfhe-operated inference server. There is no telemetry or analytics anywhere in
-this codebase.
+**On the hosted mode:** your messages pass through Arfhe's Worker on the way to OpenRouter.
+Choose local or bring-your-own if you would rather they did not. There is no telemetry or
+analytics anywhere in this codebase, and no inference happens on Arfhe hardware — the
+Worker relays, it does not read or retain.
+
+### Backend proxy & RAG knowledge base
+
+`backend-proxy/` is a Cloudflare Worker that fronts OpenRouter for the hosted agent and
+also serves `POST /agent/retrieve-context`, which embeds the user's message (Workers AI,
+`@cf/baai/bge-m3`) and returns the most relevant excerpts of
+[FHE_COMPLETE_GUIDE.md](./FHE_COMPLETE_GUIDE.md) for `AgentOrchestrator` to splice into the
+system prompt.
+
+`VITE_AGENT_PROXY_URL` is the one setting not read from `.env` — it is per Vite mode, so
+see `.env.development` (`pnpm dev`, local `wrangler dev`) against `.env.production`
+(`pnpm build`, deployed Worker).
+
+See `backend-proxy/README.md` for running its tests and — importantly — **how to regenerate
+the committed chunk embeddings after editing `backend-proxy/src/knowledge/chunks.ts`**. The
+vector JSON is derived data, not hand-written, and goes silently out of sync otherwise.
 
 ---
 
 ## Networks
 
-**Full wallet:** Ethereum, Arbitrum One, Base, Optimism, Polygon, BNB Chain, Avalanche,
-Linea, Sei, plus testnets (Sepolia, Arbitrum Sepolia, Base Sepolia, Avalanche Fuji, Monad
-Testnet) and any custom EVM chain you add.
-
-**Confidential features** require the CoFHE coprocessor, which runs on three chains:
+The wallet ships with three networks — the chains the CoFHE coprocessor runs on, and
+therefore the only ones where confidential balances exist at all:
 
 | Network | Chain ID |
 |---|---|
@@ -201,9 +219,17 @@ Testnet) and any custom EVM chain you add.
 | Arbitrum Sepolia | 421614 |
 | Base Sepolia | 84532 |
 
-Everywhere else the wallet works normally and shielding is disabled — with an explanation
-rather than a greyed-out button. Adding a custom network tells you up front whether it
-supports confidential transactions.
+**Every other chain is yours to add.** A network added from Settings → Networks is not
+second-class: the same balance discovery, history scan, sends and dApp connections serve
+it. What it does not get is the indexer behind the built-in chains, so instant history is
+replaced by a recent-block scan.
+
+Each shipped network's RPC endpoint is editable, with an optional fallback for when the
+primary is rate-limited or down. The editor asks the endpoint which chain it serves before
+accepting it — an RPC for the wrong chain answers every call plausibly and would sign
+transactions for a chain you did not intend.
+
+Adding a network tells you up front whether it supports confidential transactions.
 
 ---
 

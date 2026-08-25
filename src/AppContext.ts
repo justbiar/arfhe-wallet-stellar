@@ -12,6 +12,9 @@ import { WalletConnectService } from "./backend/WalletConnectService";
 import SpamFilter from "./backend/SpamFilter.js";
 import PendingClaimQueue from "./backend/PendingClaimQueue.js";
 import SitePermissionService from "./backend/SitePermissionService.js";
+import { configureAgentToolRunner } from "./backend/AgentToolRunner.js";
+import { NetworkId } from "./backend/NetworkTypes.js";
+import { CONTRACTS_BASE_SEPOLIA } from "./components/panels/shared.js";
 
 export const WalletContext = createContext<AppContext | undefined>(undefined);
 
@@ -68,6 +71,39 @@ export class AppContext {
       // Memory only. The encrypted snapshot on disk stays, so unlocking renders balances
       // straight away instead of starting from an empty list.
       this.dataCacheService.clearMemory();
+    });
+
+    // The in-wallet AI Agent (AgentChatPanel -> AgentOrchestrator -> AgentToolRunner) needs
+    // to resolve a live Network / Account from the context it's given before it can execute
+    // any tool call. Wired here, synchronously in the constructor, so it's configured before
+    // React ever renders a child that could call runAgentTurn — a useEffect elsewhere would
+    // leave a real window where the UI is mounted but the runner isn't configured yet.
+    configureAgentToolRunner({
+      getNetwork: (networkId) => {
+        const activeId = this.networkProvider.getActiveNetworkId();
+        if (String(activeId) !== networkId) {
+          throw new Error(
+            `Requested network (${networkId}) does not match the active network (${activeId}). ` +
+            "Switch networks and try again."
+          );
+        }
+        return this.networkProvider.getActiveNetwork();
+      },
+      getAccount: (address) => {
+        const target = address.toLowerCase();
+        return this.accountManager.GetAll().find((a) => a.GetAddress()?.toLowerCase() === target);
+      },
+      // x402 (Faz 3) only targets Base Sepolia for now — any other network means "not
+      // supported here", handled by AgentToolRunner as a normal tool error, not a crash.
+      getUsdcTokenIdentity: (networkId) => {
+        if (Number(networkId) !== NetworkId.Base_Sepolia) return undefined;
+        return {
+          address: CONTRACTS_BASE_SEPOLIA.USDC.public,
+          name: "USDC", // Base Sepolia testnet USDC domain name — confirmed via Circle docs & BaseScan
+          version: "2",
+          chainId: NetworkId.Base_Sepolia,
+        };
+      },
     });
   }
 }

@@ -12,7 +12,7 @@ const APP_VERSION: string = typeof __APP_VERSION__ === "string" ? __APP_VERSION_
 import { useContext, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Box, Typography, Container, Paper, List, ListItem, ListItemButton, ListItemText, ListItemIcon, Switch, Chip, IconButton, alpha, useTheme, Stack, Divider, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Button, CircularProgress } from '@mui/material';
-import { Notifications, DarkMode, Language, Security, Lock, Wifi, ChevronRight, Check, Close, Fingerprint, PrivacyTip, Gavel, Info, OpenInNew } from '@mui/icons-material';
+import { Notifications, DarkMode, Language, Security, Lock, Wifi, ChevronRight, Check, Close, Fingerprint, PrivacyTip, Gavel, Info, OpenInNew, Bolt } from '@mui/icons-material';
 import { ColorModeContext } from '../ThemeContext';
 import { WalletContext } from '../AppContext';
 import { CustomNetworkConfig } from '../backend/NetworkTypes';
@@ -105,6 +105,10 @@ export default function Settings() {
                         <ListItemButton onClick={() => navigate('/settings/security')}>
                             <ListItemIcon><Security /></ListItemIcon>
                             <ListItemText primary={t('settings.security')} secondary={t('settings.keysPermissions')} />
+                        </ListItemButton>
+                        <ListItemButton onClick={() => navigate('/settings/x402')}>
+                            <ListItemIcon><Bolt /></ListItemIcon>
+                            <ListItemText primary={t('settings.x402Payments')} secondary={t('settings.x402PaymentsDesc')} />
                         </ListItemButton>
                         {biometricSupported && (
                             <ListItem>

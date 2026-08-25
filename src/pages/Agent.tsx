@@ -1,327 +1,164 @@
 /**
- * Agent.tsx — In-wallet AI Agent
+ * Agent.tsx — In-wallet AI Agent page.
  *
- * First run: choose between the built-in "Arfhe Agent" (no setup needed)
- * or bringing your own agent (API key + connection details). Once
- * configured, shows a chat UI with a settings drawer to change the
- * provider, API key, model, system prompt, and MCP servers at any time.
+ * Two tabs: "Sohbet" (AgentChatPanel — the actual chat/tool-calling UI) and "Agent Geçmişi"
+ * (AgentProposalHistoryPanel — a persisted log of what every proposal the agent ever made
+ * resulted in). Deliberately not the bottom-nav "History" page, which shows real on-chain
+ * transactions — this is proposal-level, including ones AgentPolicyEngine denied before the
+ * user ever saw a card. Selected tab persists across popup close/open (usePersistedState,
+ * same chrome.storage.session pattern as the chat/proposal history below).
+ *
+ * OWNS both `agent_chat_history` (per-account: `Record<address, ChatMessage[]>`) and
+ * `agent_proposal_history` (cross-account, each record tagged with `accountAddress`) — NOT
+ * AgentChatPanel/AgentProposalHistoryPanel themselves, which receive them as props. Two
+ * reasons this lives here rather than in the tab components:
+ *
+ *  1. usePersistedState instances don't sync with each other — each is an independent read of
+ *     chrome.storage.session at mount, with one-directional (component → storage) writes. If
+ *     both this page AND AgentChatPanel held their own copy of the same key, a write from one
+ *     could be silently lost to a stale write from the other (last write wins, no merge). This
+ *     page is always mounted for the whole /agent route regardless of which tab is showing, so
+ *     it's the only place that can safely be the single source of truth for both keys.
+ *  2. The account-switch handling below (cancel a pending card left on the OUTGOING account,
+ *     drop a notice into the INCOMING account's chat, toast) needs to work no matter which tab
+ *     the user is on — putting it inside AgentChatPanel would silently stop working whenever
+ *     the user happened to be looking at the Agent Geçmişi tab when they switched accounts.
+ *
+ * Per-account chat history (rather than one shared transcript, or a `agent_chat_history:
+ * <address>` storage key per account) avoids a real UX bug: usePersistedState's initial read
+ * only runs once per hook instance, so swapping which *key* a single instance reads on account
+ * switch would show a flash of the outgoing account's messages before the async re-read caught
+ * up. A single `Record<address, ChatMessage[]>` under one fixed key sidesteps that entirely —
+ * switching accounts is just indexing into an already-loaded map, synchronous, no flash.
  */
 
 import * as React from "react";
-import {
-  Box,
-  Typography,
-  Button,
-  TextField,
-  IconButton,
-  Drawer,
-  Stack,
-  CircularProgress,
-  Paper,
-} from "@mui/material";
-import { Settings, Send, SmartToy, Person, ErrorOutline } from "@mui/icons-material";
+import { Box, Tabs, Tab } from "@mui/material";
 import { useTranslation } from "react-i18next";
-import { WalletContext } from "../AppContext.js";
+import { usePersistedState } from "../hooks/usePersistedState.js";
 import { useActiveAccount } from "../ActiveAccountProvider.js";
+import { useToast } from "../components/ToastProvider.js";
+import type { ChatMessage } from "../backend/AgentOrchestrator.js";
 import {
-  loadAgentConfig,
-  saveAgentConfig,
-  resetAgentConfig,
-  sendToAgent,
-  type AgentConfig,
-  type ChatMessage,
-  type WalletSnapshot,
-} from "../backend/AgentService.js";
-import AgentSettingsPanel from "../components/panels/AgentSettingsPanel.js";
-
-// ─── Setup Screen ───────────────────────────────────────────────────
-
-function AgentSetup({ onConfigured }: { onConfigured: (config: AgentConfig) => void }) {
-  const { t } = useTranslation();
-  const [mode, setMode] = React.useState<"choice" | "own">("choice");
-  const [apiKey, setApiKey] = React.useState("");
-  const [model, setModel] = React.useState("gpt-4o-mini");
-  const [baseUrl, setBaseUrl] = React.useState("");
-
-  const handleUseArfhe = () => {
-    const config = loadAgentConfig();
-    onConfigured({ ...config, provider: "arfhe", configured: true });
-  };
-
-  const handleSaveOwn = () => {
-    if (!apiKey.trim()) return;
-    const config = loadAgentConfig();
-    onConfigured({
-      ...config,
-      provider: "custom",
-      apiKey: apiKey.trim(),
-      model: model.trim() || "gpt-4o-mini",
-      baseUrl: baseUrl.trim() || undefined,
-      configured: true,
-    });
-  };
-
-  if (mode === "own") {
-    return (
-      <Box sx={{ p: 3, display: 'flex', flexDirection: 'column', gap: 2, maxWidth: 360, mx: 'auto' }}>
-        <Typography variant="h6" sx={{ fontFamily: 'var(--font-mono)', textTransform: 'uppercase', color: 'text.primary' }}>
-          {t('agent.ownFormTitle')}
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          {t('agent.ownFormDesc')}
-        </Typography>
-        <TextField
-          label={t('agent.apiKeyLabel')}
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          autoComplete="off"
-          fullWidth
-        />
-        <TextField
-          label={t('agent.modelLabel')}
-          placeholder="gpt-4o-mini"
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          fullWidth
-        />
-        <TextField
-          label={t('agent.baseUrlLabel')}
-          placeholder="https://api.openai.com/v1"
-          value={baseUrl}
-          onChange={(e) => setBaseUrl(e.target.value)}
-          fullWidth
-        />
-        <Button variant="contained" fullWidth disabled={!apiKey.trim()} onClick={handleSaveOwn} sx={{ height: 44 }}>
-          {t('agent.saveContinue')}
-        </Button>
-        <Button variant="text" onClick={() => setMode("choice")} sx={{ color: 'text.secondary' }}>
-          {t('agent.back')}
-        </Button>
-      </Box>
-    );
-  }
-
-  return (
-    <Box sx={{ p: 3, display: 'flex', flexDirection: 'column', gap: 2, maxWidth: 360, mx: 'auto' }}>
-      <Typography variant="h6" sx={{ fontFamily: 'var(--font-mono)', textTransform: 'uppercase', color: 'text.primary', textAlign: 'center', mb: 1 }}>
-        {t('agent.setupTitle')}
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', mb: 1 }}>
-        {t('agent.setupSubtitle')}
-      </Typography>
-
-      <Paper
-        elevation={0}
-        onClick={handleUseArfhe}
-        sx={{ p: 2.5, border: '1px solid', borderColor: 'divider', cursor: 'pointer', '&:hover': { borderColor: 'text.primary' } }}
-      >
-        <Typography variant="subtitle1" fontWeight={700}>{t('agent.arfheTitle')}</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          {t('agent.arfheDesc')}
-        </Typography>
-      </Paper>
-
-      <Paper
-        elevation={0}
-        onClick={() => setMode("own")}
-        sx={{ p: 2.5, border: '1px solid', borderColor: 'divider', cursor: 'pointer', '&:hover': { borderColor: 'text.primary' } }}
-      >
-        <Typography variant="subtitle1" fontWeight={700}>{t('agent.ownTitle')}</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          {t('agent.ownDesc')}
-        </Typography>
-      </Paper>
-    </Box>
-  );
-}
-
-// ─── Chat Screen ────────────────────────────────────────────────────
-
-function AgentChat({ config, onSaveConfig, onChangeAgent }: {
-  config: AgentConfig;
-  onSaveConfig: (config: AgentConfig) => void;
-  onChangeAgent: () => void;
-}) {
-  const { t } = useTranslation();
-  const wallet = React.useContext(WalletContext);
-  const { activeAccount } = useActiveAccount();
-  const [messages, setMessages] = React.useState<ChatMessage[]>([]);
-  const [input, setInput] = React.useState("");
-  const [sending, setSending] = React.useState(false);
-  const [settingsOpen, setSettingsOpen] = React.useState(false);
-  const scrollRef = React.useRef<HTMLDivElement>(null);
-
-  React.useEffect(() => {
-    scrollRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, sending]);
-
-  const getSnapshot = (): WalletSnapshot | null => {
-    if (!wallet || !activeAccount) return null;
-    const address = activeAccount.GetAddress() ?? "";
-    const networkId = wallet.networkProvider.getActiveNetworkId();
-    const cached = wallet.dataCacheService?.get(address, networkId);
-    return {
-      accountName: activeAccount.GetName(),
-      address,
-      networkName: wallet.networkProvider.getActiveNetwork()?.network_name ?? "Unknown",
-      totalBalanceUsd: cached?.totalUsd ?? 0,
-    };
-  };
-
-  const handleSend = async () => {
-    const text = input.trim();
-    if (!text || sending) return;
-
-    const userMsg: ChatMessage = { id: `${Date.now()}-u`, role: "user", text, ts: Date.now() };
-    setMessages(prev => [...prev, userMsg]);
-    setInput("");
-    setSending(true);
-
-    try {
-      const reply = await sendToAgent(config, messages, text, getSnapshot());
-      setMessages(prev => [...prev, { id: `${Date.now()}-a`, role: "assistant", text: reply, ts: Date.now() }]);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setMessages(prev => [...prev, { id: `${Date.now()}-e`, role: "error", text: msg, ts: Date.now() }]);
-    } finally {
-      setSending(false);
-    }
-  };
-
-  return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Header */}
-      <Box sx={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        px: 2, py: 1.25, borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0,
-      }}>
-        <Box>
-          <Typography variant="subtitle1" sx={{ fontFamily: 'var(--font-mono)', textTransform: 'uppercase', color: 'text.primary', lineHeight: 1.2 }}>
-            {t('agent.chatTitle')}
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {config.provider === "arfhe" ? t('agent.arfheTitle') : (config.model || config.provider)}
-          </Typography>
-        </Box>
-        <IconButton onClick={() => setSettingsOpen(true)} aria-label={t('agent.chatSettingsAria')}>
-          <Settings />
-        </IconButton>
-      </Box>
-
-      {/* Messages */}
-      <Box sx={{ flex: 1, overflowY: 'auto', px: 2, py: 2 }}>
-        {messages.length === 0 && (
-          <Box sx={{ textAlign: 'center', mt: 6 }}>
-            <SmartToy sx={{ fontSize: 40, color: 'text.disabled', mb: 1 }} />
-            <Typography variant="body2" color="text.secondary">
-              {t('agent.chatEmptyState')}
-            </Typography>
-          </Box>
-        )}
-
-        <Stack spacing={1.5}>
-          {messages.map((m) => (
-            <Box
-              key={m.id}
-              sx={{
-                display: 'flex',
-                gap: 1,
-                alignSelf: m.role === "user" ? 'flex-end' : 'flex-start',
-                flexDirection: m.role === "user" ? 'row-reverse' : 'row',
-                maxWidth: '85%',
-                ml: m.role === "user" ? 'auto' : 0,
-              }}
-            >
-              <Box sx={{
-                width: 26, height: 26, flexShrink: 0,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                border: '1px solid', borderColor: 'divider',
-                color: m.role === 'error' ? 'error.main' : 'text.primary',
-              }}>
-                {m.role === "user" ? <Person sx={{ fontSize: 16 }} /> : m.role === "error" ? <ErrorOutline sx={{ fontSize: 16 }} /> : <SmartToy sx={{ fontSize: 16 }} />}
-              </Box>
-              <Box sx={{
-                px: 1.5, py: 1,
-                border: '1px solid',
-                borderColor: m.role === 'error' ? 'error.main' : 'divider',
-                bgcolor: m.role === 'user' ? 'action.hover' : 'transparent',
-              }}>
-                <Typography variant="body2" sx={{ color: m.role === 'error' ? 'error.main' : 'text.primary', whiteSpace: 'pre-wrap' }}>
-                  {m.text}
-                </Typography>
-              </Box>
-            </Box>
-          ))}
-          {sending && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <CircularProgress size={16} />
-              <Typography variant="caption" color="text.secondary">{t('agent.chatTyping')}</Typography>
-            </Box>
-          )}
-        </Stack>
-        <div ref={scrollRef} />
-      </Box>
-
-      {/* Input */}
-      <Box sx={{ display: 'flex', gap: 1, p: 1.5, borderTop: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
-        <TextField
-          fullWidth
-          size="small"
-          placeholder={t('agent.chatPlaceholder')}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-          disabled={sending}
-        />
-        <IconButton
-          onClick={handleSend}
-          disabled={sending || !input.trim()}
-          aria-label={t('agent.chatSendAria')}
-          sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 0 }}
-        >
-          <Send fontSize="small" />
-        </IconButton>
-      </Box>
-
-      {/* Settings Drawer */}
-      <Drawer
-        anchor="bottom"
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        PaperProps={{ sx: { maxWidth: '600px', mx: 'auto', maxHeight: '85vh', overflowY: 'auto' } }}
-      >
-        <AgentSettingsPanel
-          config={config}
-          onSave={(next) => { onSaveConfig(next); setSettingsOpen(false); }}
-          onChangeAgent={() => { setSettingsOpen(false); onChangeAgent(); }}
-        />
-      </Drawer>
-    </Box>
-  );
-}
-
-// ─── Page ───────────────────────────────────────────────────────────
+  PROPOSAL_HISTORY_STORAGE_KEY,
+  buildRecordFromOutcome,
+  appendProposalRecords,
+  findPendingConfirmation,
+  type ProposalRecord,
+} from "../backend/AgentProposalHistory.js";
+import { buildConfirmationOutcomeSummary, ACCOUNT_CHANGED_REASON_KEY } from "../components/ConfirmationCard.js";
+import AgentChatPanel from "../components/AgentChatPanel.js";
+import AgentProposalHistoryPanel from "../components/AgentProposalHistoryPanel.js";
 
 function Agent() {
-  const [config, setConfig] = React.useState<AgentConfig>(() => loadAgentConfig());
+  const { t } = useTranslation();
+  const [tabIndex, setTabIndex] = usePersistedState("agent_active_tab", 0);
 
-  const handleConfigured = (next: AgentConfig) => {
-    setConfig(next);
-    saveAgentConfig(next);
-  };
+  const [historyByAccount, setHistoryByAccount] = usePersistedState<Record<string, ChatMessage[]>>(
+    "agent_chat_history",
+    {}
+  );
+  const [proposalHistory, setProposalHistory] = usePersistedState<ProposalRecord[]>(PROPOSAL_HISTORY_STORAGE_KEY, []);
 
-  const handleChangeAgent = () => {
-    setConfig(resetAgentConfig());
-  };
+  const { activeAccount } = useActiveAccount();
+  const { showToast } = useToast();
+  const address = activeAccount?.GetAddress();
+
+  // Tracks the previously-seen address purely to detect a real switch (A → B), as opposed to
+  // the initial mount or a locked→unlocked transition (undefined → A) — neither of those is a
+  // "switch" worth cancelling/notifying/toasting about.
+  const previousAddressRef = React.useRef<string | undefined>(address);
+
+  React.useEffect(() => {
+    const previous = previousAddressRef.current;
+    previousAddressRef.current = address;
+    if (previous === address || previous === undefined || address === undefined) return;
+
+    // 1. If the OUTGOING account left a pending confirmation card under review, auto-cancel it
+    //    — same mechanism/reason text as ConfirmationCard's own effect (see ACCOUNT_CHANGED_REASON_KEY),
+    //    just performed here because that component will already be unmounted by the time this
+    //    runs (conversationHistory swaps to the INCOMING account's array in the same render).
+    const outgoingHistory = historyByAccount[previous] ?? [];
+    const pending = findPendingConfirmation(outgoingHistory);
+    if (pending) {
+      const cancelOutcome = { status: "rejected" as const, toolName: pending.preview.toolName, reason: t(ACCOUNT_CHANGED_REASON_KEY) };
+      const summary = buildConfirmationOutcomeSummary(cancelOutcome, t);
+      const cancelledHistory = outgoingHistory.map((m) =>
+        m.role === "tool" && m.tool_call_id === pending.toolCallId
+          ? { ...m, content: JSON.stringify({ result: { settled: true, status: "rejected", toolName: pending.preview.toolName, summary } }) }
+          : m
+      );
+      setHistoryByAccount((prev) => ({ ...prev, [previous]: cancelledHistory }));
+      setProposalHistory((prev) =>
+        appendProposalRecords(prev, [buildRecordFromOutcome(pending.toolCallId, pending.preview, cancelOutcome, previous)])
+      );
+    }
+
+    // 2. Drop a small system notice into the INCOMING account's chat (pre-formatted here, where
+    //    `t` is available — buildChatItems just displays it verbatim, see AgentChatPanel.tsx).
+    const accountLabel = activeAccount?.GetName() || address;
+    const noticeMessage: ChatMessage = {
+      role: "system",
+      content: JSON.stringify({ accountSwitchNotice: true, label: t("agent.systemNoteAccountSwitched", { account: accountLabel }) }),
+    };
+    setHistoryByAccount((prev) => ({ ...prev, [address]: [...(prev[address] ?? []), noticeMessage] }));
+
+    // 3. Toast — visible regardless of which tab is active (ToastProvider renders at the app root).
+    showToast(t("agent.toastAccountSwitched", { account: accountLabel }), "info");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only address transitions should re-run this; historyByAccount/activeAccount/t/showToast are read fresh via closure, not stale (this render's address change implies they're already current — see file header)
+  }, [address]);
+
+  const conversationHistory = address ? historyByAccount[address] ?? [] : [];
+  const setConversationHistory = React.useCallback(
+    (value: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
+      if (!address) return;
+      setHistoryByAccount((prev) => {
+        const prevForAccount = prev[address] ?? [];
+        const next = typeof value === "function" ? (value as (p: ChatMessage[]) => ChatMessage[])(prevForAccount) : value;
+        return { ...prev, [address]: next };
+      });
+    },
+    [address, setHistoryByAccount]
+  );
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {config.configured ? (
-        <AgentChat config={config} onSaveConfig={handleConfigured} onChangeAgent={handleChangeAgent} />
-      ) : (
-        <AgentSetup onConfigured={handleConfigured} />
-      )}
+    <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      <Tabs
+        value={tabIndex}
+        onChange={(_e, value) => setTabIndex(value)}
+        variant="fullWidth"
+        sx={{
+          flexShrink: 0,
+          borderBottom: "1px solid",
+          borderColor: "divider",
+          minHeight: 40,
+          "& .MuiTabs-indicator": { backgroundColor: "text.primary", height: 2, borderRadius: "0px" },
+          "& .MuiTab-root": {
+            minHeight: 40,
+            textTransform: "none",
+            fontWeight: 700,
+            fontSize: "0.85rem",
+            color: "text.primary",
+            opacity: 0.5,
+            "&.Mui-selected": { color: "text.primary", opacity: 1 },
+          },
+        }}
+      >
+        <Tab label={t("agent.tabChat")} />
+        <Tab label={t("agent.tabHistory")} />
+      </Tabs>
+
+      <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        {tabIndex === 0 ? (
+          <AgentChatPanel
+            conversationHistory={conversationHistory}
+            setConversationHistory={setConversationHistory}
+            setProposalHistory={setProposalHistory}
+          />
+        ) : (
+          <AgentProposalHistoryPanel records={proposalHistory} />
+        )}
+      </Box>
     </Box>
   );
 }

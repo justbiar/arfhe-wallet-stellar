@@ -781,8 +781,10 @@ export default function SwapPanel() {
               {/* Price Source */}
               <Stack direction="row" justifyContent="space-between" alignItems="center">
                 <Typography variant="caption" color="text.secondary" fontWeight={600}>{t("swap.priceSource")}</Typography>
+                {/* Always the pool: it is what decides the output. The market rate is
+                    shown below as a comparison, never as the quote. */}
                 <Chip
-                  label={quote.isTestnet ? t("swap.coingeckoMarket") : t("swap.onChainPool")}
+                  label={t("swap.onChainPool")}
                   size="small"
                   sx={{
                     height: 20,
@@ -794,44 +796,38 @@ export default function SwapPanel() {
                 />
               </Stack>
 
-              {/* Testnet Deviation Warning */}
-              {quote.isTestnet && quote.testnetDeviation !== undefined && quote.testnetDeviation > 5 && (
+              {/* Market rate, for comparison only */}
+              {quote.marketRate > 0 && (
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Typography variant="caption" color="text.secondary" fontWeight={600}>{t("swap.poolDeviation")}</Typography>
-                  <Chip
-                    label={`${quote.testnetDeviation.toFixed(1)}%`}
-                    size="small"
-                    sx={{
-                      height: 20,
-                      fontSize: "0.65rem",
-                      fontWeight: 700,
-                      bgcolor: "rgba(245, 158, 11, 0.12)",
-                      color: "#f59e0b",
-                    }}
-                  />
+                  <Typography variant="caption" color="text.secondary" fontWeight={600}>{t("swap.marketRate")}</Typography>
+                  <Typography variant="caption" fontWeight={700} sx={{ fontSize: "0.75rem", color: "text.secondary" }}>
+                    1 {tokenIn?.symbol} ≈ {quote.marketRate.toFixed(6)} {tokenOut?.symbol}
+                  </Typography>
                 </Stack>
               )}
             </Stack>
 
-            {/* Testnet Info Banner */}
-            {quote.isTestnet && (
+            {/* How far this pool sits from the outside market.
+                Not decoration: a pool this far off is the difference between the trade the
+                user thinks they are making and the one they get. */}
+            {quote.marketDeviation !== undefined && quote.marketDeviation > 5 && (
               <Paper
                 elevation={0}
                 sx={{
                   mt: 1.5,
                   p: 1.5,
-                  borderRadius: 2.5,
-                  bgcolor: alpha(theme.palette.info.main, 0.06),
+                  borderRadius: "0px",
+                  bgcolor: "rgba(245, 158, 11, 0.10)",
                   border: "1px solid",
-                  borderColor: alpha(theme.palette.info.main, 0.15),
+                  borderColor: "rgba(245, 158, 11, 0.35)",
                   display: "flex",
-                  alignItems: "center",
+                  alignItems: "flex-start",
                   gap: 1,
                 }}
               >
-                <Info sx={{ fontSize: 16, color: "info.main" }} />
-                <Typography variant="caption" fontWeight={600} sx={{ fontSize: "0.7rem", color: "info.main" }}>
-                  {t("swap.testnetInfo")}
+                <Warning sx={{ fontSize: 16, color: "#f59e0b", mt: 0.2 }} />
+                <Typography variant="caption" fontWeight={600} sx={{ fontSize: "0.7rem", color: "#b45309" }}>
+                  {t("swap.poolFarFromMarket", { percent: quote.marketDeviation.toFixed(0) })}
                 </Typography>
               </Paper>
             )}

@@ -159,10 +159,23 @@ export interface SwapQuote {
   gasEstimate: bigint;
   isWrapUnwrap?: boolean;    // true for ETH↔WETH direct wrap/unwrap (not a DEX swap)
   // ── Market Price Fields ──
-  marketRate: number;        // Real market price (from CoinGecko): e.g. 2500 for ETH/USDC
-  poolRate?: number;         // Testnet pool rate (may differ wildly from market)
-  isTestnet: boolean;        // Whether this is a testnet swap
-  testnetDeviation?: number; // % difference between pool rate and market rate
+  /**
+   * Outside market price, for comparison only.
+   *
+   * Never the basis of {@link amountOut}: the pool decides what arrives, and quoting the
+   * market instead once showed a user 12.78 UNI on a trade that paid 0.000116.
+   */
+  marketRate: number;
+  /** The rate this pool actually offers — the one every other figure is built from. */
+  poolRate?: number;
+  isTestnet: boolean;
+  /**
+   * How far the pool sits from the market, as a percentage.
+   *
+   * Large on testnets by nature, but a thin or manipulated mainnet pool diverges the same
+   * way, so this is surfaced on every network rather than only on test ones.
+   */
+  marketDeviation?: number;
 }
 
 // ─── Swap Service ─────────────────────────────────────────────
@@ -452,33 +465,27 @@ export default class SwapService {
     const poolAmountOutFormatted = ethers.formatUnits(bestQuote.amountOut, tokenOut.decimals);
     const poolRate = parseFloat(poolAmountOutFormatted) / parseFloat(amountIn);
 
-    // ── Decide which rate to show the user ──
-    // On TESTNET: show market (CoinGecko) rate so prices look realistic
-    // On MAINNET: show the actual pool rate (which IS the real rate)
-    let displayRate: number;
-    let displayAmountOut: string;
-    let displayAmountOutRaw: bigint;
+    // ── The quote is the pool, always ──
+    //
+    // This used to substitute the CoinGecko rate on testnet "so prices look realistic".
+    // It made the numbers look right and describe a trade nobody was making: the pool is
+    // what executes, and on a testnet its rate bears no relation to the market. A user
+    // swapping 56 USDC was shown 12.78 UNI and received 0.000116, because the pool — not
+    // CoinGecko — decided the output.
+    //
+    // The market rate is still fetched, but only as context to compare against. Whatever
+    // is displayed as the amount out has to be the amount the pool will actually give.
+    const displayRate = poolRate;
+    const displayAmountOut = poolAmountOutFormatted;
+    const displayAmountOutRaw = bestQuote.amountOut;
 
-    if (testnet && marketRate > 0) {
-      // Testnet → Use CoinGecko market price for display
-      displayRate = marketRate;
-      const marketAmountOut = parseFloat(amountIn) * marketRate;
-      displayAmountOut = marketAmountOut.toFixed(tokenOut.decimals <= 6 ? 6 : 8);
-      displayAmountOutRaw = ethers.parseUnits(
-        marketAmountOut.toFixed(tokenOut.decimals),
-        tokenOut.decimals
-      );
-    } else {
-      // Mainnet or CoinGecko unavailable → Use actual pool rate
-      displayRate = poolRate;
-      displayAmountOut = poolAmountOutFormatted;
-      displayAmountOutRaw = bestQuote.amountOut;
-    }
-
-    // Calculate testnet deviation (how far pool is from market)
-    let testnetDeviation: number | undefined;
-    if (testnet && marketRate > 0 && poolRate > 0) {
-      testnetDeviation = Math.abs(((poolRate - marketRate) / marketRate) * 100);
+    // How far this pool sits from the outside world.
+    //
+    // Not a testnet-only concern: a thin or manipulated mainnet pool diverges the same
+    // way, and the user deserves the same warning there.
+    let marketDeviation: number | undefined;
+    if (marketRate > 0 && poolRate > 0) {
+      marketDeviation = Math.abs(((poolRate - marketRate) / marketRate) * 100);
     }
 
     // Calculate price impact using the display rate as reference
@@ -487,11 +494,12 @@ export default class SwapService {
       displayAmountOutRaw, tokenOut.decimals
     );
 
-    // Minimum received (apply slippage to the DISPLAY amount)
+    // Minimum received — the pool quote less slippage. `executeSwap` recomputes this from
+    // the same field, so the figure printed here is the one the router enforces.
     const minOut = (displayAmountOutRaw * BigInt(10000 - slippageBps)) / 10000n;
     const minimumReceived = ethers.formatUnits(minOut, tokenOut.decimals);
 
-    // Execution price string (always market-based)
+    // The pool's rate — what this trade actually executes at.
     const executionPrice = `1 ${tokenIn.symbol} ≈ ${displayRate.toFixed(tokenOut.decimals <= 6 ? 2 : 6)} ${tokenOut.symbol}`;
 
 
@@ -506,10 +514,13 @@ export default class SwapService {
       minimumReceived,
       route: `${tokenIn.symbol} → ${tokenOut.symbol}`,
       gasEstimate: bestQuote.gasEstimate,
-      marketRate: displayRate,
+      // The outside market, kept distinct from the pool rate above. Reporting the pool
+      // here would make the comparison compare a number with itself and every deviation
+      // read as zero.
+      marketRate,
       poolRate,
       isTestnet: testnet,
-      testnetDeviation,
+      marketDeviation,
     };
   }
 
@@ -615,18 +626,22 @@ export default class SwapService {
     const resolvedIn = this.resolveTokenAddress(tokenIn, networkId);
     const resolvedOut = this.resolveTokenAddress(tokenOut, networkId);
 
-    // ── Calculate minimum out ──
-    // On TESTNET: quote.amountOutRaw is market-price based (not pool-based).
-    // The pool may give a wildly different amount, so we set minAmountOut = 0
-    // to let the pool determine the actual output (user sees market price in UI).
-    // On MAINNET: quote.amountOutRaw IS the actual pool output, so slippage applies normally.
-    let minAmountOut: bigint;
-    if (quote.isTestnet) {
-      // Testnet: accept whatever the pool gives (market price is just for display)
-      minAmountOut = 0n;
-    } else {
-      // Mainnet: apply slippage to real pool quote
-      minAmountOut = (quote.amountOutRaw * BigInt(10000 - slippageBps)) / 10000n;
+    // ── Minimum out: the floor the user was shown, enforced on-chain ──
+    //
+    // This was `0n` on testnet — "accept whatever the pool gives" — while the panel above
+    // it displayed a minimum received of 12.72 UNI. The transaction promised nothing and
+    // the interface promised a floor, so a pool that paid out 0.000116 executed happily
+    // instead of reverting. Slippage protection exists for exactly that transaction.
+    //
+    // Derived from the same figure the user was quoted, so the two cannot drift apart.
+    const minAmountOut = (quote.amountOutRaw * BigInt(10000 - slippageBps)) / 10000n;
+
+    if (minAmountOut <= 0n) {
+      // A zero floor accepts any output at all, including dust. Better to refuse than to
+      // send a transaction with no protection on it.
+      throw new Error(
+        "Could not establish a minimum output for this swap. Refusing to send a trade with no slippage protection."
+      );
     }
 
     // If tokenIn is native ETH → we need to wrap it first or use the router's payable

@@ -431,7 +431,7 @@
     "chainIdLocked": "A network's chain ID cannot be changed — add a new network instead.",
     "currencySymbol": "Currency symbol",
     "customBadge": "Custom",
-    "customCapabilities": "Added networks get the same balances, transaction history, sends and dApp connections. What they do not get is the indexer behind the built-in chains, so NFT galleries and instant history are unavailable — the wallet falls back to scanning recent blocks. Confidential (FHE) balances exist only on Sepolia, Arbitrum Sepolia and Base Sepolia, where the coprocessor runs.",
+    "customCapabilities": "Added networks get the same balances, transaction history, sends and dApp connections. What they do not get is the indexer behind the built-in chains, so instant history is replaced by a scan of recent blocks. Confidential (FHE) balances exist only on Sepolia, Arbitrum Sepolia and Base Sepolia, where the coprocessor runs.",
     "customNoFhe": "This network doesn't support confidential (FHE) transactions — shielding will be unavailable on it. Regular sends, tokens and dApps work normally.",
     "customRpc": "Custom RPC",
     "edit": "Edit",

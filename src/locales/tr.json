@@ -431,7 +431,7 @@
     "chainIdLocked": "Bir ağın zincir kimliği değiştirilemez — bunun yerine yeni ağ ekleyin.",
     "currencySymbol": "Para birimi sembolü",
     "customBadge": "Özel",
-    "customCapabilities": "Eklenen ağlarda bakiyeler, işlem geçmişi, gönderimler ve dApp bağlantıları aynı şekilde çalışır. Yerleşik zincirlerin arkasındaki indeksleyici yoktur — bu yüzden NFT galerisi ve anlık geçmiş yerine cüzdan son blokları tarar. Gizli (FHE) bakiyeler yalnızca koprosesörün çalıştığı Sepolia, Arbitrum Sepolia ve Base Sepolia'da vardır.",
+    "customCapabilities": "Eklenen ağlarda bakiyeler, işlem geçmişi, gönderimler ve dApp bağlantıları aynı şekilde çalışır. Yerleşik zincirlerin arkasındaki indeksleyici yoktur — anlık geçmiş yerine cüzdan son blokları tarar. Gizli (FHE) bakiyeler yalnızca koprosesörün çalıştığı Sepolia, Arbitrum Sepolia ve Base Sepolia'da vardır.",
     "customNoFhe": "Bu ağ gizli (FHE) işlemleri desteklemiyor — kalkanlama bu ağda kullanılamayacak. Normal gönderim, tokenlar ve dApp'ler sorunsuz çalışır.",
     "customRpc": "Özel RPC",
     "edit": "Düzenle",

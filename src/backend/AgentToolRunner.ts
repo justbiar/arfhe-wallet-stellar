@@ -28,6 +28,7 @@
  */
 
 import type { Provider } from "ethers";
+import { formatEther } from "ethers";
 import type { Network } from "./Network.js";
 import type Account from "./Account.js";
 import { TransactionSimulator, type SimResult } from "./TransactionSimulator.js";
@@ -251,10 +252,14 @@ function serializeUnshieldClaim(claim: UnshieldClaim) {
 // ─── Read-only tool handlers ─────────────────────────────────────────
 
 async function handleGetBalance(network: Network, context: ToolExecutionContext): Promise<unknown> {
-  // Network.getBalance returns the native balance in wei, not a display-formatted amount —
-  // formatting for the user is the chat UI's job, not this bridge's.
+  // Network.getBalance returns the native balance in wei. Converting an 18-digit integer to
+  // decimal ETH is exactly the kind of arithmetic a model gets wrong under its breath — so
+  // this does the division here with ethers' formatEther (same as get_shielded_balance's
+  // formatTokenAmount), instead of handing the model raw wei and hoping it divides by 1e18
+  // correctly in prose. balanceWei is still included for anything that genuinely needs the
+  // exact integer (e.g. comparing against another wei amount).
   const balanceWei = await network.getBalance(context.account);
-  return { address: context.account, balanceWei };
+  return { address: context.account, balance: formatEther(balanceWei), balanceWei };
 }
 
 async function handleGetShieldedBalance(

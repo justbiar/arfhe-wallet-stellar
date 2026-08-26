@@ -140,6 +140,11 @@ export function buildSystemPrompt(): string {
       "— yine de jenerik \"bir hata oluştu\" ile geçiştirme.",
     "- Bir aracın sonucunu almadan bakiye, adres veya miktar UYDURMA. Emin değilsen ilgili " +
       "aracı çağır ya da bilmediğini söyle.",
+    "- Bakiye bildiren bir araç sonucunda (ör. get_balance) hem \"balance\" (ondalık, okunabilir) " +
+      "hem de \"balanceWei\" (ham tam sayı) alanı varsa, kullanıcıya HER ZAMAN \"balance\" " +
+      "alanındaki değeri söyle. balanceWei'yi kendi kafandan ondalığa çevirmeye ÇALIŞMA — " +
+      "18 haneli bir sayıyı zihinden bölmek hataya çok açıktır, bu dönüşüm zaten koddan " +
+      "geliyor.",
     "",
     "FHE TERMİNOLOJİSİ (FHE_COMPLETE_GUIDE.md ile tutarlı kullan):",
     "- \"shield\": açık (şifrelenmemiş) bir bakiyeyi FHE ile şifreli hale getirmek.",

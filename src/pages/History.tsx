@@ -292,12 +292,12 @@ export default function History() {
 
   const filters: { key: FilterType; label: string; icon: React.ReactElement }[] = showFhe
     ? [
-      { key: "all", label: "All", icon: <FilterList sx={{ fontSize: 16 }} /> },
-      { key: "confidential", label: "Confidential", icon: <Lock sx={{ fontSize: 16 }} /> },
-      { key: "public", label: "Public", icon: <LockOpen sx={{ fontSize: 16 }} /> },
+      { key: "all", label: t("history.all"), icon: <FilterList sx={{ fontSize: 16 }} /> },
+      { key: "confidential", label: t("history.confidential"), icon: <Lock sx={{ fontSize: 16 }} /> },
+      { key: "public", label: t("history.public"), icon: <LockOpen sx={{ fontSize: 16 }} /> },
     ]
     : [
-      { key: "all", label: "All", icon: <FilterList sx={{ fontSize: 16 }} /> },
+      { key: "all", label: t("history.all"), icon: <FilterList sx={{ fontSize: 16 }} /> },
     ];
 
   return (
@@ -597,15 +597,15 @@ export default function History() {
               <ReceiptLong sx={{ fontSize: 64, color: "text.disabled", mb: 2, opacity: 0.5 }} />
               <Typography variant="h6" color="text.secondary" fontWeight={700}>
                 {activeFilter === "confidential"
-                  ? "No Confidential Transactions"
+                  ? t("history.noConfidentialTransactions")
                   : activeFilter === "public"
-                    ? "No Public Transactions"
-                    : "No Transactions Yet"}
+                    ? t("history.noPublicTransactions")
+                    : t("history.noTransactionsYet")}
               </Typography>
               <Typography variant="caption" color="text.disabled" sx={{ mt: 0.5, display: "block" }}>
                 {activeFilter !== "all"
-                  ? "Try switching the filter to see other transactions"
-                  : "Your transaction history will appear here"}
+                  ? t("history.tryOtherFilter")
+                  : t("history.historyWillAppear")}
               </Typography>
             </Box>
           )}
@@ -710,14 +710,14 @@ export default function History() {
                             }
                           >
                             {tx.methodLabel === "Swap"
-                              ? "Swapped"
+                              ? t("history.swapped")
                               : tx.methodLabel === "Shield" || tx.methodLabel === "Wrap"
-                                ? "Shielded"
+                                ? t("history.shielded")
                                 : tx.methodLabel === "Unshield Claim" || tx.methodLabel === "Unwrap"
-                                  ? "Claimed"
-                                  : isSent ? "Sent" : "Received"}{" "}
+                                  ? t("history.claimed")
+                                  : isSent ? t("history.sent") : t("history.received")}{" "}
                             {isEncrypted ? (
-                              <em style={{ fontWeight: 400, fontSize: "0.85rem" }}>Encrypted Amount </em>
+                              <em style={{ fontWeight: 400, fontSize: "0.85rem" }}>{t("history.encryptedAmount")} </em>
                             ) : (
                               tx.value !== "0" && `${formatValue(tx.value)} `
                             )}

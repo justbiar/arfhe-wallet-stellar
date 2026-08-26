@@ -81,7 +81,7 @@ export default function HiddenTokens() {
                                 divider
                                 secondaryAction={
                                     <Tooltip title={t("hiddenTokens.show")}>
-                                        <IconButton edge="end" onClick={() => unhide(address)}>
+                                        <IconButton edge="end" aria-label={t("hiddenTokens.show")} onClick={() => unhide(address)}>
                                             <Visibility />
                                         </IconButton>
                                     </Tooltip>

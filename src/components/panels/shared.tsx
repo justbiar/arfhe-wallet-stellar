@@ -20,6 +20,23 @@ export function CustomTabPanel(props: { children: React.ReactNode; index: number
   );
 }
 
+/**
+ * Fire-and-forget POST to backend-proxy's /activity/log. Never throws, never awaited by the
+ * caller, and never sends an amount — only that this wallet address performed a
+ * send/shield/unshield, mirroring AgentChatPanel.tsx's logActivity (same endpoint/shape),
+ * but called from the manual (non-agent) send/shield/unshield flows so those show up in
+ * /admin too, not just agent-confirmed transactions.
+ */
+export function logActivity(walletAddress: string, actionType: "send" | "shield" | "unshield"): void {
+  const proxyBaseUrl = import.meta.env.VITE_AGENT_PROXY_URL as string | undefined;
+  if (!proxyBaseUrl) return;
+  fetch(`${proxyBaseUrl}/activity/log`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ wallet_address: walletAddress, action_type: actionType }),
+  }).catch(() => { /* best-effort telemetry only */ });
+}
+
 // ArfheWallet - Wrapped Token Addresses (Ethereum Sepolia)
 export const CONTRACTS_SEPOLIA = {
   "USDC": {
@@ -207,10 +224,12 @@ export function explorerAddressUrl(
   return base ? `${base}/address/${address}` : "";
 }
 
-// Shared input card style
+// Shared input card style. borderRadius: 0 matches the theme's sharp-corner convention
+// (ArfTheme.ts's shape.borderRadius: 0) — don't reintroduce a rounded value here, callers
+// used to override it individually because this default fought the theme.
 export const inputCardSx = {
   p: 1.5,
-  borderRadius: 3,
+  borderRadius: 0,
   border: '1px solid',
   borderColor: 'divider',
   bgcolor: 'action.hover',
@@ -218,16 +237,17 @@ export const inputCardSx = {
   '&:hover': { borderColor: 'primary.main' }
 };
 
-// Shared CTA button sx
+// Shared CTA button sx. Neutral (non-color) shadow — a hardcoded blue shadow fought
+// ArfTheme.ts's mode/accent-driven primary color on every non-blue theme.
 export const ctaButtonSx = {
-  borderRadius: 3,
+  borderRadius: 0,
   height: 42,
   fontWeight: 700,
   fontSize: '0.82rem',
   letterSpacing: '0.02em',
-  boxShadow: '0 4px 14px rgba(37, 99, 235, 0.3)',
+  boxShadow: '0 4px 14px rgba(0, 0, 0, 0.15)',
   '&:hover': {
-    boxShadow: '0 6px 20px rgba(37, 99, 235, 0.4)',
+    boxShadow: '0 6px 20px rgba(0, 0, 0, 0.25)',
     transform: 'translateY(-1px)',
   },
   transition: 'all 0.2s ease',

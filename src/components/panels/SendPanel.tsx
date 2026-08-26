@@ -43,7 +43,7 @@ import { isAddress, parseUnits, Interface, formatEther, toUtf8Bytes, hexlify } f
 import { isDomainName, resolveDomain } from "../../backend/DomainResolver.js";
 import { NetworkId, isFheNetwork } from "../../backend/NetworkTypes.js";
 import { TransactionSimulator, SimResult } from "../../backend/TransactionSimulator.js";
-import { getContractsForNetwork, explorerTxUrl, getHiddenTokenAddresses, inputCardSx, ctaButtonSx } from "./shared.js";
+import { getContractsForNetwork, explorerTxUrl, getHiddenTokenAddresses, inputCardSx, ctaButtonSx, logActivity } from "./shared.js";
 
 // --- Send Panel ---
 export default function SendPanel() {
@@ -475,12 +475,12 @@ export default function SendPanel() {
             let reason = simErr?.info?.error?.message || simErr?.reason || simErr?.message || "Contract logic reverted or insufficient funds.";
 
             if (reason.includes("insufficient funds for gas * price + value") || reason.includes("insufficient funds")) {
-              reason = "Yetersiz Bakiye: Ağ ücretlerini (gas fee) karşılamak için cüzdanınızda yeterli ETH bulunmuyor.";
+              reason = t("send.errorInsufficientBalance");
             } else if (reason.includes("execution reverted")) {
-              reason = "İşlem Reddedildi (Reverted): Akıllı sözleşme veya alıcı bu işlemi kabul etmiyor.";
+              reason = t("send.errorExecutionReverted");
             }
 
-            throw new Error(`⚠️ Transaction Simulation Failed: ${reason} - İşlem iptal edildi.`);
+            throw new Error(t("send.errorSimulationFailed", { reason }));
           }
         }
 
@@ -527,6 +527,12 @@ export default function SendPanel() {
 
       setStatus("success");
       setFeedbackMsg(t("common.success"));
+
+      // Same activity ping AgentChatPanel sends for agent-confirmed sends, but for a manual
+      // send made directly from this panel — otherwise /admin only ever showed agent-routed
+      // transactions, undercounting real usage.
+      const myAddress = activeAccount?.GetAddress();
+      if (myAddress) logActivity(myAddress, "send");
 
       // Record recipient as recent address
       try {
@@ -639,7 +645,7 @@ export default function SendPanel() {
                 }}
                 sx={{ fontSize: '0.65rem', fontWeight: 700, minWidth: 'auto', ml: 1, whiteSpace: 'nowrap' }}
               >
-                Shield →
+                {t("send.shieldCta")}
               </Button>
             </Stack>
           </Paper>
@@ -657,7 +663,7 @@ export default function SendPanel() {
               underline="hover"
               sx={{ fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 0.5 }}
             >
-              View on Explorer <OpenInNew sx={{ fontSize: 14 }} />
+              {t("send.viewExplorer")} <OpenInNew sx={{ fontSize: 14 }} />
             </Link>
           )}
           <Button

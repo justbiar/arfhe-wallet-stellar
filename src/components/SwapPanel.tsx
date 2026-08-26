@@ -61,7 +61,7 @@ const tokenBadgeSx = (color: string) => ({
   width: 32,
   height: 32,
   // Square, matching the flat treatment the rest of the wallet uses.
-  borderRadius: 1,
+  borderRadius: 0,
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -479,7 +479,7 @@ export default function SwapPanel() {
               sx={{
                 width: 90,
                 "& .MuiOutlinedInput-root": {
-                  borderRadius: 2,
+                  borderRadius: 0,
                   height: 32,
                 },
               }}
@@ -545,7 +545,7 @@ export default function SwapPanel() {
             }}
             sx={{
               minWidth: 130,
-              borderRadius: 3,
+              borderRadius: 0,
               bgcolor: "action.hover",
               "& .MuiOutlinedInput-notchedOutline": { border: "none" },
               "&:hover": { bgcolor: alpha(theme.palette.primary.main, 0.06) },
@@ -658,7 +658,7 @@ export default function SwapPanel() {
             }}
             sx={{
               minWidth: 130,
-              borderRadius: 3,
+              borderRadius: 0,
               bgcolor: "action.hover",
               "& .MuiOutlinedInput-notchedOutline": { border: "none" },
               "&:hover": { bgcolor: alpha(theme.palette.primary.main, 0.06) },
@@ -839,7 +839,7 @@ export default function SwapPanel() {
                 sx={{
                   mt: 1.5,
                   p: 1.5,
-                  borderRadius: 2.5,
+                  borderRadius: 0,
                   bgcolor: priceImpactLevel === "high"
                     ? alpha(theme.palette.error.main, 0.1)
                     : "rgba(245, 158, 11, 0.08)",
@@ -884,7 +884,7 @@ export default function SwapPanel() {
             sx={{
               mt: 1.5,
               p: 1.5,
-              borderRadius: 2.5,
+              borderRadius: 0,
               bgcolor: alpha(theme.palette.error.main, 0.08),
               border: "1px solid",
               borderColor: alpha(theme.palette.error.main, 0.2),
@@ -911,7 +911,7 @@ export default function SwapPanel() {
                 variant="contained"
                 disabled
                 sx={{
-                  borderRadius: 3,
+                  borderRadius: 0,
                   height: 44,
                   fontWeight: 700,
                   fontSize: "0.95rem",
@@ -950,7 +950,7 @@ export default function SwapPanel() {
                 variant="contained"
                 onClick={() => { setSwapStatus("idle"); setSwapError(""); }}
                 sx={{
-                  borderRadius: 3,
+                  borderRadius: 0,
                   height: 44,
                   fontWeight: 700,
                   fontSize: "0.95rem",
@@ -979,7 +979,7 @@ export default function SwapPanel() {
             onClick={handleSwap}
             disabled={isSwapDisabled as boolean}
             sx={{
-              borderRadius: 3,
+              borderRadius: 0,
               height: 44,
               fontWeight: 700,
               fontSize: "0.95rem",

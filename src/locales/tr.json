@@ -171,6 +171,7 @@
     "secureDescription": "Özel anahtarlarınızı şifrelemek için bir şifre belirleyin. Anahtarlarınız AES-256 şifreleme ile güvenli şekilde saklanacaktır.",
     "secureYourWallet": "Cüzdanınızı Güvenceye Alın",
     "showPhraseAgain": "İfadeyi tekrar göster",
+    "socialNotConfigured": "Bu derlemede sosyal giriş yapılandırılmamış (VITE_WEB3AUTH_CLIENT_ID eksik). Bunun yerine kurtarma ifadesiyle cüzdan oluşturun ya da anahtarı ayarlayıp yeniden derleyin.",
     "strengthFair": "Orta",
     "strengthGood": "İyi",
     "strengthStrong": "Güçlü",

@@ -15,7 +15,68 @@ import { Web3Auth } from "@web3auth/modal";
 import { CHAIN_NAMESPACES, WEB3AUTH_NETWORK } from "@web3auth/base";
 import { EthereumPrivateKeyProvider } from "@web3auth/ethereum-provider";
 
-const clientId = import.meta.env.VITE_WEB3AUTH_CLIENT_ID || "BPi5PB_UiIZ-cPz1GtV5i1I2iOSOHuimiXBI0e-Oe_u6X3oVAbCiAZOTEBtTXw4tsluTITPqA8zMsfxIKMjiqNQ"; // Fallback: Web3Auth public testing clientId
+/**
+ * Web3Auth project this build talks to.
+ *
+ * Deliberately no fallback. It used to default to Web3Auth's public testing client id,
+ * which made a misconfigured build *look* like it worked: social login completed against a
+ * shared demo project instead of ours. Since the derived key is scoped to the client id,
+ * every account created that way lives at a different address than the same user would get
+ * from a correct build — a silent fork of everyone's wallet, discovered far too late.
+ *
+ * An empty value now disables the button and says why.
+ */
+const clientId = import.meta.env.VITE_WEB3AUTH_CLIENT_ID ?? "";
+
+/**
+ * Whether this document is the browser-action popup rather than a tab or window.
+ *
+ * `chrome.tabs.getCurrent()` resolves to a tab in anything that *is* a tab — including a
+ * `windows.create({type:"popup"})` window, whose content is a tab — and to `undefined` in
+ * the action popup, which is not one. That is the distinction that matters here, and it
+ * needs no extra permission.
+ */
+async function isActionPopup(): Promise<boolean> {
+  try {
+    const tabs = (globalThis as { chrome?: typeof chrome }).chrome?.tabs;
+    if (!tabs?.getCurrent) return false;
+    return !(await tabs.getCurrent());
+  } catch {
+    // Not an extension context at all (dev server) — treat as a normal page.
+    return false;
+  }
+}
+
+/**
+ * Re-open the wallet in its own window so an OAuth flow can survive.
+ *
+ * The action popup is destroyed by Chrome the moment it loses focus, and Web3Auth's login
+ * opens a window of its own — so the popup died mid-`await`, the resolved private key was
+ * never imported, and the user was left staring at a closed wallet. Clicking again
+ * appeared to fix it only because Web3Auth had cached the session by then and resolved
+ * before focus moved.
+ *
+ * A window created here is an ordinary window: it keeps running while the OAuth window is
+ * in front, so the flow completes where it started.
+ */
+async function openSocialLoginWindow(): Promise<boolean> {
+  try {
+    const runtime = (globalThis as { chrome?: typeof chrome }).chrome?.runtime;
+    const windows = (globalThis as { chrome?: typeof chrome }).chrome?.windows;
+    if (!runtime?.getURL || !windows?.create) return false;
+
+    await windows.create({
+      url: runtime.getURL("index.html#/auth?social=1"),
+      type: "popup",
+      width: 420,
+      height: 700,
+      focused: true,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Calculate password strength 0-100 */
 function getPasswordStrength(pw: string): { score: number; label: string; color: string } {
@@ -734,6 +795,8 @@ export default function Auth() {
 
   const [step, setStep] = React.useState(AuthStep.CHOICE);
   const [isSocialLoading, setIsSocialLoading] = React.useState(false);
+  /** Surfaced under the button — social login used to fail with no explanation at all. */
+  const [socialError, setSocialError] = React.useState("");
   const [authMethod, setAuthMethod] = React.useState<'password' | 'google' | null>(null);
   const [pendingEmail, setPendingEmail] = React.useState<string | null>(null);
 
@@ -860,7 +923,26 @@ export default function Auth() {
                 variant="contained"
                 disabled={isSocialLoading}
                 onClick={async () => {
+                  // A misconfigured build must say so rather than silently authenticate
+                  // against someone else's project.
+                  if (!clientId) {
+                    setSocialError(t('auth.socialNotConfigured'));
+                    return;
+                  }
+
+                  // Web3Auth opens its own window, which costs the action popup its focus —
+                  // and Chrome destroys a popup that loses focus. Move to a real window
+                  // first and let the flow run there.
+                  if (await isActionPopup()) {
+                    if (await openSocialLoginWindow()) {
+                      window.close();
+                      return;
+                    }
+                    // Could not open one; fall through and try inline rather than dead-end.
+                  }
+
                   setIsSocialLoading(true);
+                  setSocialError("");
                   try {
                     const chainConfig = {
                       chainNamespace: CHAIN_NAMESPACES.EIP155,
@@ -914,6 +996,9 @@ export default function Auth() {
                       }
                     }
                   } catch (error) {
+                    // Previously swallowed whole, so a failed login looked like nothing
+                    // had happened and the user simply clicked again.
+                    setSocialError(error instanceof Error ? error.message : String(error));
                   } finally {
                     setIsSocialLoading(false);
                   }
@@ -929,6 +1014,12 @@ export default function Auth() {
               >
                 {isSocialLoading ? t('auth.connectingScanning') : t('auth.continueWithSocial')}
               </Button>
+
+              {socialError && (
+                <Alert severity="error" sx={{ borderRadius: 0, fontSize: '0.75rem' }}>
+                  {socialError}
+                </Alert>
+              )}
 
               <Box sx={{ display: 'flex', alignItems: 'center', my: 1 }}>
                 <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />

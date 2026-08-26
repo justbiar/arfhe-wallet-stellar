@@ -171,6 +171,7 @@
     "secureDescription": "Set a password to encrypt your private keys. Your keys will be stored securely using AES-256 encryption.",
     "secureYourWallet": "Secure Your Wallet",
     "showPhraseAgain": "Show the phrase again",
+    "socialNotConfigured": "Social login isn't configured in this build (VITE_WEB3AUTH_CLIENT_ID is missing). Create a wallet with a seed phrase instead, or rebuild with the key set.",
     "strengthFair": "Fair",
     "strengthGood": "Good",
     "strengthStrong": "Strong",

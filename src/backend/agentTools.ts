@@ -152,6 +152,26 @@ export const AGENT_TOOLS: AgentToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "get_faucet_info",
+      description:
+        "Aktif ağ bilinen bir testnet ise (Sepolia, Base Sepolia, Arbitrum Sepolia, Avalanche " +
+        "Fuji, Monad Testnet), o ağın resmi faucet sayfasının linkini ve kullanıcının adresini " +
+        "döndürür. ÖNEMLİ: Bu araç test tokenlarını OTOMATİK OLARAK ÇEKMEZ ya da TALEP ETMEZ — " +
+        "faucet'ler bunu engellemek için CAPTCHA istiyor, bu yüzden böyle bir şey mümkün değil. " +
+        "Sadece linki ver ve kullanıcının formu kendisinin tamamlaması gerektiğini söyle; asla " +
+        "'test tokenlarınızı gönderdim' gibi bir şey söyleme. supported:false dönerse aktif ağın " +
+        "bilinen bir faucet'i olmadığını (ör. bir mainnet olduğunu) söyle.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "propose_send",
       description:
         "Açık (şifrelenmemiş) bir token transferi ÖNERİSİ oluşturur. ÖNEMLİ: Bu tool hiçbir " +

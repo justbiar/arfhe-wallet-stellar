@@ -30,6 +30,7 @@
 import type { Provider } from "ethers";
 import { formatEther } from "ethers";
 import type { Network } from "./Network.js";
+import { NetworkId } from "./NetworkTypes.js";
 import type Account from "./Account.js";
 import { TransactionSimulator, type SimResult } from "./TransactionSimulator.js";
 import { isDomainName, resolveDomain } from "./DomainResolver.js";
@@ -260,6 +261,30 @@ async function handleGetBalance(network: Network, context: ToolExecutionContext)
   // exact integer (e.g. comparing against another wei amount).
   const balanceWei = await network.getBalance(context.account);
   return { address: context.account, balance: formatEther(balanceWei), balanceWei };
+}
+
+/**
+ * Well-known, official faucet page for each testnet the wallet supports — deliberately just a
+ * URL, never an API endpoint we POST to on the user's behalf. Every mainstream faucet requires a
+ * CAPTCHA specifically to stop automated claiming, so there is no honest "auto-claim" version of
+ * this tool; handleGetFaucetInfo hands the model a real link + the user's own address to relay,
+ * nothing more. Missing entries (e.g. mainnets, or a testnet with no well-known public faucet)
+ * fall through to handleGetFaucetInfo's `supported: false` branch rather than guessing a URL.
+ */
+const FAUCET_URLS: Partial<Record<NetworkId, string>> = {
+  [NetworkId.Ethereum_Sepolia]: "https://cloud.google.com/application/web3/faucet/ethereum/sepolia",
+  [NetworkId.Arbitrum_Sepolia]: "https://faucet.quicknode.com/arbitrum/sepolia",
+  [NetworkId.Base_Sepolia]: "https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet",
+  [NetworkId.Avalanche_Fuji]: "https://core.app/tools/testnet-faucet/",
+  [NetworkId.Monad_Testnet]: "https://testnet.monad.xyz/",
+};
+
+function handleGetFaucetInfo(network: Network, context: ToolExecutionContext): unknown {
+  const faucetUrl = FAUCET_URLS[network.network_id];
+  if (!faucetUrl) {
+    return { supported: false, network: network.network_name };
+  }
+  return { supported: true, network: network.network_name, faucetUrl, address: context.account };
 }
 
 async function handleGetShieldedBalance(
@@ -697,6 +722,8 @@ export async function executeToolCall(
           return { result: await handleGetShieldedPortfolio(network, requireAccount(context)) };
         case "get_pending_claims":
           return { result: await handleGetPendingClaims(network, requireAccount(context), args, context) };
+        case "get_faucet_info":
+          return { result: handleGetFaucetInfo(network, context) };
       }
     }
 

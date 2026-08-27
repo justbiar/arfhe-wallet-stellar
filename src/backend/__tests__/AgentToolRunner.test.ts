@@ -205,7 +205,7 @@ describe('AgentToolRunner', () => {
     it('başarılı çağrı network.getBalance sonucunu döner', async () => {
       const res = await executeToolCall('get_balance', {}, context);
       expect(res.error).toBeUndefined();
-      expect(res.result).toEqual({ address: context.account, balanceWei: '1000000000000000000' });
+      expect(res.result).toEqual({ address: context.account, balance: '1.0', balanceWei: '1000000000000000000' });
       expect(mockNetwork.getBalance).toHaveBeenCalledWith(context.account);
     });
 

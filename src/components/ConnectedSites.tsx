@@ -90,7 +90,7 @@ export default function ConnectedSites() {
                                 divider
                                 secondaryAction={
                                     <Tooltip title={t("approve.disconnect")}>
-                                        <IconButton edge="end" color="error" onClick={() => disconnect(site.origin)}>
+                                        <IconButton edge="end" color="error" aria-label={t("approve.disconnect")} onClick={() => disconnect(site.origin)}>
                                             <LinkOff />
                                         </IconButton>
                                     </Tooltip>

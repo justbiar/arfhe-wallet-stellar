@@ -28,7 +28,9 @@
  */
 
 import type { Provider } from "ethers";
+import { formatEther } from "ethers";
 import type { Network } from "./Network.js";
+import { NetworkId } from "./NetworkTypes.js";
 import type Account from "./Account.js";
 import { TransactionSimulator, type SimResult } from "./TransactionSimulator.js";
 import { isDomainName, resolveDomain } from "./DomainResolver.js";
@@ -251,10 +253,38 @@ function serializeUnshieldClaim(claim: UnshieldClaim) {
 // ─── Read-only tool handlers ─────────────────────────────────────────
 
 async function handleGetBalance(network: Network, context: ToolExecutionContext): Promise<unknown> {
-  // Network.getBalance returns the native balance in wei, not a display-formatted amount —
-  // formatting for the user is the chat UI's job, not this bridge's.
+  // Network.getBalance returns the native balance in wei. Converting an 18-digit integer to
+  // decimal ETH is exactly the kind of arithmetic a model gets wrong under its breath — so
+  // this does the division here with ethers' formatEther (same as get_shielded_balance's
+  // formatTokenAmount), instead of handing the model raw wei and hoping it divides by 1e18
+  // correctly in prose. balanceWei is still included for anything that genuinely needs the
+  // exact integer (e.g. comparing against another wei amount).
   const balanceWei = await network.getBalance(context.account);
-  return { address: context.account, balanceWei };
+  return { address: context.account, balance: formatEther(balanceWei), balanceWei };
+}
+
+/**
+ * Well-known, official faucet page for each testnet the wallet supports — deliberately just a
+ * URL, never an API endpoint we POST to on the user's behalf. Every mainstream faucet requires a
+ * CAPTCHA specifically to stop automated claiming, so there is no honest "auto-claim" version of
+ * this tool; handleGetFaucetInfo hands the model a real link + the user's own address to relay,
+ * nothing more. Missing entries (e.g. mainnets, or a testnet with no well-known public faucet)
+ * fall through to handleGetFaucetInfo's `supported: false` branch rather than guessing a URL.
+ */
+const FAUCET_URLS: Partial<Record<NetworkId, string>> = {
+  [NetworkId.Ethereum_Sepolia]: "https://cloud.google.com/application/web3/faucet/ethereum/sepolia",
+  [NetworkId.Arbitrum_Sepolia]: "https://faucet.quicknode.com/arbitrum/sepolia",
+  [NetworkId.Base_Sepolia]: "https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet",
+  [NetworkId.Avalanche_Fuji]: "https://core.app/tools/testnet-faucet/",
+  [NetworkId.Monad_Testnet]: "https://testnet.monad.xyz/",
+};
+
+function handleGetFaucetInfo(network: Network, context: ToolExecutionContext): unknown {
+  const faucetUrl = FAUCET_URLS[network.network_id];
+  if (!faucetUrl) {
+    return { supported: false, network: network.network_name };
+  }
+  return { supported: true, network: network.network_name, faucetUrl, address: context.account };
 }
 
 async function handleGetShieldedBalance(
@@ -692,6 +722,8 @@ export async function executeToolCall(
           return { result: await handleGetShieldedPortfolio(network, requireAccount(context)) };
         case "get_pending_claims":
           return { result: await handleGetPendingClaims(network, requireAccount(context), args, context) };
+        case "get_faucet_info":
+          return { result: handleGetFaucetInfo(network, context) };
       }
     }
 

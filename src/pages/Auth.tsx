@@ -1007,9 +1007,9 @@ export default function Auth() {
                 sx={{
                   borderRadius: 0,
                   height: 44,
-                  bgcolor: '#2563eb',
-                  color: 'white',
-                  '&:hover': { bgcolor: '#172554' }
+                  bgcolor: 'primary.main',
+                  color: 'primary.contrastText',
+                  '&:hover': { bgcolor: 'primary.dark' }
                 }}
               >
                 {isSocialLoading ? t('auth.connectingScanning') : t('auth.continueWithSocial')}

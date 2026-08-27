@@ -1,26 +1,18 @@
 # ArfheWallet — AI Agent Entegrasyonu: Bağlam Dosyası
 
 > Devir teslim / hatırlatma dosyası. Bir sonraki oturumda buradan devam edilecek.
-> Son güncelleme: 2026-08-22 (bkz. bölüm 17). Bu oturumda dört ayrı iş yapıldı:
-> **(1) rewrite-omer branch analizi/entegrasyonu** — Omeraydognn'ın (Ömer) 9
-> blockchain/privacy commit'inin 8'i zaten `mustafa` branch'inin geçmişindeydi (`mustafa`
-> rewrite-omer'in `f7ded2d` commit'i üzerine kurulu), tek eksik olan `37af94a` (README.md)
-> cherry-pick edilip fast-forward merge edildi (`ed35d26`). biar'ın Agent-alternatifi
-> (`AgentService.ts` vb.) VE tema/onboarding/Explore/DAppRegistry değişiklikleri BİLİNÇLİ
-> OLARAK ALINMADI — ayrı bir ürün kararı bekliyor. **(2) Arfio'nun görsel kimliği** — nav
-> bar ikonu (Hub → AutoAwesome → **SupportAgent**) ve `AgentChatPanel.tsx`'teki 🤖 emoji
-> chat avatarı (→ **SupportAgent**, gerçek MUI `Avatar` component'i içinde) insansı bir
-> kimliğe taşındı. **(3) Chrome'da canlı x402 testinde ÜÇ ayrı gerçek bug** bulunup
-> düzeltildi: (a) deployment gap — backend-proxy'nin x402 route'ları hiç deploy
-> edilmemişti, `wrangler deploy` ile çözüldü; (b) `x402_disabled` durumunda modelin
-> belirsiz "bir problem oldu" demesi — sistem promptuna net talimat eklendi; (c)
-> network-unsupported hatasının `x402_disabled` şablonuyla karışıp yanlış mesaj üretmesi
-> — `ToolArgumentError`'a `reasonKey` eklendi, ayrı bir sistem prompt talimatı yazıldı.
-> **(4) AÇIK/ÇÖZÜLMEMİŞ SORUN — model hallüsinasyonu**: kullanıcı ağını Base Sepolia'ya
-> çevirip tekrar denedikten sonra OpenRouter modeli x402 ile ilgisiz/uydurma kavramlar
-> (ENS, DNS sağlayıcısı) ve yer yer anlamsız kelimeler üretti — bu KOD TARAFINDA
-> ÇÖZÜLMEDİ, **sıradaki oturumun ilk önceliği** (bkz. bölüm 17.4). Test durumu: 736/736
-> ana suite, 62/62 backend-proxy.
+> Son güncelleme: 2026-08-24 (bkz. bölüm 18). Bu oturumda **kullanıcı/aktivite takibi**
+> özelliği toplantı talebi üzerine baştan sona uygulandı ve canlıya alındı — detaylar
+> bölüm 18'de. Özet: cüzdan adresi evrensel anahtar, email sadece Google login'de,
+> shield/unshield/send miktarları FHE nedeniyle KESİNLİKLE tutulmuyor (sadece işlem
+> tipi+zaman). D1 (`arfio-users`) + 4 endpoint (`/users/register`, `/activity/log`,
+> `/admin/users`, `/admin/activity`) eklendi, deploy edildi, uçtan uca `curl` ile
+> doğrulandı (gerçek bir send işlemi `/admin/activity`'de göründü). Sırada: basit bir
+> `/admin` web sayfası (spesifikasyon hazır, henüz uygulanmadı). Test durumu: 736/736
+> ana suite, 74/74 backend-proxy (62 eski + 12 yeni).
+> **BÖLÜM 17.4 (model hallüsinasyonu) HÂLÂ ÇÖZÜLMEDİ** — bu oturumda hiç dokunulmadı,
+> araya kullanıcı takibi görevi girdi, **sıradaki oturumun ilk önceliği olmaya devam
+> ediyor.**
 
 ## 1. Genel Amaç
 
@@ -896,3 +888,112 @@ suite, **62/62** backend-proxy.
 - **Eski bölüm 16 listesinden hâlâ açık kalanlar**: limit-dışı ret senaryosu testi,
   facilitator hata yolu testi, İngilizce başlık kalıntıları, GitHub Dependabot uyarısı
   (113 vulnerabilities, genel), Wrangler güncelleme (3.114.17 → 4.x).
+
+## 18. Kullanıcı/aktivite takibi özelliği (2026-08-24 oturumu)
+
+### 18.1 — İstek ve kapsam netleştirme
+
+Toplantıda ("Ismail ArfDAO": *"bir nevi müşteri portföyü"*, "Ömer Aydoğan": *"bizim
+uygulamayı kullananların listesini görmek için"*) görev verildi. İlk yorum DAU/MAU
+(anonim sayaç) idi ama netleştirme turlarında gerçek talebin **kimlik bazlı bir liste**
+olduğu ortaya çıktı, sonra kapsam "sadece sosyal login kullananlar"dan **"her tür
+kullanıcı"**ya genişledi, en son kullanıcı cüzdan hareketlerinin de (ne kadar/ne sıklıkla
+kullanmış) takip edilmesini istedi.
+
+### 18.2 — Mimari keşif (Claude Code ile, kod tabanı incelenerek)
+
+- **Sosyal login**: Web3Auth (`@web3auth/base`, `@web3auth/ethereum-provider`,
+  `@web3auth/modal`), **sadece Google**, `SAPPHIRE_DEVNET` ağı. `Auth.tsx` (~satır
+  13-18, ~845-898): `web3auth.initModal()` + `connect()` → `getUserInfo()` (email/isim)
+  → `eth_private_key` RPC ile private key çekilip `AccountManager.ImportPrivateKey()`
+  ile normal hesap gibi içe aktarılıyor.
+- **Hesap verisi tamamen yerel, backend/DB yoktu**: `StorageManager.ts` — hassas
+  olmayan ayarlar düz `localStorage`, hesaplar/private key'ler AES-GCM ile şifreli
+  `localStorage`'da (anahtar kullanıcı şifresinden türetiliyor). `AccountManager.ts`
+  dışarıya hiçbir fetch/axios çağrısı yapmıyordu. `backend-proxy` sadece AI ajan
+  sohbetini yönlendiriyordu, login/hesap ile hiç ilgisi yoktu.
+- **Şifre bazlı oluşturma/import akışı** (create: `Auth.tsx` `handleGenerate` →
+  `AccountManager.CreateAccount` → mnemonic quiz doğrulaması; import: `handleImport` →
+  `AccountManager.ImportAccount` → `AutoDiscoverAccounts`) **ve** sosyal login akışı
+  (`ImportPrivateKey`) — üçü de farklı yollardan geçse de **tek bir noktada
+  birleşiyor**: `SetPasswordScreen.handleSubmit` (`Auth.tsx:358-401`) içindeki
+  `accountManager.persistToEncryptedStorage()` (`AccountManager.ts:180-186`) çağrısı —
+  şifre belirlenmeden hiçbir şey diske yazılmıyor (`updateStorage()`, satır 142-169,
+  kilitliyken no-op). Bu, üç akışın ortak "hesap gerçekten kalıcı oldu" anı.
+- **Public wallet address**: `Account.ts:9` alan adı `address`, `Account.Init()`
+  (satır 60-68) içinde set ediliyor (Random/FromMnemonic/FromPrivateKey — hepsinde
+  ortak). Erişim: `GetAddress()`. `AccountManager`'da `StoredAccount.address`.
+
+### 18.3 — Tasarım kararları
+
+- **FHE ile çelişmemek için miktar/tutar hiçbir tabloda tutulmuyor** — shield/unshield
+  zaten teknik olarak backend'den okunamaz (FHE şifreli), send miktarı public olsa bile
+  bilinçli olarak tutarlılık ve gizlilik ilkesi gereği eklenmedi. Sadece işlem tipi
+  (`send`/`shield`/`unshield`) ve zaman damgası.
+- **Evrensel anahtar: `wallet_address`** (email değil) — her iki giriş yönteminde de
+  var, email sadece Google'da var. `source` alanı (`'google'|'password'`) hangi
+  yöntemle geldiğini ayırt ediyor.
+- **Ping noktası**: kayıt için tek nokta — `persistToEncryptedStorage()` başarılı
+  olduktan hemen sonra, `Auth.tsx`'te eklenen `authMethod`/`pendingEmail` state'i ile.
+  Aktivite için — `AgentChatPanel.tsx`'teki `handleCardStatusChange`'in `"confirmed"`
+  dalı (sadece Arfio üzerinden agent'a onaylatılan işlemler; cüzdan arayüzünden agent'a
+  hiç sormadan yapılan manuel işlemler bu akışa girmiyor — kapsam dışı, not düşüldü).
+- Her iki ping de **sessiz/bloklamayan** (`.catch(()=>{})`) — mevcut `retrieve-context`
+  deseniyle aynı ilke, kullanıcı akışını asla etkilemiyor.
+
+### 18.4 — Uygulama (Claude Code ile)
+
+- **D1**: `arfio-users` (`database_id: 5927fb0c-38cb-4469-a07e-e2e84d649313`).
+  `migrations/0001_create_users_activity.sql` — `users` (`wallet_address` PK, `email`,
+  `source`, `first_seen`, `last_seen`) ve `activity` (`id` autoincrement,
+  `wallet_address`, `action_type`, `timestamp`) — hiçbir tabloda tutar alanı yok.
+- **Endpoint'ler** (`backend-proxy/src/index.ts`, mevcut origin/CORS/rate-limit
+  korumasıyla): `POST /users/register` (upsert, `last_seen` güncellenir, `email`
+  `COALESCE` ile korunur), `POST /activity/log` (append-only insert), `GET
+  /admin/users`, `GET /admin/activity` (ikisi de `Authorization: Bearer <ADMIN_SECRET>`
+  ile korunuyor).
+- **Frontend**: `Auth.tsx`'e `authMethod`/`pendingEmail` state + `SetPasswordScreen`
+  içinde register ping'i; `AgentChatPanel.tsx`'e `mapToolNameToActionType`/
+  `logActivity` yardımcıları + confirmed dalında activity ping'i.
+- **Test**: yeni `users.register.test.ts` (6 test) + `activity.log.test.ts` (6 test).
+  Sonuç: **736/736 ana suite, 74/74 backend-proxy** (62 eski + 12 yeni), regresyon yok.
+
+### 18.5 — Deploy ve canlı doğrulama
+
+`wrangler.toml`'a `[[d1_databases]] binding = "USERS_DB"` eklendi (wrangler'ın önerdiği
+`arfio_users` DEĞİL — kod `USERS_DB` bekliyor, bilinçli olarak düzeltildi). Migration
+`--remote` ile uygulandı, `ADMIN_SECRET` secret olarak eklendi (**not: şu an test
+amaçlı zayıf bir değer kullanılıyor, prod'a geçmeden `openssl rand -hex 32` gibi güçlü
+bir değerle değiştirilmeli**).
+
+**Bir bug/öğrenme**: `wrangler deploy` sadece `backend-proxy`'yi günceller — extension'ın
+kendisi (`Auth.tsx`, `AgentChatPanel.tsx` değişiklikleri) ayrıca **yeniden build edilip
+Chrome'da reload edilmeli** (`pnpm build` + `chrome://extensions` → reload). Bu adım
+atlandığı için ilk uçtan uca testte (gerçek bir send işlemi sonrası) hem `/admin/users`
+hem `/admin/activity` boş `[]` döndü — build/reload sonrası tekrar denendiğinde gerçek
+bir `send` kaydı (`wallet_address`, `action_type: "send"`, `timestamp`, tutar YOK)
+başarıyla göründü. Sistem uçtan uca doğrulandı, canlı.
+
+### 18.6 — Bilinen sınırlar (ekibe iletilmesi gereken)
+
+1. **Geriye dönük veri yok** — sistem/deploy'dan önce oluşturulmuş/giriş yapılmış
+   hesaplar listede hiç görünmeyecek (ping mekanizması o zaman yoktu).
+2. **Cüzdan sayısı ≠ gerçek insan sayısı** — bir kullanıcının birden fazla cüzdanı
+   varsa birden fazla satır olarak görünür.
+3. **Projenin ilk gizlilik istisnası** — "hiçbir kimlik bilgisi sunucuya gitmez"
+   ilkesi artık kısmen kırıldı (cüzdan adresi + varsa email backend'e gidiyor). Bir
+   gizlilik politikası/bildirim güncellemesi gerekip gerekmediği ekiple konuşulmalı,
+   henüz karar verilmedi.
+
+### 18.7 — Yapılmadı / Sıradaki adımlar (güncel liste)
+
+- **ÖNCELİK 1 — hâlâ bölüm 17.4: model hallüsinasyon sorunu** — bu oturumda hiç
+  dokunulmadı, sıradaki oturumun ilk maddesi olmaya devam ediyor.
+- **`/admin` web sayfası** — spesifikasyon hazır (arama/sıralama, sessionStorage'da
+  secret, iki sekme: kullanıcılar/aktivite) ama henüz Claude Code'a uygulatılmadı.
+- **`ADMIN_SECRET`'ın güçlendirilmesi** — şu an test amaçlı zayıf bir değerde, prod
+  öncesi değiştirilmeli.
+- **Gizlilik politikası kararı** (bkz. 18.6 madde 3) — henüz alınmadı.
+- Bölüm 17.6'daki tüm eski açık maddeler (agent sistemi ürün kararı, biar'ın
+  tema/onboarding değişiklikleri, `experiment/hardhat-v3-deploy` merge, Dependabot
+  uyarıları, Wrangler güncelleme) hâlâ aynen açık, bu oturumda dokunulmadı.

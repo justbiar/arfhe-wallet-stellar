@@ -22,19 +22,57 @@
  * A role:"system" message carrying an account-switch notice (written by Agent.tsx) renders as
  * a small centered divider instead of a bubble.
  *
- * There is no separate settings panel: there is nothing left to configure (provider/model/
- * API key all disappeared with AgentService.ts — the proxy + OpenRouter picks the model
- * now), so the only user-facing control besides the chat itself is starting a new chat,
- * exposed directly as a header icon.
+ * The only user-facing settings are which agent BACKEND to talk to (the built-in Arfio, via
+ * AgentOrchestrator.ts/backend-proxy — no provider/model/API key to configure, the proxy +
+ * OpenRouter picks the model) or the user's own self-hosted agent (VpsAgentOrchestrator.ts/
+ * VpsAgentService.ts — a VPS URL, with auth done by signing a login message with the active
+ * account's key instead of pasting an API key). That toggle + the VPS URL live in localStorage
+ * (getAgentSource/getVpsAgentUrl), edited via the header gear icon's dialog. Everything else
+ * about the chat (conversationHistory shape, rendering, tool_calls/ConfirmationCard handling,
+ * per-account scoping) is IDENTICAL either way — runVpsAgentTurn is a structural mirror of
+ * runAgentTurn that executes tools through the exact same AgentToolRunner locally, just asking a
+ * different LLM host (the user's own Ollama VPS instead of OpenRouter) which tool to call. See
+ * VpsAgentOrchestrator.ts's own header for why that split (tool execution always local,
+ * regardless of backend) is what makes this parity possible instead of VPS mode being a
+ * second, cut-down code path.
  */
 
 import * as React from "react";
-import { Avatar, Box, Typography, TextField, IconButton, Stack, CircularProgress, Button } from "@mui/material";
-import { Send, Person, SupportAgent, AddComment, CheckCircle, Cancel, ErrorOutline } from "@mui/icons-material";
+import {
+  Avatar,
+  Box,
+  Typography,
+  TextField,
+  IconButton,
+  Stack,
+  CircularProgress,
+  Button,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  RadioGroup,
+  Radio,
+  FormControlLabel,
+} from "@mui/material";
+import { Send, Person, SupportAgent, AddComment, CheckCircle, Cancel, ErrorOutline, Settings } from "@mui/icons-material";
 import { useTranslation } from "react-i18next";
 import { WalletContext } from "../AppContext.js";
 import { useActiveAccount } from "../ActiveAccountProvider.js";
 import { runAgentTurn, type ChatMessage } from "../backend/AgentOrchestrator.js";
+import { runVpsAgentTurn } from "../backend/VpsAgentOrchestrator.js";
+import {
+  getAgentSource,
+  setAgentSource,
+  getVpsAgentUrl,
+  setVpsAgentUrl,
+  resetVpsAgentSession,
+  getVpsCredits,
+  verifyVpsOnchainCredits,
+  VpsAgentError,
+  type AgentSource,
+  type CreditInfo,
+} from "../backend/VpsAgentService.js";
 import { executeToolCall, type ProposalPreview } from "../backend/AgentToolRunner.js";
 import {
   buildRecordFromOutcome,
@@ -372,6 +410,35 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
   const [sending, setSending] = React.useState(false);
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
+  // Agent backend selection (Arfio vs. the user's own VPS) — see file header. Read once at
+  // mount; both are only ever changed through handleSaveSettings below, which keeps this state
+  // and localStorage in sync itself, so there's no need to re-read on every render.
+  const [agentSource, setAgentSourceState] = React.useState<AgentSource>(() => getAgentSource());
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [draftSource, setDraftSource] = React.useState<AgentSource>(agentSource);
+  const [draftUrl, setDraftUrl] = React.useState(() => getVpsAgentUrl());
+  const [settingsError, setSettingsError] = React.useState<string | null>(null);
+  const [relogged, setRelogged] = React.useState(false);
+
+  // Credit/quota display (VPS mode only) — see VpsAgentService.ts's CreditInfo docs.
+  const [creditInfo, setCreditInfo] = React.useState<CreditInfo | null>(null);
+  const [creditLoading, setCreditLoading] = React.useState(false);
+  const [creditError, setCreditError] = React.useState<string | null>(null);
+
+  // Refreshes the credit panel whenever the settings dialog opens on an already-saved VPS
+  // connection — not on every draftSource toggle, so switching the radio in the dialog before
+  // saving can't trigger a surprise sign-in prompt for a connection that isn't committed yet.
+  React.useEffect(() => {
+    if (!settingsOpen || agentSource !== "vps" || !activeAccount) return;
+    setCreditLoading(true);
+    setCreditError(null);
+    getVpsCredits(activeAccount)
+      .then(setCreditInfo)
+      .catch((err) => setCreditError(t(err instanceof VpsAgentError ? err.reasonKey : "agent.vpsErrorRequestFailed")))
+      .finally(() => setCreditLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-fetch on dialog open/source change, not on every t()/activeAccount identity churn
+  }, [settingsOpen, agentSource]);
+
   const address = activeAccount?.GetAddress();
   const networkId = wallet?.networkProvider.getActiveNetworkId();
   const hasContext = !!wallet && !!address && networkId !== undefined;
@@ -411,6 +478,31 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
     setSending(true);
 
     try {
+      if (agentSource === "vps") {
+        if (!activeAccount) return;
+        try {
+          const { updatedHistory } = await runVpsAgentTurn(
+            text,
+            conversationHistory,
+            { account: address, networkId: String(networkId) },
+            activeAccount
+          );
+          setConversationHistory(updatedHistory);
+          recordPolicyDenials(conversationHistory, updatedHistory, address);
+        } catch (err) {
+          // Unlike runAgentTurn, runVpsAgentTurn CAN throw — specifically VpsAgentError from
+          // its upfront quota check (see that file's docs) — so it needs its own translation
+          // step here, same reasonKey→t() pattern the settings dialog's credit panel uses.
+          const reasonKey = err instanceof VpsAgentError ? err.reasonKey : "agent.vpsErrorRequestFailed";
+          setConversationHistory((prev) => [
+            ...prev,
+            { role: "user", content: text },
+            { role: "assistant", content: t(reasonKey) },
+          ]);
+        }
+        return;
+      }
+
       const { updatedHistory } = await runAgentTurn(text, conversationHistory, {
         account: address,
         networkId: String(networkId),
@@ -427,6 +519,44 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
       ]);
     } finally {
       setSending(false);
+    }
+  };
+
+  const openSettings = () => {
+    setDraftSource(agentSource);
+    setDraftUrl(getVpsAgentUrl());
+    setSettingsError(null);
+    setRelogged(false);
+    setSettingsOpen(true);
+  };
+
+  const handleSaveSettings = () => {
+    if (draftSource === "vps" && !draftUrl.trim()) {
+      setSettingsError(t("agent.vpsUrlRequired"));
+      return;
+    }
+    setVpsAgentUrl(draftUrl);
+    setAgentSource(draftSource);
+    setAgentSourceState(draftSource);
+    setSettingsOpen(false);
+  };
+
+  const handleRelogin = () => {
+    if (!address) return;
+    resetVpsAgentSession(address);
+    setRelogged(true);
+  };
+
+  const handleVerifyOnchain = async () => {
+    if (!activeAccount) return;
+    setCreditLoading(true);
+    setCreditError(null);
+    try {
+      setCreditInfo(await verifyVpsOnchainCredits(activeAccount));
+    } catch (err) {
+      setCreditError(t(err instanceof VpsAgentError ? err.reasonKey : "agent.vpsErrorRequestFailed"));
+    } finally {
+      setCreditLoading(false);
     }
   };
 
@@ -560,15 +690,20 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
           variant="subtitle1"
           sx={{ fontFamily: "var(--font-mono)", textTransform: "uppercase", color: "text.primary" }}
         >
-          {t("agent.panelTitle")}
+          {t(agentSource === "vps" ? "agent.vpsPanelTitle" : "agent.panelTitle")}
         </Typography>
-        <IconButton
-          onClick={handleNewChat}
-          disabled={inputLocked || chatItems.length === 0}
-          aria-label={t("agent.panelNewChatAria")}
-        >
-          <AddComment fontSize="small" />
-        </IconButton>
+        <Stack direction="row" spacing={0.5}>
+          <IconButton onClick={openSettings} aria-label={t("agent.vpsSettingsAria")}>
+            <Settings fontSize="small" />
+          </IconButton>
+          <IconButton
+            onClick={handleNewChat}
+            disabled={inputLocked || chatItems.length === 0}
+            aria-label={t("agent.panelNewChatAria")}
+          >
+            <AddComment fontSize="small" />
+          </IconButton>
+        </Stack>
       </Box>
 
       {/* Messages */}
@@ -577,8 +712,15 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
           <Box sx={{ textAlign: "center", mt: 6 }}>
             <AgentAvatarIcon sx={{ fontSize: 40, mb: 1, opacity: 0.5, color: "text.secondary" }} />
             <Typography variant="body2" color="text.secondary" sx={{ mb: hasContext ? 2 : 0 }}>
-              {hasContext ? t("agent.panelEmptyState") : t("agent.panelNoAccount")}
+              {hasContext
+                ? t(agentSource === "vps" ? "agent.vpsPanelEmptyState" : "agent.panelEmptyState")
+                : t(agentSource === "vps" ? "agent.vpsPanelNoAccount" : "agent.panelNoAccount")}
             </Typography>
+            {hasContext && agentSource === "vps" && !getVpsAgentUrl() && (
+              <Typography variant="caption" color="warning.main" sx={{ display: "block", mb: 2 }}>
+                {t("agent.vpsErrorNotConfigured")}
+              </Typography>
+            )}
             {hasContext && (
               <Stack direction="row" flexWrap="wrap" justifyContent="center" gap={1} sx={{ px: 2 }}>
                 {QUICK_ACTIONS.map((key) => (
@@ -782,7 +924,7 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
             <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
               <CircularProgress size={16} />
               <Typography variant="caption" color="text.secondary">
-                {t("agent.panelThinking")}
+                {t(agentSource === "vps" ? "agent.vpsPanelThinking" : "agent.panelThinking")}
               </Typography>
             </Box>
           )}
@@ -815,6 +957,90 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
           <Send fontSize="small" />
         </IconButton>
       </Box>
+
+      <Dialog open={settingsOpen} onClose={() => setSettingsOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontFamily: "var(--font-mono)", textTransform: "uppercase", fontSize: "0.95rem" }}>
+          {t("agent.vpsSettingsTitle")}
+        </DialogTitle>
+        <DialogContent>
+          <RadioGroup value={draftSource} onChange={(e) => setDraftSource(e.target.value as AgentSource)}>
+            <FormControlLabel value="arfio" control={<Radio size="small" />} label={t("agent.vpsSourceArfio")} />
+            <FormControlLabel value="vps" control={<Radio size="small" />} label={t("agent.vpsSourceOwn")} />
+          </RadioGroup>
+
+          {draftSource === "vps" && (
+            <>
+              <TextField
+                fullWidth
+                size="small"
+                label={t("agent.vpsUrlLabel")}
+                placeholder={t("agent.vpsUrlPlaceholder")}
+                value={draftUrl}
+                onChange={(e) => setDraftUrl(e.target.value)}
+                sx={{ mt: 2 }}
+              />
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
+                {t("agent.vpsUrlHelp")}
+              </Typography>
+              {address && (
+                <Button
+                  size="small"
+                  onClick={handleRelogin}
+                  disabled={relogged}
+                  sx={{ mt: 1.5, textTransform: "none", pl: 0 }}
+                >
+                  {relogged ? t("agent.vpsReloginDone") : t("agent.vpsRelogin")}
+                </Button>
+              )}
+
+              {agentSource === "vps" && (
+                <Box sx={{ mt: 2, pt: 2, borderTop: "1px solid", borderColor: "divider" }}>
+                  <Typography variant="caption" sx={{ fontWeight: 700, display: "block", mb: 0.5 }}>
+                    {t("agent.vpsCreditsTitle")}
+                  </Typography>
+                  {creditLoading && !creditInfo ? (
+                    <CircularProgress size={14} />
+                  ) : creditInfo ? (
+                    <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                      {t("agent.vpsCreditsSummary", {
+                        credits: creditInfo.credits,
+                        used: creditInfo.dailyUsed,
+                        limit: creditInfo.dailyLimit,
+                      })}
+                    </Typography>
+                  ) : creditError ? (
+                    <Typography variant="caption" color="error" sx={{ display: "block" }}>
+                      {creditError}
+                    </Typography>
+                  ) : null}
+                  <Button
+                    size="small"
+                    onClick={handleVerifyOnchain}
+                    disabled={creditLoading}
+                    sx={{ mt: 1, textTransform: "none", pl: 0 }}
+                  >
+                    {t("agent.vpsVerifyOnchain")}
+                  </Button>
+                </Box>
+              )}
+            </>
+          )}
+
+          {settingsError && (
+            <Typography variant="caption" color="error" sx={{ display: "block", mt: 1 }}>
+              {settingsError}
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSettingsOpen(false)} sx={{ textTransform: "none" }}>
+            {t("agent.vpsCancel")}
+          </Button>
+          <Button variant="contained" onClick={handleSaveSettings} sx={{ textTransform: "none", borderRadius: 0 }}>
+            {t("agent.vpsSave")}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

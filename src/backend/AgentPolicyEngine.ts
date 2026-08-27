@@ -44,6 +44,7 @@ export const READ_ONLY_TOOLS = [
   "get_shielded_balance",
   "get_shielded_portfolio",
   "get_pending_claims",
+  "get_faucet_info",
 ] as const;
 
 /**

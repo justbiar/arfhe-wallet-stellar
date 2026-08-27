@@ -25,7 +25,7 @@ import { PROPOSAL_TOOLS, X402_TOOLS } from "./AgentPolicyEngine.js";
  * than duplicating its own copy of the same check per tool tier. Adding a third confirmable
  * tool tier later means adding it here once, not hunting for every place this logic was copied.
  */
-const CONFIRMABLE_TOOLS: readonly string[] = [...PROPOSAL_TOOLS, ...X402_TOOLS];
+export const CONFIRMABLE_TOOLS: readonly string[] = [...PROPOSAL_TOOLS, ...X402_TOOLS];
 
 // ─── Wire types (OpenAI-compatible chat-completion shape) ──────────
 
@@ -140,6 +140,11 @@ export function buildSystemPrompt(): string {
       "— yine de jenerik \"bir hata oluştu\" ile geçiştirme.",
     "- Bir aracın sonucunu almadan bakiye, adres veya miktar UYDURMA. Emin değilsen ilgili " +
       "aracı çağır ya da bilmediğini söyle.",
+    "- Bakiye bildiren bir araç sonucunda (ör. get_balance) hem \"balance\" (ondalık, okunabilir) " +
+      "hem de \"balanceWei\" (ham tam sayı) alanı varsa, kullanıcıya HER ZAMAN \"balance\" " +
+      "alanındaki değeri söyle. balanceWei'yi kendi kafandan ondalığa çevirmeye ÇALIŞMA — " +
+      "18 haneli bir sayıyı zihinden bölmek hataya çok açıktır, bu dönüşüm zaten koddan " +
+      "geliyor.",
     "",
     "FHE TERMİNOLOJİSİ (FHE_COMPLETE_GUIDE.md ile tutarlı kullan):",
     "- \"shield\": açık (şifrelenmemiş) bir bakiyeyi FHE ile şifreli hale getirmek.",
@@ -246,7 +251,7 @@ function friendlyMessageForStatus(status: number): string {
   return GENERIC_ERROR_REPLY;
 }
 
-function isValidToolCall(value: unknown): value is AgentToolCall {
+export function isValidToolCall(value: unknown): value is AgentToolCall {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
   if (typeof v.id !== "string" || v.type !== "function") return false;
@@ -369,7 +374,7 @@ function parseToolArguments(raw: string): Record<string, unknown> {
  * produce a `reply` that was never pushed onto `newMessages` — without this, AgentChatPanel
  * (which renders `updatedHistory`, not `reply`) shows nothing for those turns.
  */
-function finishTurn(
+export function finishTurn(
   reply: string,
   newMessages: ChatMessage[],
   conversationHistory: ChatMessage[]
@@ -380,7 +385,7 @@ function finishTurn(
   return { reply, updatedHistory: [...conversationHistory, ...messages] };
 }
 
-async function runOneToolCall(call: AgentToolCall, context: ToolExecutionContext): Promise<ChatMessage> {
+export async function runOneToolCall(call: AgentToolCall, context: ToolExecutionContext): Promise<ChatMessage> {
   const args = parseToolArguments(call.function.arguments);
   const outcome = await executeToolCall(call.function.name, args, context);
 
@@ -413,7 +418,7 @@ async function runOneToolCall(call: AgentToolCall, context: ToolExecutionContext
  * — that path already executed, so the loop is meant to continue and hand the outcome to the
  * model like any other completed tool call.
  */
-function isAwaitingConfirmation(toolName: string, toolMessage: ChatMessage): boolean {
+export function isAwaitingConfirmation(toolName: string, toolMessage: ChatMessage): boolean {
   if (!CONFIRMABLE_TOOLS.includes(toolName)) return false;
   try {
     const parsed = JSON.parse(toolMessage.content) as { result?: { requiresConfirmation?: unknown } };

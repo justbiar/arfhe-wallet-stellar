@@ -597,12 +597,12 @@ const GraphExplorer = () => {
                       }}
                       sx={{
                         height: '100%',
-                        borderRadius: 2,
+                        borderRadius: 0,
                         fontWeight: 700,
                         fontSize: '0.72rem',
                         textTransform: 'none',
                         background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
-                        color: '#eff6ff',
+                        color: 'common.white',
                         '&:hover': {
                           background: 'linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%)',
                         },

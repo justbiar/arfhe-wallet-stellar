@@ -16,8 +16,8 @@ describe('agentTools', () => {
     expect(AGENT_TOOLS.length).toBeGreaterThan(0);
   });
 
-  it('4 read-only + 3 proposal + 1 x402 tool tanımlıdır', () => {
-    expect(AGENT_TOOLS).toHaveLength(8);
+  it('5 read-only + 3 proposal + 1 x402 tool tanımlıdır', () => {
+    expect(AGENT_TOOLS).toHaveLength(9);
   });
 
   describe('her tool geçerli bir OpenAI function-calling şemasına sahiptir', () => {
@@ -26,6 +26,7 @@ describe('agentTools', () => {
       'get_shielded_balance',
       'get_shielded_portfolio',
       'get_pending_claims',
+      'get_faucet_info',
       'propose_send',
       'propose_shield',
       'propose_unshield',

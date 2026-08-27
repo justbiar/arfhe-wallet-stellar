@@ -26,7 +26,7 @@ import {
 import { Alert } from "@mui/material";
 import { WalletContext } from "../../AppContext.js";
 import FheEncryptingOverlay from "../FheEncryptingOverlay.js";
-import { getContractsForNetwork, explorerTxUrl, inputCardSx, ctaButtonSx } from "./shared.js";
+import { getContractsForNetwork, explorerTxUrl, inputCardSx, ctaButtonSx, logActivity } from "./shared.js";
 import { toUserMessage } from "../../backend/UserFacingError.js";
 import { isFheNetwork } from "../../backend/NetworkTypes.js";
 
@@ -280,6 +280,12 @@ export default function ShieldPanel({ onBack, hideTitle, focus, onCompleted }: S
 
         setOutcome("success");
         setStatus(t("privacy.shieldSuccessful"));
+
+        // Same activity ping AgentChatPanel sends for agent-confirmed shields, but for a
+        // manual shield made directly from this panel — see SendPanel.tsx's handleSend for
+        // the same reasoning.
+        const shieldAddress = activeAccount.GetAddress();
+        if (shieldAddress) logActivity(shieldAddress, "shield");
       } else {
         // Burn and settle in one call. The claim is queued the moment the burn confirms,
         // so dismissing this panel mid-flight cannot strand the balance — WalletProvider
@@ -306,6 +312,11 @@ export default function ShieldPanel({ onBack, hideTitle, focus, onCompleted }: S
 
         setOutcome("success");
         setStatus(stillOwed > 0 ? t("privacy.unshieldRequested") : t("privacy.unshieldComplete"));
+
+        // Same activity ping AgentChatPanel sends for agent-confirmed unshields, but for a
+        // manual unshield made directly from this panel.
+        const unshieldAddress = activeAccount.GetAddress();
+        if (unshieldAddress) logActivity(unshieldAddress, "unshield");
       }
 
       setPhase("idle");
@@ -424,7 +435,7 @@ export default function ShieldPanel({ onBack, hideTitle, focus, onCompleted }: S
       </Paper>
 
       {/* Amount Input Card */}
-      <Paper elevation={0} sx={{ ...inputCardSx, borderRadius: '0px' }}>
+      <Paper elevation={0} sx={inputCardSx}>
         <Typography variant="caption" color="text.secondary" fontWeight={600}>
           {mode === "shield" ? t("privacy.amountToShield") : t("privacy.amountToUnshield")}
         </Typography>

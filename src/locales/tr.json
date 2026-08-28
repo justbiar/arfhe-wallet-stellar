@@ -213,7 +213,15 @@
     "copyPhrase": "Kurtarma ifadesini kopyala",
     "phraseCopied": "Kopyalandı",
     "copyFailed": "Panoya erişilemedi. Kelimeleri elle yazın.",
-    "phraseCopiedWarning": "Güvenli bir yere yapıştırın, sonra panoyu temizleyin — bu bilgisayardaki başka yazılımlar panoyu okuyabilir."
+    "phraseCopiedWarning": "Güvenli bir yere yapıştırın, sonra panoyu temizleyin — bu bilgisayardaki başka yazılımlar panoyu okuyabilir.",
+    "importPhraseTab": "Kurtarma ifadesi",
+    "importKeyTab": "Özel anahtar",
+    "importKeyDescription": "Tek bir hesabın özel anahtarını yapıştırın; 0x ön eki olsa da olmasa da olur.",
+    "privateKeyLabel": "Özel anahtar",
+    "invalidPrivateKey": "Bu geçerli bir özel anahtar değil. 64 onaltılık karakter olmalı.",
+    "privateKeyNoPhraseWarning": "Tek hesap, kurtarma ifadesi yok — bu anahtar geri dönmenin tek yolu. Cüzdan size bir daha gösteremez.",
+    "showPrivateKey": "Özel anahtarı göster",
+    "hidePrivateKey": "Özel anahtarı gizle"
   },
   "buy": {
     "amount": "Miktar",

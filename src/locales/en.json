@@ -213,7 +213,15 @@
     "copyPhrase": "Copy recovery phrase",
     "phraseCopied": "Copied",
     "copyFailed": "Could not reach the clipboard. Write the words down instead.",
-    "phraseCopiedWarning": "Paste it somewhere safe, then clear your clipboard — other software on this computer can read it."
+    "phraseCopiedWarning": "Paste it somewhere safe, then clear your clipboard — other software on this computer can read it.",
+    "importPhraseTab": "Recovery phrase",
+    "importKeyTab": "Private key",
+    "importKeyDescription": "Paste the private key of a single account, with or without the 0x prefix.",
+    "privateKeyLabel": "Private key",
+    "invalidPrivateKey": "That is not a valid private key. It should be 64 hexadecimal characters.",
+    "privateKeyNoPhraseWarning": "One account, and no recovery phrase — this key is the only way back in. The wallet cannot show it to you again.",
+    "showPrivateKey": "Show private key",
+    "hidePrivateKey": "Hide private key"
   },
   "buy": {
     "amount": "Amount",

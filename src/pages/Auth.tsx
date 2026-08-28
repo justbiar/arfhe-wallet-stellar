@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Typography, Box, Button, Grid, Alert, Stack, TextField, Paper, Container, IconButton, InputAdornment, CircularProgress, LinearProgress, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
+import { Typography, Box, Button, Grid, Alert, Stack, Tab, Tabs, TextField, Paper, Container, IconButton, InputAdornment, CircularProgress, LinearProgress, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
 import { AppContext, WalletContext } from "../AppContext.js";
 import { useNavigate } from "react-router";
 import { Visibility, VisibilityOff, Google, Lock, Fingerprint, ContentCopy, Check } from "@mui/icons-material";
@@ -367,14 +367,53 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
   );
 }
 
+/** Accepts the key with or without the 0x prefix, which is how people paste them. */
+const PRIVATE_KEY_PATTERN = /^(0x)?[0-9a-fA-F]{64}$/;
+
+/**
+ * Height reserved for whichever input the active tab shows.
+ *
+ * Sized to the private-key field plus its warning — the taller of the two — so switching
+ * tabs moves nothing below it. Kept deliberately tight: the whole screen has to fit the
+ * popup, and a reserved block that is larger than it needs to be is what pushes the
+ * button past the bottom edge and turns a still page into a scrolling one.
+ */
+const INPUT_AREA_MIN_HEIGHT = 124;
+
+/** Two lines of `body2`, so a one-line description does not shorten the card. */
+const DESCRIPTION_MIN_HEIGHT = 40;
+
+type ImportMode = "phrase" | "key";
+
+/**
+ * Import an existing wallet, from either a recovery phrase or a single private key.
+ *
+ * The two are not variants of one input. A phrase is a seed: it regenerates a whole tree
+ * of accounts, which is why the phrase path scans several chains for accounts that were
+ * already used. A private key is one account and nothing else — scanning would find
+ * nothing to find, and running it anyway would leave the user watching a progress message
+ * for a search that could not succeed.
+ *
+ * The other asymmetry is what the wallet can give back later. An account imported from a
+ * key has no phrase to reveal, so the key the user pastes here is the only copy that will
+ * ever exist. That is said on the screen rather than discovered on the day it matters.
+ */
 function ImportWallet({ accountManager, onDone }: WalletStepProps) {
   const { t } = useTranslation();
+  const [mode, setMode] = React.useState<ImportMode>("phrase");
   const [mnemonic, setMnemonic] = React.useState("");
+  const [privateKey, setPrivateKey] = React.useState("");
+  const [showKey, setShowKey] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
   const [isScanning, setIsScanning] = React.useState(false);
 
-  const handleImport = async () => {
+  const switchMode = (next: ImportMode) => {
+    setMode(next);
+    setError(null);
+  };
+
+  const importFromMnemonic = async () => {
     if (!accountManager) return;
 
     if (!Mnemonic.isValidMnemonic(mnemonic.trim())) {
@@ -406,43 +445,149 @@ function ImportWallet({ accountManager, onDone }: WalletStepProps) {
     }
   };
 
+  const importFromPrivateKey = () => {
+    if (!accountManager) return;
+
+    const trimmed = privateKey.trim();
+    // Checked here as well as inside AccountManager, so a mistyped key is answered with
+    // what is wrong with it rather than a generic failure.
+    if (!PRIVATE_KEY_PATTERN.test(trimmed)) {
+      setError(t('auth.invalidPrivateKey'));
+      return;
+    }
+
+    const index = accountManager.ImportPrivateKey(
+      trimmed,
+      `New User #${accountManager.accounts.length + 1}`
+    );
+    if (index === -1) {
+      setError(t('auth.importFailed'));
+      return;
+    }
+
+    // Nothing to discover: this key is one account, not a seed for a tree of them.
+    setPrivateKey("");
+    onDone();
+  };
+
+  const handleImport = () => {
+    if (mode === "phrase") void importFromMnemonic();
+    else importFromPrivateKey();
+  };
+
+  const canSubmit = !!accountManager && !isScanning &&
+    (mode === "phrase" ? mnemonic.trim().length > 0 : privateKey.trim().length > 0);
+
   return (
     <Box>
       <Typography variant="h5" fontWeight={700} gutterBottom align="center" color="text.primary">
         {t('auth.importTitle')}
       </Typography>
-      <Typography variant="body2" color="text.secondary" align="center" sx={{ mb: 3 }}>
-        {t('auth.importDescription')}
+
+      <Tabs
+        value={mode}
+        onChange={(_e, next: ImportMode) => switchMode(next)}
+        variant="fullWidth"
+        sx={{ mb: 2, minHeight: 36, '& .MuiTab-root': { minHeight: 36, textTransform: 'none', fontWeight: 600 } }}
+      >
+        <Tab value="phrase" label={t('auth.importPhraseTab')} />
+        <Tab value="key" label={t('auth.importKeyTab')} />
+      </Tabs>
+
+      {/* Two lines are reserved whether or not the sentence needs both. The card is
+          vertically centred, so a tab whose description wraps to one line instead of two
+          makes the whole card shorter — and every control below it, the import button
+          included, shifts up by a line when the tab changes. */}
+      <Typography
+        variant="body2"
+        color="text.secondary"
+        align="center"
+        sx={{ mb: 2, minHeight: DESCRIPTION_MIN_HEIGHT }}
+      >
+        {mode === "phrase" ? t('auth.importDescription') : t('auth.importKeyDescription')}
       </Typography>
 
       {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 0 }}>{error}</Alert>}
 
-      <TextField
-        placeholder="apple banana cat dog..."
-        multiline
-        fullWidth
-        minRows={4}
-        value={mnemonic}
-        onChange={(e) => {
-          setMnemonic(e.target.value);
-          setError(null);
-        }}
-        sx={{
-          '& .MuiOutlinedInput-root': {
-            borderRadius: 0,
-            bgcolor: 'background.default',
-            fontFamily: 'monospace'
-          }
-        }}
-      />
+      {/* Both tabs reserve the same height. `minRows` let the phrase box grow with every
+          word typed, which pushed the import button down the page — and with the popup
+          unable to scroll, out of reach entirely. A fixed row count scrolls inside itself
+          instead, and the shared minimum keeps the button from jumping when the tab
+          changes. */}
+      <Box sx={{ minHeight: INPUT_AREA_MIN_HEIGHT }}>
+      {mode === "phrase" ? (
+        <TextField
+          placeholder="apple banana cat dog..."
+          multiline
+          fullWidth
+          rows={4}
+          value={mnemonic}
+          onChange={(e) => {
+            setMnemonic(e.target.value);
+            setError(null);
+          }}
+          sx={{
+            '& .MuiOutlinedInput-root': {
+              borderRadius: 0,
+              bgcolor: 'background.default',
+              fontFamily: 'monospace',
+              alignItems: 'flex-start',
+            }
+          }}
+        />
+      ) : (
+        <>
+          <TextField
+            label={t('auth.privateKeyLabel')}
+            placeholder="0x..."
+            fullWidth
+            // Masked by default: this screen is as likely to be open over someone's
+            // shoulder as any password field, and the value is worth strictly more.
+            type={showKey ? "text" : "password"}
+            value={privateKey}
+            onChange={(e) => {
+              setPrivateKey(e.target.value);
+              setError(null);
+            }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && canSubmit) handleImport(); }}
+            autoComplete="off"
+            spellCheck={false}
+            InputProps={{
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton
+                    onClick={() => setShowKey((v) => !v)}
+                    edge="end"
+                    aria-label={showKey ? t('auth.hidePrivateKey') : t('auth.showPrivateKey')}
+                  >
+                    {showKey ? <VisibilityOff /> : <Visibility />}
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }}
+            sx={{
+              '& .MuiOutlinedInput-root': {
+                borderRadius: 0,
+                bgcolor: 'background.default',
+                fontFamily: 'monospace'
+              }
+            }}
+          />
+
+          <Alert severity="warning" sx={{ mt: 1.5, borderRadius: 0, fontSize: '0.7rem', py: 0.25, '& .MuiAlert-icon': { py: 0.5 } }}>
+            {t('auth.privateKeyNoPhraseWarning')}
+          </Alert>
+        </>
+      )}
+      </Box>
 
       <Button
         variant="contained"
         fullWidth
         onClick={handleImport}
-        disabled={!accountManager || isScanning}
+        disabled={!canSubmit}
         size="large"
-        sx={{ mt: 3, borderRadius: 0, height: 44 }}
+        sx={{ mt: 2, borderRadius: 0, height: 44 }}
       >
         {isScanning ? t('auth.scanningAccounts') : t('auth.importWallet')}
       </Button>
@@ -903,15 +1048,28 @@ export default function Auth() {
   }, []);
 
   return (
+    // Every step here is sized to fit the popup, so in normal use this box does not
+    // scroll at all — a screen that drifts under the reader while they type is worse than
+    // one that is simply still.
+    //
+    // `auto` rather than `hidden` because one step genuinely cannot be made to fit: a
+    // 24-word recovery phrase is twelve rows of words, and the popup root is a fixed
+    // height with `overflow: hidden`, so anything past the bottom edge there is not
+    // scrolled past — it is unreachable. The scroll region engages for that case and
+    // stays dormant for the rest.
+    //
+    // Centring is `margin: auto` on the child rather than `align-items: center`: a centred
+    // flex item that overflows is clipped at *both* ends and cannot be scrolled back to,
+    // which would leave the top of a long phrase out of reach even with scrolling on.
     <Box sx={{
-      minHeight: '100%',
+      height: '100%',
+      overflowY: 'auto',
       display: 'flex',
-      alignItems: 'center',
       justifyContent: 'center',
       bgcolor: 'background.default',
       p: 2
     }}>
-      <Container maxWidth="xs">
+      <Container maxWidth="xs" sx={{ my: 'auto' }}>
         <Paper elevation={0} sx={{
           p: 3,
           borderRadius: 0,
@@ -1104,7 +1262,7 @@ export default function Auth() {
               <Button
                 onClick={() => setStep(AuthStep.CHOICE)}
                 color="inherit"
-                sx={{ mt: 2, textTransform: 'none', color: 'text.secondary' }}
+                sx={{ mt: 1, textTransform: 'none', color: 'text.secondary' }}
               >
                 {t('auth.cancel')}
               </Button>

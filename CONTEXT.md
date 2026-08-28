@@ -1,18 +1,27 @@
 # ArfheWallet — AI Agent Entegrasyonu: Bağlam Dosyası
 
 > Devir teslim / hatırlatma dosyası. Bir sonraki oturumda buradan devam edilecek.
-> Son güncelleme: 2026-08-24 (bkz. bölüm 18). Bu oturumda **kullanıcı/aktivite takibi**
-> özelliği toplantı talebi üzerine baştan sona uygulandı ve canlıya alındı — detaylar
-> bölüm 18'de. Özet: cüzdan adresi evrensel anahtar, email sadece Google login'de,
-> shield/unshield/send miktarları FHE nedeniyle KESİNLİKLE tutulmuyor (sadece işlem
-> tipi+zaman). D1 (`arfio-users`) + 4 endpoint (`/users/register`, `/activity/log`,
-> `/admin/users`, `/admin/activity`) eklendi, deploy edildi, uçtan uca `curl` ile
-> doğrulandı (gerçek bir send işlemi `/admin/activity`'de göründü). Sırada: basit bir
-> `/admin` web sayfası (spesifikasyon hazır, henüz uygulanmadı). Test durumu: 736/736
-> ana suite, 74/74 backend-proxy (62 eski + 12 yeni).
-> **BÖLÜM 17.4 (model hallüsinasyonu) HÂLÂ ÇÖZÜLMEDİ** — bu oturumda hiç dokunulmadı,
-> araya kullanıcı takibi görevi girdi, **sıradaki oturumun ilk önceliği olmaya devam
-> ediyor.**
+> Son güncelleme: 2026-08-27 (bkz. bölüm 19-20, `mustafa` branch). Bölüm 19: `biar`
+> branch'inin fast-forward merge'i (`ef40163..92766be`, self-hosted VPS agent özelliği) ve
+> dosyadaki tüm açık maddeler gerçek kod/git/canlı komutlarla tek tek denetlendi (kod
+> değişikliği yapılmadı). Özet: VPS özelliği (`VpsAgentService.ts`/`VpsAgentOrchestrator.ts`/
+> `VpsFastPath.ts`) Arfio'nun ALTYAPISINI paylaşan, opt-in, paralel bir agent kaynağı — bölüm
+> 17.1'deki biar'ın eski `AgentService.ts` alternatifi DEĞİL, o hâlâ hiç merge edilmedi.
+> **807/807 kök test yeşil, `pnpm build` temiz**. **YENİ bulunan regresyon: `backend-proxy`'de
+> 33/80 test kırık** — `67c299b` commit'i (bu merge'den önce, extension id'sini sabitleme)
+> `ALLOWED_ORIGIN`'i değiştirmiş ama 5 test dosyasındaki `EXTENSION_ORIGIN` sabiti
+> güncellenmemiş, kod bug'ı değil test-fixture drift'i, hâlâ düzeltilmedi (bkz. 19.5). Kapanan
+> eski maddeler: Wrangler artık güncel (4.125.0), İngilizce başlık kalıntıları bulunamadı.
+> **Bölüm 20 (aynı gün, ilerleyen saatlerde): VPS özelliği artık HEM sunucu HEM istemci
+> tarafında uçtan uca doğrulandı** — Claude, kullanıcının verdiği gerçek VPS'e SSH ile bağlanıp
+> `qwen2.5:3b` + PM2'de çalışan `server.js`'i inceledi, gerçek bir test cüzdanıyla login→JWT→
+> kredi→chat akışını `curl`/script ile bizzat çalıştırdı (7.9 sn'de doğru cevap). Ardından
+> kullanıcı gerçek Chrome extension'ından ("Kendi VPS'im" ayarı, `http://83.229.86.69:3000`)
+> ilk mesajı gönderdi, sorunsuz çalıştığını bildirdi (bu son adım kullanıcının kendi ifadesine
+> dayanıyor, Claude tarafından ekran/console ile bağımsız doğrulanmadı — bkz. bölüm 20.4 madde
+> 4). **BÖLÜM 17.4 (model hallüsinasyonu) HÂLÂ ÇÖZÜLMEDİ** — bölüm 20'de çözülen tamamen
+> ERİŞİM/ALTYAPI sorunuydu, model KALİTESİ sorunu ayrı ve hâlâ açık (bkz. bölüm 20.5),
+> **sıradaki oturumun ilk önceliği olmaya devam ediyor.**
 
 ## 1. Genel Amaç
 
@@ -100,8 +109,10 @@ Extension (AgentChatPanel)
   taranmadı) — küçük, ertelenebilir bir temizlik.
 - **GitHub Dependabot uyarısı**: merge sonrası push'ta "113 vulnerabilities (1
   critical, 48 high, 55 moderate, 9 low)" bildirimi geldi, henüz incelenmedi.
-- **Wrangler güncel değil** (3.114.17, 4.x mevcut) — kritik hata riski uyarısı var,
-  güncellenmedi.
+- ~~**Wrangler güncel değil** (3.114.17, 4.x mevcut) — kritik hata riski uyarısı var,
+  güncellenmedi.~~ **Düzeltme (bkz. bölüm 19.4, 2026-08-27):** artık güncel,
+  `backend-proxy/package.json`'da `wrangler ^4.125.0` kurulu (`node_modules/wrangler/package.json`
+  ile canlı doğrulandı). Ne zaman/hangi commit'te güncellendiği net değil, bu oturumda fark edildi.
 
 ## 6. Geliştirme Ortamı Notları
 
@@ -719,7 +730,8 @@ fix'i iki ayrı turda.
 - **İngilizce başlık kalıntıları** (`TransactionResultCard`'da "Transfer successful" gibi,
   bölüm 5'ten beri bekliyor) — küçük, ertelenebilir.
 - **GitHub Dependabot uyarısı** (113 vulnerabilities) — henüz incelenmedi.
-- **Wrangler güncel değil** (3.114.17, 4.x mevcut) — güncellenmedi.
+- ~~**Wrangler güncel değil** (3.114.17, 4.x mevcut) — güncellenmedi.~~ **Düzeltme (bölüm
+  19.4, 2026-08-27):** artık `wrangler ^4.125.0`, çözülmüş.
 - **Local test ortamı notu**: `X402SettingsService` local ayarları şu an per-payment cap:
   0.01, daily budget: 1 (varsayılana yakın bırakıldı, kasıtlı bir sorun değil, ama
   bir sonraki oturumda limit-dışı senaryo test edilecekse bu değerlerin bilinmesi gerekir).
@@ -882,12 +894,19 @@ suite, **62/62** backend-proxy.
   kullanıcı kararı bekleniyor.
 - **`deploy/` klasöründeki kalan 14 Dependabot uyarısı** (Hardhat v3 sonrası, elliptic
   kaynaklı, upstream'de yama yok) — takipte kalmalı.
+  **Not (bölüm 19.4, 2026-08-27):** genel Dependabot sayısı `gh api
+  repos/:owner/:repo/dependabot/alerts` ile canlı sorgulandı, hâlâ birebir aynı: 1 critical + 48
+  high + 55 moderate + 9 low = 113 açık uyarı. Hiç değişmemiş, hâlâ incelenmedi.
+- ~~**Wrangler güncellemesi (3.114.17 → 4.x)** — güncellenmedi.~~ **Düzeltme (bölüm 19.4):**
+  artık `wrangler ^4.125.0`, çözülmüş.
 - **Gerçek bir x402 kaynağı** (placeholder `api.example.com/weather` yerine) Arfio'ya
   bağlanması — henüz yapılmadı, hangi gerçek kaynağın kullanılacağına karar verilmedi
   (cybersecurity/kontrat analizi API'si önerilmişti, kesinleşmedi).
 - **Eski bölüm 16 listesinden hâlâ açık kalanlar**: limit-dışı ret senaryosu testi,
-  facilitator hata yolu testi, İngilizce başlık kalıntıları, GitHub Dependabot uyarısı
-  (113 vulnerabilities, genel), Wrangler güncelleme (3.114.17 → 4.x).
+  facilitator hata yolu testi, ~~İngilizce başlık kalıntıları~~ (**Düzeltme, bölüm 19.4:**
+  `grep -rniE "transfer successful"` src'de artık hiç eşleşme yok, kapatıldı), GitHub
+  Dependabot uyarısı (113 vulnerabilities, genel — hâlâ açık, bölüm 19.4'te canlı doğrulandı),
+  ~~Wrangler güncelleme (3.114.17 → 4.x)~~ (**Düzeltme, bölüm 19.4:** artık 4.125.0, çözülmüş).
 
 ## 18. Kullanıcı/aktivite takibi özelliği (2026-08-24 oturumu)
 
@@ -996,4 +1015,321 @@ başarıyla göründü. Sistem uçtan uca doğrulandı, canlı.
 - **Gizlilik politikası kararı** (bkz. 18.6 madde 3) — henüz alınmadı.
 - Bölüm 17.6'daki tüm eski açık maddeler (agent sistemi ürün kararı, biar'ın
   tema/onboarding değişiklikleri, `experiment/hardhat-v3-deploy` merge, Dependabot
-  uyarıları, Wrangler güncelleme) hâlâ aynen açık, bu oturumda dokunulmadı.
+  uyarıları, ~~Wrangler güncelleme~~) hâlâ aynen açık, bu oturumda dokunulmadı. **Düzeltme
+  (bölüm 19.4, 2026-08-27):** Wrangler artık güncel (4.125.0) — bu madde ne zaman
+  kapandığı net olmayan bir noktada zaten çözülmüş, "agent sistemi ürün kararı" ise bölüm
+  19.2'de kısmen (VPS opsiyonu eklenerek) yeniden şekillendi, aşağıya bkz.
+
+## 19. `biar` branch fast-forward merge denetimi: self-hosted VPS agent seçeneği (2026-08-27, `mustafa` branch)
+
+> Bu bölüm, kullanıcının "biar branch'i az önce fast-forward merge edildi (ef40163..92766be)"
+> talebi üzerine yapılan tam bir CONTEXT.md denetimidir. **Önemli netleştirme:** bu dosyada
+> daha önce hiçbir "bölüm 19" yoktu — dosya bir önceki oturumda bölüm 18'de kalmıştı (999
+> satır). Görev talimatında anılan "§19.1/§19.3 tarzı bir önceki denetim" ve "Ollama/VPS
+> entegrasyonunun §19.3'te YARIM KALDI diye anlatılması" bu dosyada hiç yazılı değildi — ya
+> oturum dışı bir notta/hafızada kalmış ya da silinen wip stash'te varmış olabilir (stash zaten
+> silinmiş, `git fsck`/`git stash list` ile geri getirilemedi, reflog'da da stash girdisi yok).
+> Bu bölüm o eksik geçmişe atıfla değil, **doğrudan gerçek kod ve git geçmişi okunarak** sıfırdan
+> yazıldı — varsayımla hiçbir madde işaretlenmedi.
+
+### 19.1 — Merge'in gerçek şekli
+
+`git log ef40163..92766be` **tek bir commit** gösteriyor: `92766be` ("feat: add self-hosted VPS
+agent option with wallet-signature auth", yazar `Biar <...@users.noreply.github.com>`),
+doğrudan `mustafa`'nın ucuna, fast-forward olarak eklenmiş (merge commit değil, tek commit —
+`git diff --stat ef40163..92766be` ile `git show 92766be --stat` birebir aynı çıktı verdi).
+11 dosya değişti: 3 yeni dosya (`VpsAgentOrchestrator.ts` 181 satır, `VpsAgentService.ts` 289
+satır, `VpsFastPath.ts` 141 satır) + 8 mevcut dosyada küçük/ek değişiklik. `backend-proxy/`
+klasörüne **hiç dokunulmadı** (canlı doğrulandı: `git diff ef40163..92766be -- backend-proxy`
+boş döndü).
+
+### 19.2 — Bu, bölüm 17.1'deki "biar'ın basit AgentService.ts alternatifi" DEĞİL — yeni, paralel bir yaklaşım
+
+Kod okunarak doğrulandı: `AgentService.ts` / `AgentSettingsPanel.tsx` (bölüm 17.1'de "bilinçli
+olarak ALINMADI" denen biar'ın eski, RAG/policy/x402'siz düz chat alternatifi) repo'da **hâlâ
+yok** (`find . -iname "AgentService.ts"` boş döndü) — o eski karar hâlâ aynı, hiç değişmedi.
+
+Bunun yerine biar, tamamen **yeni ve daha olgun** bir şey inşa etmiş: kullanıcının **kendi
+VPS'inde barındırdığı** bir Ollama backend'ine bağlanan, opt-in ikinci bir agent kaynağı
+("Kendi VPS'im"). Mimari, mevcut Arfio ile **kod paylaşımı** üzerine kurulu, ayrı bir ürün
+değil:
+
+- **`VpsAgentService.ts`** — VPS ile HTTP istemcisi. Auth modeli dikkat çekici: API key
+  yapıştırmak yerine, aktif hesap sabit bir mesajı kendi private key'iyle imzalıyor (EIP-191
+  `personal_sign`, `Approve.tsx`'teki dApp imzalama mekanizmasıyla aynı ilke) → VPS
+  `ethers.verifyMessage` ile doğrulayıp kısa ömürlü bir JWT dönüyor → JWT (private key değil)
+  `localStorage`'da cache'leniyor, 401/403'te otomatik tek seferlik re-login. Kredi/kota
+  sorgulama (`getVpsCredits`, `verifyVpsOnchainCredits` — on-chain aktiviteye göre kredi) ve
+  turn-başına-bir kota tüketimi (`consumeVpsQuota`) da var.
+- **`VpsAgentOrchestrator.ts`** — Arfio'nun `AgentOrchestrator.runAgentTurn`'üyle **yapısal
+  ayna**: aynı `AgentToolRunner.executeToolCall`'ı, aynı `isAwaitingConfirmation`/
+  `CONFIRMABLE_TOOLS` mekanizmasını (bölüm 14 sonundaki "Çözüldü" alt bölümünde tanımlanan
+  birleşik liste) kullanıyor — **tool execution her zaman lokal**, VPS'teki model sadece HANGİ
+  tool'un çağrılacağına karar veriyor, private key/RPC/AccountManager'a hiç erişemiyor. Bu
+  yüzden VPS modu propose_send/shield/unshield + ConfirmationCard ile birebir aynı güvenlik
+  garantisine sahip — ayrı, güvenliği zayıflatılmış bir kod yolu değil. Kendi kısa sistem
+  promptu var (Arfio'nun ~90 satırlık promptu küçük lokal modelde (`qwen2.5:3b` — yorum
+  satırında adı geçiyor) tool-loop'un hiç bitmemesine yol açtığı gözlemlenmiş, bu yüzden
+  kısaltılmış). `AGENT_TOOLS`'un açıklamaları da (`buildLiteTools`) tek cümleye indirilmiş —
+  gerekçe: CPU-only küçük model için prompt-eval maliyeti input uzunluğuyla ölçekleniyor.
+- **`VpsFastPath.ts`** — bakiye/faucet/shielded-portfolio/basit-send gibi net kalıplar için
+  regex tabanlı, LLM'e hiç gitmeyen bir kısayol (30-100 sn'lik Ollama round-trip'ini atlıyor).
+  Yanlış negatifte (regex eşleşmezse) sessizce normal yavaş yola düşüyor — davranış değişikliği
+  riski yok, sadece bir optimizasyon katmanı.
+- **Yeni tool: `get_faucet_info`** — sadece bilinen testnet'ler (Sepolia, Base Sepolia,
+  Arbitrum Sepolia, Avalanche Fuji, Monad Testnet) için resmi faucet linkini + kullanıcının
+  adresini döndürüyor, **hiçbir otomatik claim yapmıyor** (CAPTCHA nedeniyle mimari olarak
+  imkânsız, tool açıklaması ve kod yorumu bunu açıkça belirtiyor). `AgentPolicyEngine.
+  READ_ONLY_TOOLS`'a eklendi, `agentTools.test.ts`'teki invariant testi (bölüm 14 sonu — her
+  `X402_TOOLS`/`PROPOSAL_TOOLS`/read-only tool'un `AGENT_TOOLS`'ta karşılığı olduğunu doğrulayan
+  test) güncellenmiş (`8 → 9` tool), bu yapısal kilit sayesinde tool eksik-tanım riski
+  (bölüm 14 sonundaki `pay_for_resource` bug'ının aynısı) burada tekrarlanmamış.
+- **`AgentChatPanel.tsx`**: header'a bir dişli (Settings) ikonu + dialog eklendi — Arfio/VPS
+  seçimi (radio), VPS URL girişi, "yeniden giriş yap" butonu, kredi/kota özeti, on-chain
+  doğrulama butonu. `agentSource` `localStorage`'da durable (dil tercihi deseniyle aynı ilke).
+  Varsayılan hâlâ **"arfio"** — VPS tamamen opt-in, mevcut kullanıcı deneyimini değiştirmiyor.
+
+**Sonuç: bu, bölüm 17.6'daki "Arfio mu kalacak, biar'ın basit AgentService'i mi" kararını
+çözmüyor** (o soru hâlâ teknik olarak açık — eski `AgentService.ts` hiç merge edilmedi) **ama
+onu bir bakıma alakasız hale getiriyor**: biar, o eski basit alternatifi ilerletmek yerine
+Arfio'nun altyapısının üzerine kurulu, paralel ve opt-in bir üçüncü seçenek inşa etmiş. Bu
+üründe bilinçli bir "hangisi kazanacak" kararı yok, ikisi (Arfio varsayılan + VPS opsiyonel)
+şu an bir arada yaşıyor.
+
+### 19.3 — Kod/test durumu, doğrulanan ve doğrulanamayan kısımlar
+
+**Derleme ve mevcut test suite'i canlı çalıştırıldı:**
+- Kök proje: `pnpm exec vitest run` → **807/807 yeşil** (45 dosya). Not: bölüm 18'in "736/736"
+  iddiasından farklı — aradaki `ef40163` commit'i (`5f7daac`/`67c299b`'yi de içeren "extensıon
+  ıd" + diğer küçük fix'ler) ile bu merge'in kendisi test sayısını artırmış (agentTools.test.ts
+  `+1`, ama toplamda 736→807 arası ~71 test farkı `ef40163`'ün kapsadığı geniş commit yığınından
+  geliyor, bu oturumda satır satır ayrıştırılmadı — sayı doğru, kaynağı bölüm 18/19 arasında
+  dağınık).
+- `pnpm build` → **temiz**, hata yok, `dist/` başarıyla üretildi (`Agent-QoqhvJGD.js` 63.77 kB
+  içinde VPS kodu da var — chunk boyutu uyarısı zaten var olan bir durum, VPS'e özgü değil).
+- **`VpsAgentOrchestrator.ts`/`VpsAgentService.ts`/`VpsFastPath.ts`/`AgentChatPanel.tsx`'in yeni
+  VPS kısımları için SIFIR otomatik test var** — `find`/`grep` ile arandı, hiçbir `*Vps*test*`
+  dosyası ya da mevcut test dosyasında `Vps` referansı bulunamadı. 807 test yeşil çünkü hiçbiri
+  bu yeni kodu hiç çalıştırmıyor, çakışan/kırılan bir şey olmadığı için değil. **Bu, x402'nin
+  ilk turundaki (bölüm 14) disiplinin aksine — kırmızı→yeşil test kanıtı bu özellik için hiç
+  yok.**
+- **VPS'in sunucu tarafı (`server.js`) bu repo'da yok.** `VpsAgentService.ts`'in kendi
+  yorumlarında üç kez `server.js`'e referans veriliyor (JWT expiry, kredi ledger, on-chain
+  doğrulama) ama böyle bir dosya `find . -iname server.js` ile hiç bulunamadı — kullanıcının
+  kendi ayrı VPS'inde çalıştıracağı, bu repo'nun dışında bir bileşen. **Sonuç: bu özellik gerçek
+  bir VPS'e karşı bu oturumda hiç canlı test edilmedi/edilemedi** (x402'nin bölüm 15-16'daki
+  `curl`/Chrome uçtan uca doğrulamasının karşılığı burada yok) — ne bir accept/login akışı ne
+  bir chat round-trip'i gerçek bir sunucuya karşı denendi. Bu bir eksiklik olarak
+  değerlendirilmeli, "tamamlandı" ile karıştırılmamalı.
+- Locale simetrisi (`en.json`/`tr.json`, yeni ~25 anahtar her ikisinde de) mevcut parity testi
+  (bölüm 13) tarafından zaten kapsanıyor, 807 yeşilin içinde geçti — ayrıca elle karşılaştırma
+  yapılmadı, teste güvenildi.
+
+### 19.4 — §5/§17.6/§18.7'deki açık maddelerin tek tek denetimi
+
+| Madde | Kaynak | Durum | Kanıt |
+|---|---|---|---|
+| Model hallüsinasyonu (bölüm 17.4) | §17.6, §18.7 ÖNCELİK 1 | **HÂLÂ AÇIK** | `git diff ef40163..92766be -- src/backend/AgentOrchestrator.ts` yalnızca `export` eklemeleri gösterdi, `buildSystemPrompt()`'un içeriğine bu merge'de hiç dokunulmamış. |
+| Agent ürün kararı (Arfio vs. biar'ın eski AgentService'i) | §17.6, §18.7 | **Hâlâ teknik olarak açık, ama bkz. 19.2** | `AgentService.ts` hâlâ yok; VPS seçeneği bu kararı çözmedi, paralel yaşıyor. |
+| biar'ın tema/onboarding/Explore/`DAppRegistry.ts` değişiklikleri | §17.6 | **Şüpheli/yeniden kontrol gerekli — bu oturumda tam çözülmedi** | `git log --follow -- src/backend/DAppRegistry.ts` dosyanın kökünün biar'ın `36de521` commit'ine (aynı "revamp Explore" commit'i) uzandığını, ve bu zincirin Ömer'in commit'leri üzerinden `f7ded2d`'ye (rewrite-omer'in `mustafa`'daki ata noktası) kadar geldiğini gösterdi — yani dosyanın kendisi görünüşe göre ZATEN merge'li. Ama bunun bölüm 17.6'nın kastettiği "biar'ın spesifik tema/onboarding kararı" ile aynı şey olup olmadığı (Ömer'in üzerine yazdığı değişikliklerle orijinal biar tasarımı hâlâ aynı mı) bu oturumda UI karşılaştırmasıyla doğrulanmadı — sadece dosya kökeni takip edildi. **Sıradaki oturum bunu Chrome'da/diff'le netleştirmeli, burada kapatılmadı.** |
+| `experiment/hardhat-v3-deploy` merge | §17.6, §18.7 | **HÂLÂ AÇIK** | `git merge-base --is-ancestor experiment/hardhat-v3-deploy mustafa` → "NOT merged" döndü, canlı doğrulandı. |
+| GitHub Dependabot uyarısı (113) | §5, §16, §17.6, §18.7 | **HÂLÂ AÇIK, sayı hiç değişmemiş** | `gh api repos/:owner/:repo/dependabot/alerts` canlı sorgulandı: 1 critical + 48 high + 55 moderate + 9 low = 113, eski notla birebir aynı. |
+| Wrangler güncelliği | §5, §16, §17.6, §18.7 | **ÇÖZÜLMÜŞ (üstteki bölümlerde çizili+not olarak işaretlendi)** | `backend-proxy/node_modules/wrangler/package.json` → `"version": "4.125.0"`, `package.json`'da `^4.125.0`. Ne zaman güncellendiği bu oturumda tespit edilemedi (VPS merge'i wrangler'a dokunmadı), muhtemelen `ef40163`'ün kapsadığı geniş commit setinde bir yerde. |
+| İngilizce başlık kalıntıları (`Transfer successful` vb.) | §5, §16 | **ÇÖZÜLMÜŞ** | `grep -rniE "transfer successful|transaction successful" src/` (test dosyaları hariç) → 0 eşleşme. |
+| `/admin` web sayfası | §18.7 | **HÂLÂ AÇIK** | Kod tabanında `/admin` sayfası bileşeni yok (bu oturumda ayrıca aranmadı ama bölüm 18.7 zaten "henüz uygulanmadı" diyor, bu merge de agent-alakasız olduğu için dokunmamış). |
+| `ADMIN_SECRET` güçlendirme, gizlilik politikası kararı | §18.7 | **HÂLÂ AÇIK** | Bu merge D1/kullanıcı-takibi tarafına hiç dokunmadı (`git diff --stat` listesinde yok). |
+
+### 19.5 — Bu oturumda YENİ bulunan, önceden hiçbir yerde belgelenmemiş sorun: `backend-proxy` testleri şu an KIRIK
+
+Bu, denetim sırasında keşfedilen, planlı bir madde olmayan gerçek bir regresyon. **`backend-proxy`
+klasörünün kendisi bu VPS merge'inde hiç değişmedi** — ama `pnpm exec vitest run`
+(`backend-proxy/` içinde) çalıştırıldığında **33/80 test kırmızı** çıktı (tümü aynı sebepten:
+beklenen 200/400/402 yerine **403** dönüyor).
+
+**Kök neden (kodu okuyarak izole edildi):** `backend-proxy/wrangler.toml`'daki `ALLOWED_ORIGIN`,
+commit `67c299b` ("extensıon ıd", 2026-08-25 — bölüm 18'den SONRA, bu VPS merge'inden ÖNCE)
+`chrome-extension://ajfpejolnhgeflhgjmboikiffpdlhngi` → `chrome-extension://
+cdhfecdlpblpdngkadiigjmodedapoih` olarak **kasıtlı ve doğru şekilde** değiştirildi (yorum:
+`manifest.json`'a `key` pinlendiği için artık her makinede aynı, sabit extension id'si üretiliyor
+— gerçek bir bug fix'i). Ama aynı commit, testlerdeki `EXTENSION_ORIGIN` sabitini
+**güncellemedi** — `retrieveContextEndpoint.test.ts`, `x402StubEndpoints.test.ts`,
+`activity.log.test.ts`, `users.register.test.ts`, `x402FacilitatorEndpoint.test.ts`'in hepsinde
+hâlâ **eski** origin (`...ajfpejolnhgeflhgjmboikiffpdlhngi`) hardcoded. `src/index.ts`'teki
+origin kontrolü (`origin !== env.ALLOWED_ORIGIN` → 403) artık test isteklerini gerçekten
+reddediyor.
+
+**Bu, kod bug'ı değil, test-fixture drift'i** — üretim davranışı doğru (gerçek extension gerçek
+`cdhfecdlpblpdngkadiigjmodedapoye` origin'iyle istek atıyor, hiçbir prod isteği etkilenmiyor).
+Ama bölüm 18.4/18.5'in "74/74 backend-proxy" iddiası artık **geçersiz** — o iddia `67c299b`'den
+ÖNCEKİ bir commit (`a5856fc`, 2026-08-24) için doğruydu, sonrasında hiç fark edilmeden bozulmuş
+(muhtemelen kimse `67c299b`'den sonra backend-proxy testlerini tek başına çalıştırmadı).
+
+**Fix uygulanmadı — bu bir denetim oturumu, kod değişikliği istenmedi.** Düzeltme, 5 test
+dosyasındaki `EXTENSION_ORIGIN` sabitinin `cdhfecdlpblpdngkadiigjmodedapoih` ile
+güncellenmesinden ibaret olmalı (tek satırlık bir sabit, 5 dosyada tekrar — bölüm 16 Bug 2'deki
+"üç bağımsız kopya" deseniyle aynı sınıf bir drift riski, ileride tek bir paylaşılan test-helper
+sabitine çıkarmak düşünülebilir).
+
+### 19.6 — Yapılmadı / Sıradaki adımlar (güncel liste, 2026-08-27)
+
+1. **ÖNCELİK 1 (değişmedi) — bölüm 17.4 model hallüsinasyonu.**
+2. **YENİ, hızlı fix — bölüm 19.5: backend-proxy'nin 5 test dosyasındaki `EXTENSION_ORIGIN`
+   sabiti güncel `ALLOWED_ORIGIN` ile eşleşmiyor, 33/80 test kırmızı.** Küçük ama gerçek bir
+   regresyon, bir sonraki oturumun erken bir maddesi olmalı (CI olmadığı için fark edilmesi
+   kolayca aylar sürebilirdi).
+3. **VPS agent özelliği için otomatik test yok** (bölüm 19.3) — en azından `VpsFastPath.ts`'in
+   regex kararları ve `VpsAgentService.ts`'in auth/retry mantığı (401→re-login akışı) için,
+   mevcut `AgentOrchestrator.test.ts`/`x402EndToEnd.test.tsx` desenine benzer testler yazılabilir.
+4. ~~**VPS özelliği gerçek bir sunucuya karşı hiç canlı test edilmedi** (bölüm 19.3) —
+   kullanıcının kendi VPS+Ollama kurulumu hazır olduğunda login/chat/kredi akışının uçtan uca
+   doğrulanması gerekiyor.~~ **Düzeltme (bölüm 20, 2026-08-27, aynı gün ilerleyen saatlerde):**
+   kullanıcının VPS'i zaten kuruluymuş, login→JWT→kredi→chat akışı gerçek bir istekle uçtan
+   uca doğrulandı. Bkz. bölüm 20.2. Extension'ın kendisinden hâlâ elle test edilmedi (bölüm
+   20.4'teki adım kullanıcıya bırakıldı) ama backend tarafı artık kanıtlanmış durumda.
+5. **biar'ın tema/onboarding/Explore/`DAppRegistry.ts` durumu netleştirilmeli** (bölüm 19.4) —
+   dosya kökeni takip edildi ama "karar verildi mi" sorusu hâlâ belirsiz.
+6. Değişmeyenler: `experiment/hardhat-v3-deploy` merge kararı, Dependabot 113 uyarısı, `/admin`
+   web sayfası, `ADMIN_SECRET` güçlendirme, gizlilik politikası kararı — hepsi hâlâ aynen açık.
+7. **Kapatıldı bu oturumda:** Wrangler güncelliği (zaten çözülmüş bulunmuş), İngilizce başlık
+   kalıntıları (hiç bulunamadı, kapatıldı).
+
+## 20. VPS/Ollama entegrasyonu: kullanıcının kendi VPS'ine gerçek uçtan uca bağlantı doğrulaması (2026-08-27, aynı gün, `mustafa` branch)
+
+> **Netleştirme (kaydetmeden önce yapıldı, varsayımla değil):** Bu bölümü yazma talebi
+> "§19.3'te 'YARIM KALDI' diye işaretlenen Ollama VPS entegrasyonu" ve "§19.3'teki 'gerçek
+> domain gerekiyor, SSRF/nip.io engeli var' notu" diye iki iddiaya atıfta bulunuyordu. İkisi de
+> `grep -n "nip.io\|YARIM KALDI\|çıplak-IP" CONTEXT.md` ile arandı — **dosyada böyle bir metin
+> hiç yok**, ne bölüm 19.3'te ne başka bir yerde. Bölüm 19.3 (bu oturumdan birkaç saat önce,
+> aynı gün yazıldı) VPS özelliğinin kod/test durumunu ele alıyordu ("otomatik test yok", "gerçek
+> sunucuya karşı hiç canlı test edilmedi") — SSRF/domain/nip.io konusuna hiç girmiyordu. Var
+> olmayan bir metni çizip "düzeltmek" dosyanın geçmişini yanlış temsil eder, bu yüzden
+> yapılmadı. Muhtemel açıklama: bu notlar önceki bir oturumda konuşulmuş ama hiç CONTEXT.md'ye
+> yazılmamış olabilir (bölüm 19'un girişindeki "silinen wip stash" ihtimaliyle aynı sınıf bir
+> boşluk). Yine de **teknik iddianın kendisi muhtemelen doğru** — aşağıda bölüm 20.3'te bunu
+> destekleyen gerçek, canlı bulunmuş bir kanıt var (kullanılmayan bir nginx config +
+> `.dev.vars` girdisi), sadece "önceden yazılıydı" iddiası doğrulanamadı.
+
+### 20.1 — §19.2'nin teyidi: Ollama/VPS entegrasyonu biar'ın merge'iyle GERÇEKTEN TAMAMLANMIŞ geldi
+
+Bölüm 19.2'de zaten tespit edildiği gibi: `92766be` commit'i (fast-forward, `ef40163..92766be`)
+`VpsAgentOrchestrator.ts` (181 satır), `VpsAgentService.ts` (289 satır), `VpsFastPath.ts` (141
+satır) dosyalarını **çalışan, uçtan uca kodlanmış** bir özellik olarak getirdi — yarım bir
+iskelet değil. Kod tarafında eksik olan tek şey otomatik testlerdi (bölüm 19.3/19.6 madde 3,
+hâlâ geçerli) ve gerçek bir VPS'e karşı canlı doğrulamaydı (bölüm 19.6 madde 4 — bu bölümde
+kapatıldı, bkz. 20.2). "YARIM KALDI" ifadesi her ne kadar bu dosyada yazılı bulunamasa da,
+içerik olarak yanlıştı: kod tam, sadece kanıt eksikti.
+
+### 20.2 — Canlı uçtan uca doğrulama (2026-08-27, gerçek VPS'e karşı)
+
+Kullanıcı VPS'in IP'sini ve SSH erişimini verdi (`root@83.229.86.69`), `sshpass` ile bağlanılıp
+gerçek durum incelendi:
+
+- **Ollama**: `systemctl status ollama` → aktif, `ollama list` → `qwen2.5:3b` modeli yüklü
+  (tam olarak `VpsAgentOrchestrator.ts`'in yorumlarında adı geçen model — bölüm 19.2). Sadece
+  `127.0.0.1:11434`'te dinliyor, dışarıya kapalı (beklenen, güvenli).
+- **`/root/arfhe-agent/server.js`**: PM2 ile (`pm2 list` → `arfhe-agent`, status `online`,
+  5+ saat uptime) `0.0.0.0:3000`'de çalışıyor, `ufw`/`iptables` boş (firewall yok, port zaten
+  dışarıya açık). Kod okunarak doğrulandı: Express + `ethers` + `jsonwebtoken`, tam olarak
+  `VpsAgentService.ts`'in beklediği sözleşmeyi uyguluyor — `POST /api/login`
+  (`ethers.verifyMessage` ile imza doğrulama → JWT), `requireAuth` middleware (`jwt.verify`),
+  `GET /api/credits`, `POST /api/quota/consume` (`floor(credits/10)` günlük limit —
+  `VpsAgentService.ts`'in `CreditInfo` doc'undaki formülle birebir aynı), `POST
+  /api/verify/onchain` (mainnet tx sayısı + ENS'e göre kademeli kredi), `POST /api/chat`
+  (mesajları Ollama'nın native `/api/chat`'ine iletiyor, `tool_calls`'ı cüzdanın beklediği wire
+  formatına — `id`/`type:"function"`/`arguments` JSON-string — çeviriyor, `temperature: 0.2`,
+  `keep_alive: "30m"`). **Sunucu tarafı, istemci kodunun (biar'ın merge'i) beklediği sözleşmeyle
+  gerçekten örtüşüyor** — varsayımla değil, iki taraf da okunup karşılaştırılarak.
+- **Gerçek istekle canlı test** (`Wallet.createRandom()` ile üretilen, gerçek fon taşımayan bir
+  test cüzdanı kullanıldı — `LOGIN_MESSAGE` sabiti `VpsAgentService.ts`'ten birebir kopyalanıp
+  imzalandı):
+  1. `POST /api/login` → **200**, geçerli bir JWT döndü.
+  2. `GET /api/credits` (Bearer JWT ile) → **200**, `{credits: 50, sources: {starter: 50},
+     dailyLimit: 5, dailyUsed: 0}` — sunucunun `.env`'indeki `DEFAULT_CREDITS` yeni bir
+     cüzdana otomatik 50 başlangıç kredisi veriyor.
+  3. `POST /api/quota/consume` → **200**, `dailyUsed: 1`'e güncellendi.
+  4. `POST /api/chat` (`{messages:[{role:"user", content:"merhaba, sen kimsin, tek cümleyle
+     cevap ver"}], tools:[]}`) → **200, 7893ms içinde** — `qwen2.5:3b`'den gerçek, tutarlı bir
+     cevap geldi (modelin kendini "Alibaba Cloud tarafından oluşturulan" diye tanıtması qwen
+     ailesinin bilinen bir davranışı, bir hata değil).
+  - Test scripti: `/private/tmp/.../scratchpad/vps_test.mjs` (bu oturuma özel scratchpad,
+    repoya commit edilmedi) — projenin kendi `node_modules/ethers`'ı kullanılarak yazıldı.
+- **Extension manifest.json — CSP/izin tarafında EK DEĞİŞİKLİK GEREKMİYOR:**
+  `extension/manifest.json` okunarak doğrulandı: `content_security_policy.extension_pages`
+  zaten `connect-src 'self' https: http: wss: ws: data: blob:` (düz `http:` dahil),
+  `host_permissions` zaten `"http://*/*"` içeriyor. VPS düz HTTP (`http://83.229.86.69:3000`)
+  olduğu için mevcut manifest hiçbir ek izin/CSP satırı olmadan bu isteklere izin veriyor —
+  kod tarafında sıfır değişiklik gerekli, tamamen bir kullanıcı-ayarı meselesi.
+
+### 20.3 — Bulunan (ama CONTEXT.md'de daha önce yazılı olmadığı doğrulanan) kanıt: terk edilmiş bir "backend-proxy üzerinden Ollama'ya eriş" denemesi
+
+Bölüm 20 girişindeki netleştirmede belirtildiği gibi, kullanıcının bahsettiği "SSRF/nip.io/
+gerçek domain" notu dosyada yazılı bulunamadı — ama VPS'te buna işaret eden **gerçek, canlı**
+bir kanıt bulundu:
+
+- `/etc/nginx/sites-available/o.conf` (VPS'te, `ls -la`/`stat` ile zaman damgası
+  **2026-08-27 11:29 UTC** — yani `92766be` commit'inin saatinden, 17:28'den, **~6 saat önce**,
+  aynı gün): `listen 8443`, `Bearer 182820c00769424a7a45338fd4b84f5d` sabit token kontrolüyle
+  korunan, doğrudan `http://127.0.0.1:11434`'e (çıplak Ollama, auth'suz) proxy_pass yapan bir
+  nginx server bloğu.
+- `backend-proxy/.dev.vars`'ta (kullanıcının bu görev başında IDE'de açtığı dosya) tam olarak
+  aynı token: `OLLAMA_PROXY_TOKEN=182820c00769424a7a45338fd4b84f5d`. `grep -rn
+  "OLLAMA_PROXY_TOKEN" backend-proxy/src/ src/` → **hiçbir kod dosyasında kullanılmıyor**, ölü
+  bir env değişkeni.
+
+**Yorum (kanıta dayalı, ama kesin değil — kimseyle doğrulanmadı):** Zaman damgaları ve eşleşen
+token, aynı gün önce `backend-proxy` (Cloudflare Worker) üzerinden VPS'teki Ollama'ya doğrudan
+`fetch` atmanın denenmiş olabileceğine işaret ediyor — bu, x402 mimarisindeki "SSRF riskini
+önlemek için backend'de yönlendir" ilkesiyle (bölüm 4/14) aynı düşünce çizgisi. Böyle bir
+denemenin gerçekten çakışacağı bilinen bir kısıt: **Cloudflare Workers'ın `fetch()`'i çıplak IP
+literaline (örn. `http://83.229.86.69:8443`) doğrudan bağlanmayı desteklemez** — hedefin bir
+hostname olması gerekir (bu yüzden `nip.io` gibi "IP'yi hostname'e çeviren" servisler bu tür
+senaryolarda yaygın bir workaround'dur). **Bu genel kısıt bu oturumda ayrıca `curl`/canlı bir
+Worker'a karşı test edilerek YENİDEN doğrulanmadı** — sadece VPS'teki artık dosyalar ve bilinen
+bir Workers davranışı olarak not düşülüyor, kesin kanıt değil. `o.conf` ve
+`OLLAMA_PROXY_TOKEN` şu an **ölü/kullanılmayan** kalıntılar — aktif kod yolu bunları hiç
+çağırmıyor, temizlenebilir ama zararsız.
+
+**Sonuç:** biar branch'i bu (muhtemel) denemeyi terk edip bunun yerine bölüm 19.2/20.2'deki
+**extension → VPS doğrudan bağlantı** yaklaşımını getirmiş — düz HTTP, Cloudflare Workers'ın
+hiç araya girmediği bir yol olduğu için çıplak-IP kısıtına da hiç takılmıyor (extension'ın kendi
+`fetch()`'i browser'da çalışıyor, Workers runtime'ında değil).
+
+### 20.4 — Sıradaki adımlar (kullanıcı tarafında, kod değişikliği değil)
+
+1. `pnpm build` (kök dizinde) ile extension'ı `92766be` dahil güncel `mustafa` koduyla yeniden
+   derle, `chrome://extensions`'ta **tamamen kaldırıp yeniden yükleme değil, reload (↻)** yeterli
+   (bölüm 6/15'teki ayrım — reload cüzdanı sıfırlamıyor).
+2. Agent panelinde sağ üstteki dişli ikonuna tıkla → **"Kendi VPS'im"** seç.
+3. URL alanına `http://83.229.86.69:3000` yaz, kaydet.
+4. İlk mesajda cüzdan arka planda otomatik `personal_sign` ile giriş yapacak — bu oturumda
+   Chrome/extension'ın kendisinden bu adım **test edilmedi**, sadece sunucu tarafı `curl`/script
+   ile doğrulandı (bölüm 20.2). Gerçek Chrome popup'ından ilk mesajın gönderilmesi, bir sonraki
+   oturumun/kullanıcının doğrulaması gereken tek kalan adım.
+   **Güncelleme (2026-08-27, aynı gün, kullanıcı bildirdi):** kullanıcı bu adımı gerçek Chrome
+   extension'ından bizzat yaptı — dişli → "Kendi VPS'im" → `http://83.229.86.69:3000` girip
+   kaydetti, ilk mesajı gönderdi. Cüzdan arka planda otomatik imzalayıp giriş yaptı, VPS'ten
+   cevap geldi, sorunsuz çalıştı. **Not: bu sonuç kullanıcının kendi ifadesine dayanıyor** — bu
+   oturumda Claude tarafında `claude-in-chrome` ile bağımsız bir ekran/console doğrulaması
+   yapılmadı (bölüm 20.2'deki gibi `curl`/script çıktısı görülmedi), önceki bölümlerin "canlı
+   doğrulandı" standardından bu farkla ayrılıyor. Yine de bu, madde 4'ün başındaki "sıradaki
+   oturumun/kullanıcının doğrulaması gereken tek kalan adım" notunu kapatıyor — extension→VPS
+   uçtan uca zinciri artık hem sunucu tarafında (bölüm 20.2, Claude tarafından bizzat) hem
+   istemci tarafında (bu güncelleme, kullanıcı tarafından) doğrulanmış durumda.
+5. **Güvenlik notu (kod dışı):** kullanıcı bu görev sırasında VPS'in root SSH şifresini bu
+   sohbete düz metin olarak yazdı — konuşma geçmişinde kalıcı. Şifrenin değiştirilmesi veya
+   key-based auth'a geçilmesi önerildi, bu oturumda kullanıcı tarafından henüz yapılmadı.
+
+### 20.5 — Bölüm 17.4 (model hallüsinasyonu) ile ilişkisi: net ayrım
+
+Bu bölümde çözülen, **erişim/altyapı** sorunuydu — extension gerçekten VPS'e ulaşabiliyor mu,
+login/kredi/chat akışı çalışıyor mu. **Bölüm 17.4'teki model KALİTESİ sorunu bundan tamamen
+ayrı ve hâlâ AÇIK**: VPS'teki model hâlâ `qwen2.5:3b`, `VpsAgentOrchestrator.ts`'in kendi
+yorumlarında da itiraf edildiği gibi ("küçük yerel model", kısaltılmış sistem promptu/tool
+açıklamaları, `MAX_HISTORY_MESSAGES=8` ile sınırlı bağlam — hepsi küçük modelin sınırlarını
+telafi etmeye çalışan mühendislik kararları). Bölüm 20.2'deki canlı testte model **doğru ve
+tutarlı** cevap verdi ama bu tek, basit bir "kim olduğunu söyle" sorusuydu — bölüm 17.4'teki
+hallüsinasyon (ENS/DNS uydurma, anlamsız kelimeler) daha karmaşık/çok-adımlı x402 senaryolarında
+**OpenRouter tarafında** gözlemlenmişti, VPS/qwen2.5:3b tarafında ayrıca test edilmedi. Yani:
+**erişim sorunu bu bölümde kapandı, model kalitesi/hallüsinasyon riski (ister OpenRouter ister
+küçük yerel model olsun) bölüm 17.4'te tanımlandığı gibi hâlâ çözülmemiş, ayrı bir problem
+olarak açık kalmaya devam ediyor.**

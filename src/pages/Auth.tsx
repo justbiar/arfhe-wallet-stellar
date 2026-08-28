@@ -2,7 +2,7 @@ import * as React from "react";
 import { Typography, Box, Button, Grid, Alert, Stack, TextField, Paper, Container, IconButton, InputAdornment, CircularProgress, LinearProgress, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
 import { AppContext, WalletContext } from "../AppContext.js";
 import { useNavigate } from "react-router";
-import { Visibility, VisibilityOff, Google, Lock, Fingerprint } from "@mui/icons-material";
+import { Visibility, VisibilityOff, Google, Lock, Fingerprint, ContentCopy, Check } from "@mui/icons-material";
 import { Mnemonic } from "ethers";
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
@@ -153,6 +153,27 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
   const [answers, setAnswers] = React.useState<Record<number, string>>({});
   const [quizError, setQuizError] = React.useState('');
 
+  // Copying is offered because the alternative people actually choose is worse: retyping
+  // twelve words by hand into a password manager is where transcription errors are made,
+  // and a phrase that restores nothing is the same as no backup at all. The clipboard is
+  // readable by other software, so the wording says to clear it rather than implying the
+  // copy is safe on its own.
+  const [copied, setCopied] = React.useState(false);
+  const [copyError, setCopyError] = React.useState('');
+
+  const copyPhrase = async () => {
+    try {
+      await navigator.clipboard.writeText(words.join(' '));
+      setCopyError('');
+      setCopied(true);
+      // Long enough to read the warning, short enough that the button is ready again if
+      // the paste did not land where they meant it to.
+      window.setTimeout(() => setCopied(false), 4000);
+    } catch {
+      setCopyError(t('auth.copyFailed'));
+    }
+  };
+
   const handleGenerate = () => {
     if (!accountManager || !username.trim()) return;
     const index = accountManager.CreateAccount(username.trim());
@@ -160,6 +181,8 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
 
     const mnemonicWords = accountManager.accounts[index]?.GetWords();
     setWords(mnemonicWords ?? []);
+    setCopied(false);
+    setCopyError('');
     setIsGenerated(true);
   };
 
@@ -279,6 +302,29 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
               ))}
             </Grid>
           </Paper>
+
+          <Button
+            fullWidth
+            variant="outlined"
+            onClick={copyPhrase}
+            startIcon={copied ? <Check /> : <ContentCopy />}
+            color={copied ? 'success' : 'primary'}
+            sx={{ mt: 1.5, borderRadius: 0, height: 40, fontSize: 14 }}
+          >
+            {copied ? t('auth.phraseCopied') : t('auth.copyPhrase')}
+          </Button>
+
+          {copied && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+              {t('auth.phraseCopiedWarning')}
+            </Typography>
+          )}
+
+          {copyError && (
+            <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
+              {copyError}
+            </Typography>
+          )}
 
           <Button
             variant="contained"

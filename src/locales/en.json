@@ -209,7 +209,11 @@
     "welcomeBackDesc": "Enter your password to decrypt and unlock your wallet",
     "welcomeMessage": "Welcome to the next generation of privacy-first crypto wallets.",
     "wordNumber": "Word #{{number}}",
-    "writeDownWords": "Write down these words in the correct order. Keep them safe!"
+    "writeDownWords": "Write down these words in the correct order. Keep them safe!",
+    "copyPhrase": "Copy recovery phrase",
+    "phraseCopied": "Copied",
+    "copyFailed": "Could not reach the clipboard. Write the words down instead.",
+    "phraseCopiedWarning": "Paste it somewhere safe, then clear your clipboard — other software on this computer can read it."
   },
   "buy": {
     "amount": "Amount",

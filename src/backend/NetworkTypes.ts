@@ -41,6 +41,16 @@ export type TransactionHistory = {
     explorerUrl: string;
     isShielded: boolean;       // true if interaction with cETH/cUSDC FHE contracts
     methodLabel: string;       // "Transfer" | "Wrap" | "Unwrap" | "Shield Transfer" | "Approve" etc.
+    /**
+     * Ticker as reported by the transfer itself.
+     *
+     * A token arriving from someone else is usually one the wallet has never held, so it
+     * is absent from the token cache the row is otherwise named from — and the row was
+     * rendered as a bare number with no asset beside it. The indexer already knows the
+     * symbol; carrying it here means an incoming transfer reads as "Received 25 LINK" the
+     * first time it is seen, without a metadata round trip per row.
+     */
+    assetSymbol?: string;
 };
 
 /** Tracks a pending transaction for speed-up / cancel support */

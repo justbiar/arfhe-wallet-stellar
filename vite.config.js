@@ -7,6 +7,8 @@ import topLevelAwait from 'vite-plugin-top-level-await';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { loadEnv } from 'vite';
+import { auditEnv, auditBundle, formatFailure } from './scripts/secret-guard.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,6 +30,33 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(APP_VERSION),
   },
   plugins: [
+    /**
+     * Refuse to build a bundle that carries a real secret.
+     *
+     * Everything Vite inlines is plain text in a folder the user downloads, so the `VITE_`
+     * prefix is the only thing standing between `.env` and the public — and it is a naming
+     * convention, not a wall. This checks both sides of it: the environment before the
+     * build, and the artifact after, since a key pasted straight into a source file never
+     * passes through `.env` at all.
+     */
+    {
+      name: 'arfhe-secret-guard',
+      apply: 'build',
+      configResolved(config) {
+        const env = loadEnv(config.mode, process.cwd(), '');
+        const problems = auditEnv(env);
+        if (problems.length > 0) {
+          throw new Error(formatFailure(problems, 'before building'));
+        }
+      },
+      closeBundle() {
+        const env = loadEnv(process.env.NODE_ENV === 'production' ? 'production' : 'development', process.cwd(), '');
+        const problems = auditBundle(path.resolve(__dirname, 'dist'), env);
+        if (problems.length > 0) {
+          throw new Error(formatFailure(problems, 'on the built bundle'));
+        }
+      },
+    },
     react(),
     // Serve tfhe WASM file with correct MIME type from node_modules
     {

@@ -3,9 +3,14 @@
  *
  * Background processing for a professional crypto wallet:
  *  1. Pending TX monitoring — poll receipts, notify on confirm/fail
- *  2. Price change alerts — periodic ETH price check, ±5% notification
+ *  2. Incoming transfer watch — notify when funds arrive from someone else
  *  3. Badge management — unread count + pending TX count
  *  4. Heartbeat keepalive — prevent SW from being killed during active monitoring
+ *
+ * Every notification here is about the user's own money moving. Price alerts used to live
+ * alongside them and were removed: a wallet that interrupts someone because a market moved
+ * teaches them to dismiss its notifications without reading, and the ones that matter —
+ * a transfer confirmed, funds received — are exactly the ones that then get dismissed.
  *
  * Communication protocol (popup → SW):
  *  BROADCAST_TX    — Send an already-signed transaction, then watch it
@@ -16,29 +21,45 @@
  *  UPDATE_BADGE    — Set badge to a specific count
  *  SHOW_NOTIFICATION — Show a Chrome notification
  *  SET_RPC_URL     — Update the RPC URL for a network
- *  SET_PRICE_ALERT — Enable/disable/configure price alerts
  *  POPUP_OPENED    — Popup just opened, sync state
  *  POPUP_CLOSED    — Popup just closed, start autonomous monitoring
  */
 
 // ─── Constants ──────────────────────────────────────────────────────
 const ALARM_TX_MONITOR = "arfhe_tx_monitor";
-const ALARM_PRICE_CHECK = "arfhe_price_check";
+const ALARM_INCOMING_SCAN = "arfhe_incoming_scan";
 const ALARM_BADGE_SYNC = "arfhe_badge_sync";
 const ALARM_KEEPALIVE = "arfhe_keepalive";
 
 const STORAGE_KEY_NOTIFICATIONS = "arfhe_notifications";
 const STORAGE_KEY_PENDING_TXS = "arfhe_pending_txs";
-const STORAGE_KEY_PRICE_STATE = "arfhe_price_state";
 const STORAGE_KEY_RPC_URLS = "arfhe_rpc_urls";
-const STORAGE_KEY_PRICE_ALERT_CONFIG = "arfhe_price_alert_config";
+const STORAGE_KEY_NOTIFICATION_PREFS = "arfhe_notification_prefs";
+const STORAGE_KEY_INCOMING_CURSOR = "arfhe_incoming_cursor";
 
 const TX_POLL_INTERVAL_MINUTES = 0.25; // 15 seconds
-const PRICE_CHECK_INTERVAL_MINUTES = 5; // 5 minutes
 const BADGE_SYNC_INTERVAL_MINUTES = 1; // 1 minute
 const MAX_TX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours — auto-expire old TXs
 const MAX_TX_POLLS = 240; // 240 polls × 15s = 1 hour max
-const PRICE_CHANGE_THRESHOLD = 0.05; // 5% change triggers alert
+
+/**
+ * How often the worker asks whether anything arrived.
+ *
+ * One minute is the floor Chrome enforces on alarms for an unpacked extension, and it is
+ * also about as fast as is useful: the scan is one indexer request per tick, and a
+ * received-funds notification a minute late is still a notification the same day.
+ */
+const INCOMING_SCAN_INTERVAL_MINUTES = 1;
+
+/**
+ * Arrivals fetched per tick, and how many are announced one by one.
+ *
+ * Above the announce limit the tick collapses into a single summary rather than raising a
+ * notification per transfer: an airdrop or a spam-token blast lands dozens at once, and a
+ * wallet that fires twenty OS notifications is one whose notifications get turned off.
+ */
+const MAX_INCOMING_PER_SCAN = 20;
+const MAX_INCOMING_ANNOUNCED = 5;
 
 // ── Default public RPC endpoints (no API key needed) ────────────────
 const DEFAULT_RPC = {
@@ -53,9 +74,7 @@ const DEFAULT_RPC = {
 
 // ─── In-Memory State (lost on SW restart, restored from storage) ────
 let pendingTxs = new Map(); // txHash → { hash, networkId, rpcUrl, addedAt, pollCount, from, to, value }
-let lastEthPrice = null; // { usd: number, timestamp: number }
 let rpcOverrides = {}; // networkId → rpcUrl (set by popup when Alchemy key is available)
-let priceAlertConfig = { enabled: true, threshold: PRICE_CHANGE_THRESHOLD };
 
 // ─── Extension Install / Startup ────────────────────────────────────
 
@@ -99,21 +118,19 @@ async function setupAlarms() {
   // Badge sync — always runs
   chrome.alarms.create(ALARM_BADGE_SYNC, { periodInMinutes: BADGE_SYNC_INTERVAL_MINUTES });
 
-  // Price check — periodic
-  chrome.alarms.create(ALARM_PRICE_CHECK, {
-    delayInMinutes: 0.5,
-    periodInMinutes: PRICE_CHECK_INTERVAL_MINUTES,
+  // Incoming transfers — runs whether or not the popup is open, which is the whole point:
+  // money arriving is the one wallet event the user did not initiate.
+  chrome.alarms.create(ALARM_INCOMING_SCAN, {
+    delayInMinutes: 0.2,
+    periodInMinutes: INCOMING_SCAN_INTERVAL_MINUTES,
   });
-
 }
 
 async function restoreState() {
   try {
     const result = await chrome.storage.local.get([
       STORAGE_KEY_PENDING_TXS,
-      STORAGE_KEY_PRICE_STATE,
       STORAGE_KEY_RPC_URLS,
-      STORAGE_KEY_PRICE_ALERT_CONFIG,
     ]);
 
     // Restore pending TXs
@@ -131,19 +148,9 @@ async function restoreState() {
       }
     }
 
-    // Restore price state
-    if (result[STORAGE_KEY_PRICE_STATE]) {
-      lastEthPrice = result[STORAGE_KEY_PRICE_STATE];
-    }
-
     // Restore RPC overrides
     if (result[STORAGE_KEY_RPC_URLS]) {
       rpcOverrides = result[STORAGE_KEY_RPC_URLS];
-    }
-
-    // Restore price alert config
-    if (result[STORAGE_KEY_PRICE_ALERT_CONFIG]) {
-      priceAlertConfig = { ...priceAlertConfig, ...result[STORAGE_KEY_PRICE_ALERT_CONFIG] };
     }
   } catch (e) {
   }
@@ -156,8 +163,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     case ALARM_TX_MONITOR:
       await pollPendingTransactions();
       break;
-    case ALARM_PRICE_CHECK:
-      await checkPriceChanges();
+    case ALARM_INCOMING_SCAN:
+      await scanForIncomingTransfers();
       break;
     case ALARM_BADGE_SYNC:
       await syncBadge();
@@ -301,11 +308,23 @@ async function pollPendingTransactions() {
       if (receipt) {
         completed.push(hash);
 
-        if (receipt.status === "0x1" || receipt.status === 1) {
+        const succeeded = receipt.status === "0x1" || receipt.status === 1;
+        if (succeeded) {
           await notifyTxConfirmed(tx, receipt);
         } else {
           await notifyTxFailed(tx);
         }
+
+        // Sent whether or not a notification was raised: the popup's cached balances are
+        // stale the moment the receipt exists, and that is true even for a user who has
+        // turned notifications off.
+        notifyPopup({
+          type: "TX_SETTLED",
+          hash: tx.hash,
+          networkId: tx.networkId,
+          address: tx.from || null,
+          succeeded,
+        });
       }
       // If receipt is null, TX is still pending — will retry next poll
     } catch (e) {
@@ -353,6 +372,9 @@ async function getTransactionReceipt(rpcUrl, txHash) {
 }
 
 async function notifyTxConfirmed(tx, receipt) {
+  const prefs = await getNotificationPrefs();
+  if (!prefs.enabled || !prefs.txConfirmation) return;
+
   const gasUsed = receipt.gasUsed ? parseInt(receipt.gasUsed, 16) : null;
 
   await addStoredNotification({
@@ -374,6 +396,12 @@ async function notifyTxConfirmed(tx, receipt) {
 }
 
 async function notifyTxFailed(tx) {
+  const prefs = await getNotificationPrefs();
+  // A failure is reported under the same switch as a confirmation: both answer the
+  // question "did the thing I just did work?", and silencing one while raising the other
+  // would leave the user believing a failed transaction is still in flight.
+  if (!prefs.enabled || !prefs.txConfirmation) return;
+
   await addStoredNotification({
     type: "tx_failed",
     title: "❌ Transaction Failed",
@@ -401,62 +429,243 @@ async function notifyTxExpired(tx) {
   });
 }
 
-// ─── Price Monitoring ───────────────────────────────────────────────
+// ─── Incoming Transfers ─────────────────────────────────────────────
+//
+// Everything else the worker reports is something the user started. This is the one that
+// happens to them, so it is the one that has to work while the popup is closed — a wallet
+// that only notices a payment when you next open it is not telling you anything you would
+// not have found out anyway.
+//
+// The scan asks the indexer for transfers *to* the active address since the block it last
+// looked at. Keeping a per-account cursor is what makes it exactly-once: an arrival is
+// reported when it first appears past the cursor and never again, and a worker restart
+// resumes from the stored block rather than re-announcing the last hour of payments.
 
-async function checkPriceChanges() {
-  if (!priceAlertConfig.enabled) return;
-
+/** Notification preferences, as owned by NotificationService in the wallet UI. */
+async function getNotificationPrefs() {
   try {
-    const res = await fetch(
-      "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd",
-      { headers: { Accept: "application/json" } }
-    );
-
-    if (!res.ok) return;
-
-    const data = await res.json();
-    const currentPrice = data?.ethereum?.usd;
-    if (!currentPrice || typeof currentPrice !== "number") return;
-
-    const now = Date.now();
-
-    if (lastEthPrice && lastEthPrice.usd > 0) {
-      const change = (currentPrice - lastEthPrice.usd) / lastEthPrice.usd;
-      const absChange = Math.abs(change);
-      const threshold = priceAlertConfig.threshold || PRICE_CHANGE_THRESHOLD;
-
-      if (absChange >= threshold) {
-        const direction = change > 0 ? "📈" : "📉";
-        const pct = (change * 100).toFixed(1);
-        const sign = change > 0 ? "+" : "";
-
-
-        await addStoredNotification({
-          type: "price_alert",
-          title: `${direction} ETH Price ${sign}${pct}%`,
-          message: `ETH is now $${currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (was $${lastEthPrice.usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`,
-          data: {},
-        });
-
-        try {
-          chrome.notifications.create(`arfhe_price_${now}`, {
-            type: "basic",
-            iconUrl: "images/icon48.png",
-            title: `${direction} ETH ${sign}${pct}%`,
-            message: `$${currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-            priority: 1,
-          });
-        } catch { /* */ }
-      }
-    }
-
-    // Update stored price
-    lastEthPrice = { usd: currentPrice, timestamp: now };
-    await chrome.storage.local.set({ [STORAGE_KEY_PRICE_STATE]: lastEthPrice });
-
-  } catch (e) {
+    const result = await chrome.storage.local.get(STORAGE_KEY_NOTIFICATION_PREFS);
+    const stored = result?.[STORAGE_KEY_NOTIFICATION_PREFS];
+    return {
+      enabled: true,
+      incomingTx: true,
+      txConfirmation: true,
+      approvalWarnings: true,
+      sound: false,
+      ...(stored && typeof stored === "object" ? stored : {}),
+    };
+  } catch {
+    // A preference store that cannot be read must not silence a payment notification.
+    return { enabled: true, incomingTx: true, txConfirmation: true, approvalWarnings: true, sound: false };
   }
 }
+
+/** One JSON-RPC round trip, returning `result` or throwing the node's error. */
+async function rpc(rpcUrl, method, params) {
+  const res = await fetch(rpcUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
+  if (!res.ok) throw new Error(`RPC HTTP ${res.status}`);
+  const json = await res.json();
+  if (json.error) throw new Error(json.error.message || "RPC error");
+  return json.result;
+}
+
+async function readIncomingCursors() {
+  try {
+    const result = await chrome.storage.local.get(STORAGE_KEY_INCOMING_CURSOR);
+    const stored = result?.[STORAGE_KEY_INCOMING_CURSOR];
+    return stored && typeof stored === "object" ? stored : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Look for funds that arrived since the last scan and say so.
+ *
+ * Silent by design in three cases: the wallet has never reported its address, the user
+ * turned incoming alerts off, or this is the first scan for an account. That last one
+ * matters — without it, adding an account would announce its entire history at once.
+ */
+async function scanForIncomingTransfers() {
+  const state = await getWalletState();
+  const address = state?.address;
+  const rpcUrl = state?.rpcUrl;
+  const chainId = state?.chainId;
+  if (!address || !rpcUrl || !chainId) return;
+
+  const prefs = await getNotificationPrefs();
+  if (!prefs.enabled || !prefs.incomingTx) return;
+
+  let head;
+  try {
+    head = parseInt(await rpc(rpcUrl, "eth_blockNumber", []), 16);
+  } catch {
+    return; // Node unreachable; the next tick tries again from the same cursor.
+  }
+  if (!Number.isFinite(head)) return;
+
+  const key = `${chainId}:${address.toLowerCase()}`;
+  const cursors = await readIncomingCursors();
+  const from = cursors[key];
+
+  const advance = async (block) => {
+    cursors[key] = block;
+    try {
+      await chrome.storage.local.set({ [STORAGE_KEY_INCOMING_CURSOR]: cursors });
+    } catch { /* storage full or unavailable; the next scan re-reads the old cursor */ }
+  };
+
+  // First sight of this account on this chain: remember where we started and report
+  // nothing. Everything before now is history the user already knows about.
+  if (typeof from !== "number") {
+    await advance(head);
+    return;
+  }
+  if (head <= from) return;
+
+  let transfers = [];
+  try {
+    const result = await rpc(rpcUrl, "alchemy_getAssetTransfers", [{
+      fromBlock: "0x" + (from + 1).toString(16),
+      toBlock: "0x" + head.toString(16),
+      toAddress: address,
+      category: ["external", "erc20"],
+      withMetadata: true,
+      excludeZeroValue: true,
+      // Hex, not a number: the raw JSON-RPC endpoint rejects a decimal maxCount outright.
+      maxCount: "0x" + MAX_INCOMING_PER_SCAN.toString(16),
+      order: "asc",
+    }]);
+    transfers = Array.isArray(result?.transfers) ? result.transfers : [];
+  } catch {
+    // A chain without this indexer method (a user-added RPC) still gets the native leg,
+    // by comparing what the account holds against what it held at the last cursor.
+    transfers = await findIncomingNative(rpcUrl, address, from, head).catch(() => []);
+  }
+
+  const confidential = new Set(state.confidentialContracts || []);
+
+  // A transfer we sent to ourselves is not an arrival worth interrupting anyone for.
+  const arrivals = transfers.filter(
+    (t) => !(typeof t.from === "string" && t.from.toLowerCase() === address.toLowerCase())
+  );
+
+  if (arrivals.length > MAX_INCOMING_ANNOUNCED) {
+    await addStoredNotification({
+      type: "incoming_tx",
+      title: "💰 Funds Received",
+      message: `${arrivals.length} incoming transfers — open the wallet to see them`,
+      data: { networkId: String(chainId) },
+    });
+    try {
+      chrome.notifications.create(`arfhe_in_batch_${Date.now()}`, {
+        type: "basic",
+        iconUrl: "images/icon48.png",
+        title: "💰 Funds Received",
+        message: `${arrivals.length} incoming transfers`,
+        priority: 2,
+      });
+    } catch { /* notifications API not available */ }
+  } else {
+    for (const transfer of arrivals) {
+      const contract = transfer.rawContract?.address;
+      const isConfidential = typeof contract === "string" && confidential.has(contract.toLowerCase());
+      await notifyIncomingTransfer(transfer, chainId, isConfidential);
+    }
+  }
+
+  await advance(head);
+
+  if (arrivals.length > 0) {
+    // The open popup is showing balances read before this arrived.
+    notifyPopup({ type: "INCOMING_TX", chainId, address });
+  }
+}
+
+/**
+ * Native-currency arrivals on a chain with no transfer index behind it.
+ *
+ * Only the net change is knowable this way, so it reports one arrival for the interval
+ * rather than one per transfer, and it says nothing about who sent it. That is less than
+ * the indexed path gives, and it is the honest amount of detail a plain node can support.
+ */
+async function findIncomingNative(rpcUrl, address, fromBlock, toBlock) {
+  const [before, after] = await Promise.all([
+    rpc(rpcUrl, "eth_getBalance", [address, "0x" + fromBlock.toString(16)]),
+    rpc(rpcUrl, "eth_getBalance", [address, "0x" + toBlock.toString(16)]),
+  ]);
+  const delta = BigInt(after) - BigInt(before);
+  if (delta <= 0n) return [];
+
+  // Wei → ether without a bignum library: split at the decimal point and trim.
+  const whole = delta / 10n ** 18n;
+  const frac = (delta % 10n ** 18n).toString().padStart(18, "0").replace(/0+$/, "");
+  return [{ value: frac ? `${whole}.${frac}` : String(whole), asset: null, from: null, hash: null }];
+}
+
+/**
+ * Store and raise one "funds arrived" notification.
+ *
+ * @param isConfidential Suppresses the amount. The number attached to a confidential
+ *                       wrapper's public Transfer event is an activity indicator, not a
+ *                       value — printing it would state a balance that is meant to be
+ *                       secret, and state it wrongly.
+ */
+async function notifyIncomingTransfer(transfer, chainId, isConfidential = false) {
+  const asset = transfer.asset || "ETH";
+  const amount = transfer.value === null || transfer.value === undefined ? "" : String(transfer.value);
+  const sender = typeof transfer.from === "string" ? shortAddress(transfer.from) : null;
+
+  const headline = isConfidential
+    ? `A confidential ${asset} transfer`
+    : (amount ? `${amount} ${asset}` : asset);
+  const message = sender ? `${headline} received from ${sender}` : `${headline} received`;
+
+  await addStoredNotification({
+    type: "incoming_tx",
+    title: isConfidential ? "🛡️ Confidential Transfer Received" : "💰 Funds Received",
+    message,
+    data: {
+      txHash: transfer.hash || undefined,
+      from: transfer.from || undefined,
+      value: isConfidential ? "" : amount,
+      token: asset,
+      networkId: String(chainId),
+    },
+  });
+
+  try {
+    chrome.notifications.create(`arfhe_in_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, {
+      type: "basic",
+      iconUrl: "images/icon48.png",
+      title: isConfidential ? "🛡️ Confidential Transfer Received" : "💰 Funds Received",
+      message,
+      priority: 2,
+    });
+  } catch { /* notifications API not available */ }
+}
+
+function shortAddress(address) {
+  if (typeof address !== "string" || address.length < 12) return address || "";
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
+/**
+ * Tell the open popup that its view of the chain is out of date.
+ *
+ * Best-effort and deliberately unawaited: with no popup open there is no receiver, and
+ * Chrome reports that as a rejected promise rather than a no-op.
+ */
+function notifyPopup(payload) {
+  try {
+    chrome.runtime.sendMessage(payload).catch(() => {});
+  } catch { /* no receiver */ }
+}
+
 
 // ─── Badge Management ───────────────────────────────────────────────
 
@@ -834,8 +1043,6 @@ async function handleMessage(message) {
             symbol: tx.symbol,
             value: tx.value,
           })),
-          lastEthPrice: lastEthPrice,
-          priceAlertConfig: priceAlertConfig,
         },
       };
     }
@@ -904,16 +1111,6 @@ async function handleMessage(message) {
       return { success: true };
     }
 
-    // ── Price Alert Configuration ─────────────────────────────
-    case "SET_PRICE_ALERT": {
-      priceAlertConfig = {
-        enabled: message.enabled !== undefined ? message.enabled : priceAlertConfig.enabled,
-        threshold: message.threshold || priceAlertConfig.threshold,
-      };
-      await chrome.storage.local.set({ [STORAGE_KEY_PRICE_ALERT_CONFIG]: priceAlertConfig });
-      return { success: true, config: priceAlertConfig };
-    }
-
     // ── Popup lifecycle ───────────────────────────────────────
     case "POPUP_OPENED": {
       // Sync state when popup opens
@@ -921,7 +1118,6 @@ async function handleMessage(message) {
       return {
         success: true,
         pendingTxCount: pendingTxs.size,
-        lastEthPrice: lastEthPrice,
       };
     }
 
@@ -967,6 +1163,16 @@ async function handleMessage(message) {
         chainId: message.chainId ?? null,
         chainIdHex: message.chainId ? `0x${Number(message.chainId).toString(16)}` : null,
         rpcUrl: message.rpcUrl ?? null,
+        // Watched for incoming transfers. It is a public address, never a key, and the
+        // worker needs it because nothing else can tell it whose funds to look for while
+        // the popup is closed.
+        address: typeof message.address === "string" ? message.address : null,
+        // Confidential wrappers on this chain. Their public Transfer event carries an
+        // activity indicator instead of a value, so an arrival on one of these must be
+        // announced without an amount.
+        confidentialContracts: Array.isArray(message.confidentialContracts)
+          ? message.confidentialContracts.filter((a) => typeof a === "string").map((a) => a.toLowerCase())
+          : [],
       };
       await chrome.storage.local.set({ [STORAGE_KEY_WALLET_STATE]: state });
 

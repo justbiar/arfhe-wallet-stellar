@@ -209,7 +209,11 @@
     "welcomeBackDesc": "Cüzdanınızı çözmek ve açmak için şifrenizi girin",
     "welcomeMessage": "Gizlilik odaklı yeni nesil kripto cüzdanına hoş geldiniz.",
     "wordNumber": "{{number}}. kelime",
-    "writeDownWords": "Bu kelimeleri doğru sırada yazın. Güvenli bir yerde saklayın!"
+    "writeDownWords": "Bu kelimeleri doğru sırada yazın. Güvenli bir yerde saklayın!",
+    "copyPhrase": "Kurtarma ifadesini kopyala",
+    "phraseCopied": "Kopyalandı",
+    "copyFailed": "Panoya erişilemedi. Kelimeleri elle yazın.",
+    "phraseCopiedWarning": "Güvenli bir yere yapıştırın, sonra panoyu temizleyin — bu bilgisayardaki başka yazılımlar panoyu okuyabilir."
   },
   "buy": {
     "amount": "Miktar",

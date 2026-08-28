@@ -5,11 +5,12 @@
  * path already honours them; there was simply no screen to change them, and the Settings
  * entry that looked like it opened one did nothing.
  *
- * Price alerts live in the service worker rather than here, because they fire while the
- * popup is closed — so that toggle is pushed to the worker instead of stored locally.
+ * There is no price-alert toggle. Market movement is not the wallet's business, and a
+ * notification stream that mixes it with "your transfer confirmed" and "funds arrived"
+ * trains people to dismiss the whole channel — including the two that matter.
  */
 
-import { useContext, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 import {
@@ -18,10 +19,9 @@ import {
 } from "@mui/material";
 import {
     ArrowBack, NotificationsActive, CallReceived, CheckCircleOutline,
-    WarningAmber, VolumeUp, TrendingUp, DeleteSweep,
+    WarningAmber, VolumeUp, DeleteSweep,
 } from "@mui/icons-material";
 import { NotificationService, type NotificationPreferences } from "../backend/NotificationService.js";
-import { WalletContext } from "../AppContext.js";
 import { useToast } from "../components/ToastProvider";
 
 /** Ask the service worker to change background behaviour. */
@@ -37,11 +37,9 @@ function tellWorker(message: Record<string, unknown>) {
 export default function SettingsNotifications() {
     const { t } = useTranslation();
     const navigate = useNavigate();
-    const context = useContext(WalletContext);
     const { showToast } = useToast();
 
     const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
-    const [priceAlerts, setPriceAlerts] = useState(true);
     const [clearing, setClearing] = useState(false);
 
     useEffect(() => {
@@ -49,25 +47,15 @@ export default function SettingsNotifications() {
         (async () => {
             const loaded = await NotificationService.getPreferences();
             if (!cancelled) setPrefs(loaded);
-
-            const saved = context?.storageManager?.getLocal<boolean>("arfhe_price_alerts_enabled");
-            if (!cancelled && typeof saved === "boolean") setPriceAlerts(saved);
         })();
         return () => { cancelled = true; };
-    }, [context]);
+    }, []);
 
     const update = async (patch: Partial<NotificationPreferences>) => {
         if (!prefs) return;
         const next = { ...prefs, ...patch };
         setPrefs(next);
         await NotificationService.savePreferences(next);
-    };
-
-    const togglePriceAlerts = (enabled: boolean) => {
-        setPriceAlerts(enabled);
-        context?.storageManager?.setLocal("arfhe_price_alerts_enabled", enabled);
-        // The worker polls the price on its own schedule, so it has to be told directly.
-        tellWorker({ type: "SET_PRICE_ALERT", enabled });
     };
 
     const clearHistory = async () => {
@@ -160,19 +148,6 @@ export default function SettingsNotifications() {
                                 disabled={disabled}
                                 checked={prefs.approvalWarnings}
                                 onChange={(e) => update({ approvalWarnings: e.target.checked })}
-                            />
-                        </ListItem>
-
-                        <ListItem>
-                            <ListItemIcon><TrendingUp /></ListItemIcon>
-                            <ListItemText
-                                primary={t("notifications.priceAlerts")}
-                                secondary={t("notifications.priceAlertsDesc")}
-                            />
-                            <Switch
-                                disabled={disabled}
-                                checked={priceAlerts}
-                                onChange={(e) => togglePriceAlerts(e.target.checked)}
                             />
                         </ListItem>
 

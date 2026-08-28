@@ -1109,6 +1109,7 @@ class Network {
                 explorerUrl: `${explorerBase}/tx/${tx.hash}`,
                 isShielded: false,
                 methodLabel: txTo === address.toLowerCase() ? "Receive" : "Transfer",
+                assetSymbol: this.currency_symbol,
               });
             }
           } catch { /* skip bad block */ }
@@ -1122,16 +1123,21 @@ class Network {
 
           const fromAddr = log.topics[1] ? "0x" + log.topics[1].slice(26) : "0x";
           const toAddr = log.topics[2] ? "0x" + log.topics[2].slice(26) : "0x";
+          const contractLower = (log.address || "").toLowerCase();
+
+          // A chain with no indexer behind it gives us the raw log and nothing else, so
+          // the token has to be asked what it is. Reading it once and caching costs three
+          // eth_calls the first time an unfamiliar token appears; skipping it prints the
+          // amount at the wrong scale and with no ticker beside it.
+          let meta = tokenCacheObj?.getToken(this.network_id, contractLower);
+          if (!meta) {
+            meta = await this.getTokenMetadata(tokenCacheObj, contractLower).catch(() => undefined);
+          }
+
           let valueStr = "0";
           try {
             const raw = BigInt(log.data);
-            // Try to get decimals from tokenCache
-            const contractLower = (log.address || "").toLowerCase();
-            let decimals = 18;
-            if (tokenCacheObj?.hasToken(this.network_id, contractLower)) {
-              decimals = tokenCacheObj.getToken(this.network_id, contractLower)?.decimals ?? 18;
-            }
-            valueStr = this.formatTokenAmount(raw, decimals);
+            valueStr = this.formatTokenAmount(raw, meta?.decimals ?? 18);
           } catch { /* leave 0 */ }
 
           // Get block timestamp
@@ -1154,6 +1160,7 @@ class Network {
             explorerUrl: `${explorerBase}/tx/${log.transactionHash}`,
             isShielded: false,
             methodLabel: toAddr.toLowerCase() === address.toLowerCase() ? "Receive" : "Transfer",
+            assetSymbol: meta?.symbol,
           });
         }
 
@@ -1197,8 +1204,12 @@ class Network {
         promises.push(this.alchemy.core.getAssetTransfers({ ...optionsBase, toAddress: address }).catch(e => { return { transfers: [] }; }));
       } else {
         // Fallback to raw call if SDK isn't happy but URL works
-        promises.push(this.call("alchemy_getAssetTransfers", [{ ...optionsBase, fromAddress: address }]).catch(e => { return { transfers: [] }; }));
-        promises.push(this.call("alchemy_getAssetTransfers", [{ ...optionsBase, toAddress: address }]).catch(e => { return { transfers: [] }; }));
+        // The SDK converts `maxCount` to hex on the way out; a raw JSON-RPC call does not,
+        // and Alchemy answers a decimal with "Invalid hex string: 100" — which the catch
+        // below turned into an empty history rather than an error anyone could see.
+        const rawOptions = { ...optionsBase, maxCount: "0x" + optionsBase.maxCount.toString(16) };
+        promises.push(this.call("alchemy_getAssetTransfers", [{ ...rawOptions, fromAddress: address }]).then(r => (r as { transfers?: unknown[] }) ?? { transfers: [] }).catch(() => { return { transfers: [] }; }));
+        promises.push(this.call("alchemy_getAssetTransfers", [{ ...rawOptions, toAddress: address }]).then(r => (r as { transfers?: unknown[] }) ?? { transfers: [] }).catch(() => { return { transfers: [] }; }));
       }
 
       // 2. Direct eth_getLogs for incoming FHE ConfidentialTransfers
@@ -1301,14 +1312,23 @@ class Network {
           contractAddress = isNative ? (tx.to?.toLowerCase() ?? "ETH") : "ETH";
         }
 
-        if (!isNative && contractAddress !== "eth" && !tokenCacheObj.hasToken(this.network_id, contractAddress)) {
+        // A token someone sends us has never been held before, so it is not in the cache
+        // the row is named from. The transfer already carries the symbol and the decimals
+        // the indexer resolved, so record them: without this the arrival rendered as a
+        // number with no asset next to it, and read as nothing having arrived.
+        //
+        // `rawContract.decimal` is authoritative here — assuming 18 would misstate a
+        // 6-decimal token by a factor of a trillion in every later balance read.
+        if (!isNative && contractAddress !== "eth" && tx.asset && !tokenCacheObj.hasToken(this.network_id, contractAddress)) {
+          const decimals = Number.parseInt(tx.rawContract?.decimal ?? "0x12", 16);
           const basicItem: TokenCacheItem = {
-            name: tx.asset || "Unknown",
-            symbol: tx.asset || "???",
-            decimals: 18,
+            name: tx.asset,
+            symbol: tx.asset,
+            decimals: Number.isFinite(decimals) && decimals >= 0 && decimals <= 36 ? decimals : 18,
             logoSrc: "",
             contractAddress
           };
+          tokenCacheObj.setToken(this.network_id, basicItem);
         }
 
         const isShielded = !!contractAddress && shieldedContracts.has(contractAddress);
@@ -1354,7 +1374,8 @@ class Network {
           status: "Success",
           explorerUrl: `${explorerBase}/tx/${tx.hash}`,
           isShielded: isShielded,
-          methodLabel: methodLabel
+          methodLabel: methodLabel,
+          assetSymbol: typeof tx.asset === "string" ? tx.asset : undefined
         });
       }
 
@@ -2108,6 +2129,26 @@ class Network {
   }
 
   /** Registry wrappers plus the ones configured in .env, lowercased. */
+  /**
+   * Every confidential wrapper on this network, for callers outside this class.
+   *
+   * The service worker needs it to keep a confidential arrival confidential: the wrapper
+   * emits a standard ERC-20 `Transfer` carrying a fixed activity indicator rather than the
+   * amount, and a notification reading "7984.0001 aeETH received" would be both wrong and
+   * a claim about a balance that is supposed to be secret. Knowing which contracts those
+   * are is what lets it say "a confidential transfer arrived" and stop there.
+   *
+   * Lower-cased, matching how the addresses are compared everywhere else.
+   */
+  async getConfidentialWrapperAddresses(): Promise<string[]> {
+    if (!this.isFheCapable()) return [];
+    try {
+      return [...(await this.getKnownWrapperSet())].map((a) => a.toLowerCase());
+    } catch {
+      return [];
+    }
+  }
+
   private async getKnownWrapperSet(): Promise<Set<string>> {
     const { native, extra } = this.configuredWrappers();
     const registry = await this.listRegistryWrappers();

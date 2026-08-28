@@ -16,7 +16,8 @@
     "verify:fhe": "node scripts/verify-fhe.mjs",
     "verify:fhe:erc20": "node scripts/verify-fhe-erc20.mjs",
     "verify:discovery": "node scripts/verify-discovery.mjs",
-    "audit:privacy": "node scripts/audit-privacy.mjs"
+    "audit:privacy": "node scripts/audit-privacy.mjs",
+    "audit:secrets": "node scripts/secret-guard.mjs"
   },
   "dependencies": {
     "@cofhe/sdk": "^0.7.1",

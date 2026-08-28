@@ -1,6 +1,7 @@
 import React from "react";
 import { AppContext, WalletContext } from "./AppContext.js";
 import { toChainId } from "./backend/NetworkTypes.js";
+import { notifyTxConfirmed } from "./backend/TxNotifier.js";
 import { useNavigate, useLocation } from "react-router";
 
 import WalletConnectManager from "./components/WalletConnectManager";
@@ -41,26 +42,36 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     if (!runtime?.id || !runtime.sendMessage) return;
 
     const push = () => {
-      try {
-        const net = appContext.networkProvider.getActiveNetwork();
-        runtime.sendMessage?.({
-          type: "SET_WALLET_STATE",
-          // The real chain id, not the wallet's internal NetworkId — this is what
-          // websites are told over EIP-1193.
-          chainId: toChainId(net.network_id),
-          rpcUrl: net.rpc_url ?? null,
-        });
-      } catch {
-        // The worker may be restarting; the next change pushes again.
-      }
+      void (async () => {
+        try {
+          const net = appContext.networkProvider.getActiveNetwork();
+          runtime.sendMessage?.({
+            type: "SET_WALLET_STATE",
+            // The real chain id, not the wallet's internal NetworkId — this is what
+            // websites are told over EIP-1193.
+            chainId: toChainId(net.network_id),
+            rpcUrl: net.rpc_url ?? null,
+            // The worker watches this address for arriving funds while the popup is
+            // closed. A public address and nothing more — no key ever crosses this line.
+            address: appContext.accountManager.GetActive()?.GetAddress() ?? null,
+            // So an arriving confidential transfer is announced without an amount: the
+            // wrapper's public Transfer event carries an activity indicator, not a value.
+            confidentialContracts: await net.getConfidentialWrapperAddresses().catch(() => []),
+          });
+        } catch {
+          // The worker may be restarting; the next change pushes again.
+        }
+      })();
     };
 
     push();
     const unsubscribeNetwork = appContext.networkProvider.subscribe(push);
 
     // An account switch changes what each connected site is allowed to see, and each site
-    // must be told its own list — never the whole wallet's.
+    // must be told its own list — never the whole wallet's. It also changes whose funds
+    // the worker is watching for, so the state goes out again with it.
     const unsubscribeAccount = appContext.accountManager.subscribe(() => {
+      push();
       try {
         runtime.sendMessage?.({ type: "PERMISSIONS_CHANGED" });
       } catch { /* worker restarting */ }
@@ -71,6 +82,47 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       unsubscribeAccount();
     };
   }, [appContext.networkProvider, appContext.accountManager]);
+
+  // --- Take the worker's word for it when the chain moved without us ---
+  //
+  // Two things happen behind the popup's back: a transaction it broadcast settles after
+  // it was closed, and funds arrive that it never asked about. The worker sees both, and
+  // until it said so the popup would keep serving balances read before either — a send
+  // that looks like it never happened, a payment that never shows up.
+  //
+  // Routed through TxNotifier so it clears the caches and reaches every screen the same
+  // way a locally observed confirmation does, rather than adding a second refresh path.
+  React.useEffect(() => {
+    type WorkerBroadcast = { type?: string; hash?: string; networkId?: number; address?: string | null };
+    type MessagePort = {
+      addListener(cb: (message: unknown) => void): void;
+      removeListener(cb: (message: unknown) => void): void;
+    };
+    const runtime = (window as unknown as { chrome?: { runtime?: { id?: string; onMessage?: MessagePort } } }).chrome?.runtime;
+    const onMessage = runtime?.onMessage;
+    if (!runtime?.id || !onMessage) return;
+
+    const handler = (raw: unknown) => {
+      const message = raw as WorkerBroadcast | null;
+      if (message?.type !== "TX_SETTLED" && message?.type !== "INCOMING_TX") return;
+      try {
+        notifyTxConfirmed(
+          {
+            hash: message.hash ?? "",
+            networkId: Number(message.networkId ?? appContext.networkProvider.getActiveNetwork().network_id),
+            address: message.address ?? appContext.accountManager.GetActive()?.GetAddress() ?? undefined,
+            kind: message.type === "INCOMING_TX" ? "other" : "send",
+          },
+          appContext.dataCacheService
+        );
+      } catch {
+        // A message arriving mid-teardown is not worth breaking the popup for.
+      }
+    };
+
+    onMessage.addListener(handler);
+    return () => onMessage.removeListener(handler);
+  }, [appContext]);
 
   // --- Resume interrupted unshields ---
   // The second half of an unshield (decrypt + claim) can be cut short by the popup

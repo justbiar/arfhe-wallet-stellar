@@ -354,6 +354,27 @@ export default class AccountManager {
     }
   }
 
+  /**
+   * Change an account's display name.
+   *
+   * A method rather than letting callers assign `account.name` directly: the name lives in
+   * two places — the object in memory and the encrypted copy on disk — and setting the
+   * field without persisting leaves them disagreeing until the next unrelated write.
+   *
+   * @returns False if the index is out of range or the name is blank.
+   */
+  RenameAccount(account_index: number, name: string): boolean {
+    const trimmed = name.trim();
+    if (!trimmed) return false;
+    const account = this.accounts[account_index];
+    if (!account) return false;
+
+    account.name = trimmed;
+    this.notifyListeners();
+    this.updateStorage();
+    return true;
+  }
+
   RemoveAccount(account_index: number) {
     if (account_index < 0 || account_index >= this.accounts.length) {
       return;

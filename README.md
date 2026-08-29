@@ -233,6 +233,32 @@ Adding a network tells you up front whether it supports confidential transaction
 
 ---
 
+## Installing the testnet build
+
+This is a **testnet release**. It talks to Sepolia, Base Sepolia and Arbitrum Sepolia, and
+nothing on it is worth money. Do not put mainnet funds anywhere near it.
+
+1. Download and unzip the release, so you have a folder containing `manifest.json`.
+2. Open `chrome://extensions`.
+3. Turn on **Developer mode** (top right) — and leave it on. Chrome disables unpacked
+   extensions when it is switched off, and the wallet stops working until it is back.
+4. **Load unpacked** → select the unzipped folder.
+
+Chrome will warn that the extension can *"read and change all your data on all websites"*.
+That is accurate, and it is what any browser wallet needs: a site asks for your address by
+talking to a script the wallet injects into the page, so the wallet has to be allowed on
+the pages you visit. What it does with that access is in [Websites](#websites) — it answers
+the chain id to anyone, and nothing else until you approve a connection.
+
+The extension id is fixed at `cdhfecdlpblpdngkadiigjmodedapoih`. If yours differs, the
+folder you loaded is not this build.
+
+### Before you write anything down
+
+The recovery phrase shown on first run is the only copy. There is no account to reset and
+nobody to ask — see [Key handling](#key-handling) for why that is deliberate rather than an
+omission.
+
 ## Getting started
 
 **Requirements:** Node 20+, pnpm, and Chrome (or any Chromium browser).

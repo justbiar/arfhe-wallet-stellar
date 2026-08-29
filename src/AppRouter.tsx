@@ -19,8 +19,8 @@ const Agent = React.lazy(() => import("./pages/Agent"));
 const Settings = React.lazy(() => import("./pages/Settings"));
 const SettingsSecurity = React.lazy(() => import("./pages/SettingsSecurity"));
 const SettingsNetworks = React.lazy(() => import("./pages/SettingsNetworks"));
+const SettingsAccounts = React.lazy(() => import("./pages/SettingsAccounts"));
 const SettingsNotifications = React.lazy(() => import("./pages/SettingsNotifications"));
-const SettingsX402 = React.lazy(() => import("./pages/SettingsX402"));
 const TokenDetail = React.lazy(() => import("./pages/TokenDetail"));
 const NotFound = React.lazy(() => import("./pages/NotFound"));
 // Opened by the service worker in its own window for injected-provider requests.
@@ -55,8 +55,8 @@ function AppRoutes() {
           <Route path="settings" element={<FadePage><Settings /></FadePage>} />
           <Route path="settings/security" element={<FadePage><SettingsSecurity /></FadePage>} />
           <Route path="settings/networks" element={<FadePage><SettingsNetworks /></FadePage>} />
+          <Route path="settings/accounts" element={<FadePage><SettingsAccounts /></FadePage>} />
           <Route path="settings/notifications" element={<FadePage><SettingsNotifications /></FadePage>} />
-          <Route path="settings/x402" element={<FadePage><SettingsX402 /></FadePage>} />
           <Route path="token/:address" element={<FadePage><TokenDetail /></FadePage>} />
           <Route path="*" element={<FadePage><NotFound /></FadePage>} />
         </Route>

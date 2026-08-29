@@ -65,14 +65,24 @@ export const AGENT_TOOLS: AgentToolDefinition[] = [
     function: {
       name: "get_balance",
       description:
-        "Kullanıcının aktif cüzdanındaki AÇIK (şifrelenmemiş) native token bakiyesini döndürür " +
-        "(ör. ETH, MATIC — bağlı ağa göre değişir). Bu, zincir üzerinde herkesin görebildiği " +
-        "normal bakiyedir. FHE ile şifrelenmiş (shielded/gizli) bakiyeler bu tool'a dahil " +
-        "DEĞİLDİR; kullanıcı 'gizli bakiyem' veya 'şifreli bakiyem' derse bunun yerine " +
-        "get_shielded_balance ya da get_shielded_portfolio kullanılmalıdır.",
+        "Kullanıcının cüzdanındaki AÇIK (şifrelenmemiş) native token bakiyesini döndürür " +
+        "(ör. ETH — bağlı ağa göre değişir). Bu, zincir üzerinde herkesin görebildiği normal " +
+        "bakiyedir. FHE ile şifrelenmiş (shielded/gizli) bakiyeler bu tool'a dahil DEĞİLDİR; " +
+        "kullanıcı 'gizli bakiyem' veya 'şifreli bakiyem' derse bunun yerine get_shielded_balance " +
+        "ya da get_shielded_portfolio kullanılmalıdır. `network` parametresi verilmezse cüzdanın " +
+        "O AN bağlı olduğu ağ kullanılır — kullanıcı ağ değiştirmeden 'Base'de bakiyem ne kadar' " +
+        "gibi bir soru sorarsa `network` alanını doldurarak sorabilirsin.",
       parameters: {
         type: "object",
-        properties: {},
+        properties: {
+          network: {
+            type: "string",
+            description:
+              "Opsiyonel. 'ethereum', 'arbitrum' veya 'base' — cüzdanın aktif ağından FARKLI " +
+              "bir ağdaki bakiyeyi sormak için. Belirtilmezse aktif ağ kullanılır.",
+            enum: ["ethereum", "arbitrum", "base"],
+          },
+        },
         required: [],
         additionalProperties: false,
       },
@@ -255,7 +265,9 @@ export const AGENT_TOOLS: AgentToolDefinition[] = [
           },
           tokenSymbol: {
             type: "string",
-            description: "Unshield edilecek shielded token'ın sembolü, ör. 'aeETH' veya 'aeUSDC'.",
+            description:
+              "Unshield edilecek token'ın sembolü — confidential wrapper sembolü (ör. 'aeETH') " +
+              "veya açık (public) sembolü (ör. 'ETH', 'DAI') olabilir, ikisi de kabul edilir.",
           },
         },
         required: ["amount", "tokenSymbol"],

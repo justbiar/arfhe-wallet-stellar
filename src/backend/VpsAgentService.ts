@@ -19,6 +19,15 @@ const VPS_URL_STORAGE_KEY = "arfhe_vps_agent_url";
 const VPS_TOKEN_STORAGE_PREFIX = "arfhe_vps_agent_token_";
 const AGENT_SOURCE_STORAGE_KEY = "arfhe_agent_source";
 
+/**
+ * The team's own always-on VPS (Express + Ollama, see server.js) — pre-filled so the "Kendi
+ * VPS'im" settings field already works out of the box instead of requiring everyone testing it
+ * to go find and type this address themselves. Still fully overridable (and clearable, which
+ * falls straight back to this same default rather than to a blank field) via setVpsAgentUrl —
+ * this is a default, not a hardcoded destination.
+ */
+const DEFAULT_VPS_AGENT_URL = "http://83.229.86.69:3000";
+
 export type AgentSource = "arfio" | "vps";
 
 /** Which agent backend the chat panel should talk to — durable across restarts (localStorage), like the language preference in i18n.ts. */
@@ -43,7 +52,7 @@ interface CachedToken {
 }
 
 export function getVpsAgentUrl(): string {
-  return localStorage.getItem(VPS_URL_STORAGE_KEY) ?? "";
+  return localStorage.getItem(VPS_URL_STORAGE_KEY) ?? DEFAULT_VPS_AGENT_URL;
 }
 
 export function setVpsAgentUrl(url: string): void {

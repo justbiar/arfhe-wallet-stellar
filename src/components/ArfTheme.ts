@@ -35,6 +35,7 @@ function getTokensForMode(mode: PaletteMode) {
       bg: "#F2F0E9", // A slightly warmer, richer paper background
       fg: "#0D0D0D", // Pitch black text
       fgMuted: "#5C5C58", // Readable secondary text (distinct from border)
+      disabled: "#A0A0A0", // Visible disabled state
       border: "#D1D1D1", // Crisp borders
       accent: "#4338CA", // Vibrant Indigo for light mode
       accentHover: "#3730A3"
@@ -44,6 +45,7 @@ function getTokensForMode(mode: PaletteMode) {
     bg: "#0D0F12", // Deep space dark blue/black
     fg: "#F2F0E9", // Bone white text
     fgMuted: "#9A9FA6", // Readable secondary text (distinct from border)
+    disabled: "#4A4D53", // Visible disabled state
     border: "#2A2E35", // Clean dark borders
     accent: "#00E676", // Vibrant Neon Mint for dark mode!
     accentHover: "#00C853"
@@ -87,9 +89,9 @@ function getComponents(mode: PaletteMode) {
             borderColor: t.accentHover,
           },
           "&.Mui-disabled": {
-            backgroundColor: t.border,
+            backgroundColor: t.disabled,
             color: t.bg,
-            borderColor: t.border,
+            borderColor: t.disabled,
           },
         },
         outlined: {
@@ -101,8 +103,8 @@ function getComponents(mode: PaletteMode) {
             borderColor: t.fg,
           },
           "&.Mui-disabled": {
-            color: t.border,
-            borderColor: t.border,
+            color: t.disabled,
+            borderColor: t.disabled,
           },
         },
         text: {
@@ -285,7 +287,7 @@ export const getTheme = (mode: PaletteMode) => {
       text: {
         primary: t.fg,
         secondary: t.fgMuted,
-        disabled: t.border,
+        disabled: t.disabled,
       },
       divider: t.border,
     },

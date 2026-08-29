@@ -44,9 +44,64 @@ import {
 } from "../backend/X402PaymentService.js";
 import { X402SpendingLedger } from "../backend/X402SpendingLedger.js";
 import { NetworkId } from "../backend/NetworkTypes.js";
+import type { Network } from "../backend/Network.js";
+import type { ShieldedHolding } from "../types/fhe.js";
 
 /** Same instance shape as AgentToolRunner's own — both just read/write chrome.storage.local, no shared in-memory state needed. */
 const spendingLedger = new X402SpendingLedger();
+
+/**
+ * Resolves a propose_shield ERC-20 `tokenSymbol` (the public underlying symbol, e.g. "DAI")
+ * to its already-deployed wrapper, against an already-fetched shielded portfolio.
+ *
+ * Same curated symbol → address registry AgentToolRunner resolved this proposal against
+ * (SwapService.getTokenBySymbol) — never TokenCache, see that method's docs. Returns null
+ * for the native symbol or an unresolvable/undeployed token; callers already special-case
+ * native shielding separately.
+ */
+async function findErc20ShieldHolding(
+  network: Network,
+  tokenSymbol: string,
+  portfolio: ShieldedHolding[]
+): Promise<{ address: string; decimals: number; wrapper: string } | null> {
+  const { default: SwapService } = await import("../backend/SwapService.js");
+  const erc20 = SwapService.getInstance().getTokenBySymbol(network.network_id, tokenSymbol);
+  if (!erc20) return null;
+  const holding = portfolio.find((h) => !h.isNative && h.underlying.toLowerCase() === erc20.address.toLowerCase());
+  if (!holding) return null;
+  return { address: erc20.address, decimals: erc20.decimals, wrapper: holding.wrapper };
+}
+
+/**
+ * Resolves a propose_unshield `tokenSymbol` against an already-fetched shielded portfolio.
+ *
+ * The schema's primary namespace is the confidential wrapper's own symbol (e.g. "aeETH",
+ * "aeDAI") — matched first. But nothing else in the wallet ever shows that name to a user, so
+ * a request naming the PUBLIC underlying token instead ("ETH", "DAI" — what a person, or a
+ * fast-path regex, actually types) is resolved the same way AgentToolRunner.prepareProposeUnshield
+ * falls back: native by currency symbol, ERC-20 by SwapService's curated registry. Mirroring
+ * that fallback here too matters, not just in the preview — this is what handleApprove and the
+ * balance-display effects re-resolve against at confirm time, and a preview that succeeded on
+ * the fallback must not fail to confirm because only half of this pair knew about it.
+ */
+async function findUnshieldHolding(
+  network: Network,
+  tokenSymbol: string,
+  portfolio: ShieldedHolding[]
+): Promise<ShieldedHolding | null> {
+  const needle = tokenSymbol.toLowerCase();
+  const direct = portfolio.find((h) => {
+    if (h.symbol.toLowerCase() === needle) return true;
+    if (h.isNative) return needle === network.currency_symbol.toLowerCase();
+    return false;
+  });
+  if (direct) return direct;
+
+  const { default: SwapService } = await import("../backend/SwapService.js");
+  const erc20 = SwapService.getInstance().getTokenBySymbol(network.network_id, tokenSymbol);
+  if (!erc20) return null;
+  return portfolio.find((h) => !h.isNative && h.underlying.toLowerCase() === erc20.address.toLowerCase()) ?? null;
+}
 
 // ─── Public types ────────────────────────────────────────────────────
 
@@ -185,8 +240,11 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
       ? String(originalArgs.amount ?? "")
       : change.amountFormatted ?? String(originalArgs.amount ?? "");
   const displaySymbol =
-    toolName === "propose_unshield"
-      ? String(originalArgs.tokenSymbol ?? "")
+    toolName === "propose_unshield" || toolName === "propose_shield"
+      // propose_shield's calldata (native or ERC-20) never gets a balanceChange symbol
+      // either — see buildErc20ShieldSimulation/decodeFheOperation's "wrap" case — so this
+      // reads the same originalArgs.tokenSymbol the proposal was built from, same as unshield.
+      ? String(originalArgs.tokenSymbol ?? network?.currency_symbol ?? "")
       : change?.symbol ?? network?.currency_symbol ?? "ETH";
 
   const summaryKey =
@@ -210,10 +268,19 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
     (async () => {
       try {
         if (toolName === "propose_unshield") {
-          const tokenSymbol = String(originalArgs.tokenSymbol ?? "").toLowerCase();
+          const tokenSymbol = String(originalArgs.tokenSymbol ?? "");
           const portfolio = await network.getShieldedPortfolio(activeAccount!);
-          const holding = portfolio.find((h) => h.symbol.toLowerCase() === tokenSymbol);
+          const holding = await findUnshieldHolding(network, tokenSymbol, portfolio);
           if (!cancelled) setBeforeBalance(holding ? Number(holding.balance) : null);
+        } else if (
+          toolName === "propose_shield" &&
+          String(originalArgs.tokenSymbol ?? "").toLowerCase() !== network.currency_symbol.toLowerCase()
+        ) {
+          // ERC-20 shield: "remaining" is the underlying token's public balance, not ETH.
+          const portfolio = await network.getShieldedPortfolio(activeAccount!);
+          const erc20 = await findErc20ShieldHolding(network, String(originalArgs.tokenSymbol ?? ""), portfolio);
+          const balanceStr = erc20 ? await network.getTokenBalance(erc20.address, address) : null;
+          if (!cancelled) setBeforeBalance(balanceStr !== null ? Number(balanceStr) : null);
         } else {
           const balanceWei = await network.getBalance(address);
           const { formatEther } = await import("ethers");
@@ -253,11 +320,23 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
     if (!network || !activeAccount || toolName === "pay_for_resource") return null;
     try {
       if (toolName === "propose_unshield") {
-        const tokenSymbol = String(originalArgs.tokenSymbol ?? "").toLowerCase();
+        const tokenSymbol = String(originalArgs.tokenSymbol ?? "");
         const portfolio = await network.getShieldedPortfolio(activeAccount);
-        const holding = portfolio.find((h) => h.symbol.toLowerCase() === tokenSymbol);
+        const holding = await findUnshieldHolding(network, tokenSymbol, portfolio);
         if (!holding) return null;
         const balance = { amount: holding.balance, symbol: holding.symbol };
+        setNewBalance(balance);
+        return balance;
+      } else if (
+        toolName === "propose_shield" &&
+        String(originalArgs.tokenSymbol ?? "").toLowerCase() !== network.currency_symbol.toLowerCase()
+      ) {
+        const tokenSymbol = String(originalArgs.tokenSymbol ?? "");
+        const portfolio = await network.getShieldedPortfolio(activeAccount);
+        const erc20 = await findErc20ShieldHolding(network, tokenSymbol, portfolio);
+        if (!erc20) return null;
+        const amount = await network.getTokenBalance(erc20.address, activeAccount.GetAddress());
+        const balance = { amount, symbol: tokenSymbol };
         setNewBalance(balance);
         return balance;
       } else {
@@ -324,13 +403,24 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
 
         case "propose_shield": {
           const amount = String(originalArgs.amount ?? "");
+          const tokenSymbol = String(originalArgs.tokenSymbol ?? "");
+          const isNativeShield = tokenSymbol.toLowerCase() === network.currency_symbol.toLowerCase();
           // Re-resolved live rather than trusted from the preview — the wrapper the preview
           // simulated against could have been superseded in the meantime.
           const portfolio = await network.getShieldedPortfolio(activeAccount);
-          const nativeHolding = portfolio.find((h) => h.isNative);
-          if (!nativeHolding) throw new Error(t("agent.confirmationCardWrapperMissing"));
 
-          hash = await network.shieldNative(activeAccount, nativeHolding.wrapper, amount);
+          if (isNativeShield) {
+            const nativeHolding = portfolio.find((h) => h.isNative);
+            if (!nativeHolding) throw new Error(t("agent.confirmationCardWrapperMissing"));
+            hash = await network.shieldNative(activeAccount, nativeHolding.wrapper, amount);
+          } else {
+            const erc20 = await findErc20ShieldHolding(network, tokenSymbol, portfolio);
+            if (!erc20) throw new Error(t("agent.confirmationCardWrapperMissing"));
+            // Network.shieldERC20 handles the approve step internally (and waits for it to
+            // land) before shielding — see its docs — so this one call covers both legs.
+            hash = await network.shieldERC20(activeAccount, erc20.address, erc20.wrapper, amount);
+          }
+
           setTxHash(hash);
           setWorkingLabel(t("agent.confirmationCardConfirming"));
           onStatusChange({ status: "pending", toolName, originalArgs, txHash: hash });
@@ -342,7 +432,7 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
           const amount = String(originalArgs.amount ?? "");
           const tokenSymbol = String(originalArgs.tokenSymbol ?? "");
           const portfolio = await network.getShieldedPortfolio(activeAccount);
-          const holding = portfolio.find((h) => h.symbol.toLowerCase() === tokenSymbol.toLowerCase());
+          const holding = await findUnshieldHolding(network, tokenSymbol, portfolio);
           if (!holding) throw new Error(t("agent.confirmationCardTokenMissing", { symbol: tokenSymbol }));
 
           // unshieldAndClaim waits out burn + decrypt + claim itself — no extra

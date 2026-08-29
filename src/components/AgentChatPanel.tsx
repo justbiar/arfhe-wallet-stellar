@@ -970,18 +970,11 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
 
           {draftSource === "vps" && (
             <>
-              <TextField
-                fullWidth
-                size="small"
-                label={t("agent.vpsUrlLabel")}
-                placeholder={t("agent.vpsUrlPlaceholder")}
-                value={draftUrl}
-                onChange={(e) => setDraftUrl(e.target.value)}
-                sx={{ mt: 2 }}
-              />
-              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
-                {t("agent.vpsUrlHelp")}
-              </Typography>
+              {/* No VPS address field shown here on purpose — draftUrl already carries the
+                  team's default (getVpsAgentUrl()'s DEFAULT_VPS_AGENT_URL fallback, see
+                  VpsAgentService.ts) and is saved as-is below. Picking "My own VPS" is meant
+                  to be a plain selection, not something that hands a raw IP:port to every
+                  tester — nobody should have to type or even see that address to use it. */}
               {address && (
                 <Button
                   size="small"

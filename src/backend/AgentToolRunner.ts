@@ -252,15 +252,60 @@ function serializeUnshieldClaim(claim: UnshieldClaim) {
 
 // ─── Read-only tool handlers ─────────────────────────────────────────
 
-async function handleGetBalance(network: Network, context: ToolExecutionContext): Promise<unknown> {
+/**
+ * Friendly chain names → the wallet's own built-in testnet ids. Deliberately only the three
+ * chains NetworkProvider actually keeps a live instance of (see its class docs — those are the
+ * only ones the wallet guarantees exist) — a mainnet id would resolve to nothing here unless the
+ * user has separately added it as a custom network, which is why a raw numeric chain id is also
+ * accepted below (falls through to NetworkProvider.getNetworkById's customNetworks lookup).
+ */
+const NAMED_NETWORKS: Record<string, NetworkId> = {
+  ethereum: NetworkId.Ethereum_Sepolia,
+  eth: NetworkId.Ethereum_Sepolia,
+  sepolia: NetworkId.Ethereum_Sepolia,
+  arbitrum: NetworkId.Arbitrum_Sepolia,
+  base: NetworkId.Base_Sepolia,
+};
+
+/**
+ * Resolves the `network` arg a cross-chain-aware read-only tool (currently just get_balance)
+ * accepts — a friendly name ("base", "arbitrum", "ethereum") or a raw chain id number/string for
+ * a custom network the user added themselves. Falls back to `activeNetwork` (the wallet's
+ * current active network, same as every other tool already uses) when the arg is absent, so
+ * omitting it is always safe and behaves exactly as before this existed.
+ *
+ * Deliberately NOT used by propose_send/shield/unshield — those must only ever act on the
+ * network the user is actually looking at, never one the model picked, since a broadcast on the
+ * wrong chain is a real-funds mistake a read-only balance check can't cause.
+ */
+function resolveBalanceCheckNetwork(args: Record<string, unknown>, activeNetwork: Network): Network {
+  const requested = args.network;
+  if (requested === undefined || requested === null || requested === "") return activeNetwork;
+  if (!deps) return activeNetwork; // unreachable in practice (executeToolCall already checked), keeps this function total
+
+  const raw = String(requested).trim();
+  const networkId = /^\d+$/.test(raw) ? Number(raw) : NAMED_NETWORKS[raw.toLowerCase()];
+  if (networkId === undefined) {
+    throw new Error(`Bilinmeyen ağ: "${raw}". Desteklenen: ethereum, arbitrum, base (ya da eklediğiniz özel bir ağın chain ID'si).`);
+  }
+  return deps.getNetwork(String(networkId));
+}
+
+async function handleGetBalance(network: Network, context: ToolExecutionContext, args: Record<string, unknown>): Promise<unknown> {
   // Network.getBalance returns the native balance in wei. Converting an 18-digit integer to
   // decimal ETH is exactly the kind of arithmetic a model gets wrong under its breath — so
   // this does the division here with ethers' formatEther (same as get_shielded_balance's
   // formatTokenAmount), instead of handing the model raw wei and hoping it divides by 1e18
   // correctly in prose. balanceWei is still included for anything that genuinely needs the
   // exact integer (e.g. comparing against another wei amount).
-  const balanceWei = await network.getBalance(context.account);
-  return { address: context.account, balance: formatEther(balanceWei), balanceWei };
+  const targetNetwork = resolveBalanceCheckNetwork(args, network);
+  const balanceWei = await targetNetwork.getBalance(context.account);
+  return {
+    address: context.account,
+    network: targetNetwork.network_name,
+    balance: formatEther(balanceWei),
+    balanceWei,
+  };
 }
 
 /**
@@ -437,6 +482,62 @@ async function prepareProposeSend(
   };
 }
 
+/**
+ * Builds an ERC-20 shield preview's simulation.
+ *
+ * The real confirm-time flow (Network.shieldERC20) transparently sends an `approve` first
+ * whenever the existing allowance is short — that's the common case for a token's first
+ * shield. Running `shield()` itself through TransactionSimulator's eth_call pre-flight
+ * would revert in exactly that case (no allowance yet), turning a perfectly normal first
+ * shield into a misleading "simulation failed" error. So: only simulate `shield()` for
+ * real once the allowance already covers it; otherwise fall back to a manually-built
+ * passing result — same spirit as ConfirmationCard's static rate-truncation note, domain
+ * knowledge filling in for something a live eth_call can't usefully tell us.
+ */
+async function buildErc20ShieldSimulation(
+  network: Network,
+  fromAddress: string,
+  wrapper: string,
+  underlyingAddress: string,
+  amountValue: bigint
+): Promise<SimResult> {
+  const { Interface } = await import("ethers");
+  const provider = await getEthersProvider(network);
+  const allowanceIface = new Interface(["function allowance(address owner, address spender) view returns (uint256)"]);
+
+  let hasAllowance = false;
+  try {
+    const hex = await provider.call({
+      to: underlyingAddress,
+      data: allowanceIface.encodeFunctionData("allowance", [fromAddress, wrapper]),
+    });
+    hasAllowance = !!hex && hex !== "0x" && BigInt(hex) >= amountValue;
+  } catch {
+    hasAllowance = false;
+  }
+
+  if (hasAllowance) {
+    const shieldIface = new Interface(["function shield(address to, uint256 amount) returns (bytes32)"]);
+    return simulateAndEnrich(provider, {
+      from: fromAddress,
+      to: wrapper,
+      value: "0",
+      data: shieldIface.encodeFunctionData("shield", [fromAddress, amountValue.toString()]),
+    });
+  }
+
+  return {
+    success: true,
+    balanceChanges: [],
+    warnings: ["🛡️ Kalkanlama (Shield): Önce bir onay (approve) işlemi, ardından shield işlemi yapılacak."],
+    riskLevel: "LOW",
+    operationType: "wrap",
+    isContractInteraction: true,
+    isNewRecipient: false,
+    contractAgeDays: null,
+  };
+}
+
 async function prepareProposeShield(
   network: Network,
   context: ToolExecutionContext,
@@ -444,14 +545,38 @@ async function prepareProposeShield(
 ): Promise<PreparedProposal> {
   const { amount, amountNumber } = requirePositiveAmount(args);
   const tokenSymbol = requireTokenSymbol(args, true)!;
+  const isNative = tokenSymbol.toLowerCase() === network.currency_symbol.toLowerCase();
 
-  // Same registry gap as propose_send: only the native wrapper's address is resolvable
-  // without TokenCache, so ERC-20 shielding can't be safely previewed here yet.
-  if (tokenSymbol.toLowerCase() !== network.currency_symbol.toLowerCase()) {
-    throw new ToolArgumentError(
-      `"${tokenSymbol}" için shield önizlemesi şu an desteklenmiyor — bu araç yalnızca native token ` +
-      `(${network.currency_symbol}) shield işlemlerini önizleyebilir.`
-    );
+  if (!isNative) {
+    // Curated symbol → address registry (SwapService's, not TokenCache's — see
+    // getTokenBySymbol's docs) closes the gap that used to block every non-native shield.
+    const { default: SwapService } = await import("./SwapService.js");
+    const erc20 = SwapService.getInstance().getTokenBySymbol(network.network_id, tokenSymbol);
+    if (!erc20) {
+      throw new ToolArgumentError(
+        `"${tokenSymbol}" için shield önizlemesi şu an desteklenmiyor — bu araç yalnızca native token ` +
+        `(${network.currency_symbol}) ve bilinen ERC-20'leri (ör. USDC, DAI) önizleyebilir.`
+      );
+    }
+
+    const wrapper = await network.getWrapperFor(erc20.address);
+    if (!wrapper) {
+      throw new ToolArgumentError(`"${tokenSymbol}" için bu ağda henüz bir gizli (shielded) sürüm deploy edilmemiş.`);
+    }
+
+    const balanceStr = await network.getTokenBalance(erc20.address, context.account);
+    const balance = Number(balanceStr);
+
+    return {
+      balance,
+      amountNumber,
+      buildPreview: async () => {
+        const { parseUnits } = await import("ethers");
+        const amountValue = parseUnits(amount, erc20.decimals);
+        const simulation = await buildErc20ShieldSimulation(network, context.account, wrapper, erc20.address, amountValue);
+        return { requiresConfirmation: true, toolName: "propose_shield", originalArgs: args, simulation };
+      },
+    };
   }
 
   const account = requireAccount(context);
@@ -501,30 +626,47 @@ async function prepareProposeUnshield(
   const tokenSymbol = requireTokenSymbol(args, true)!;
   const account = requireAccount(context);
 
-  // Unlike send/shield, the confidential symbol space here matches get_shielded_balance's
-  // exactly (both describe the shielded wrapper, e.g. "aeETH") — no registry gap, so this
-  // works for any shielded token, not just the native wrapper.
+  // The schema asks for the confidential wrapper's own symbol (e.g. "aeETH"), and that's
+  // matched first — no registry gap there, get_shielded_portfolio already returns it. But in
+  // practice a request (especially a small local model's, or a fast-path regex match) is far
+  // more likely to name the PUBLIC underlying token ("ETH", "DAI") than its confidential
+  // wrapper name, which nothing else in the wallet ever surfaces to the user. Falling back to
+  // that — native by currency symbol, ERC-20 by the same curated registry propose_shield
+  // resolves against — turns "ETH'imi unshield et" into a working proposal instead of a
+  // guaranteed "Shielded token bulunamadı" for the single most natural way to ask.
   const portfolio = await network.getShieldedPortfolio(account);
-  const holding = portfolio.find((h) => h.symbol.toLowerCase() === tokenSymbol.toLowerCase());
-  if (!holding) {
+  const holding = portfolio.find((h) => {
+    if (h.symbol.toLowerCase() === tokenSymbol.toLowerCase()) return true;
+    if (h.isNative) return tokenSymbol.toLowerCase() === network.currency_symbol.toLowerCase();
+    return false;
+  });
+  const resolvedHolding =
+    holding ??
+    (await (async () => {
+      const { default: SwapService } = await import("./SwapService.js");
+      const erc20 = SwapService.getInstance().getTokenBySymbol(network.network_id, tokenSymbol);
+      if (!erc20) return undefined;
+      return portfolio.find((h) => !h.isNative && h.underlying.toLowerCase() === erc20.address.toLowerCase());
+    })());
+  if (!resolvedHolding) {
     throw new ToolArgumentError(`Shielded token bulunamadı: "${tokenSymbol}".`);
   }
 
   return {
     // Confidential balance, already decrypted and decimal-formatted by getShieldedPortfolio
     // — exactly the unit `amount` is in, so no conversion needed for the ratio check.
-    balance: Number(holding.balance),
+    balance: Number(resolvedHolding.balance),
     amountNumber,
     buildPreview: async () => {
       const { Interface, parseUnits } = await import("ethers");
       // Mirrors Network.SHIELDED_ABI's unshield fragment exactly (see Network.unshield()).
       const iface = new Interface(["function unshield(address from, address to, uint64 amount)"]);
-      const amountValue = parseUnits(amount, holding.confidentialDecimals);
+      const amountValue = parseUnits(amount, resolvedHolding.confidentialDecimals);
 
       const provider = await getEthersProvider(network);
       const simulation = await simulateAndEnrich(provider, {
         from: context.account,
-        to: holding.wrapper,
+        to: resolvedHolding.wrapper,
         value: "0",
         data: iface.encodeFunctionData("unshield", [context.account, context.account, amountValue]),
       });
@@ -715,7 +857,7 @@ export async function executeToolCall(
 
       switch (toolName as ReadOnlyTool) {
         case "get_balance":
-          return { result: await handleGetBalance(network, context) };
+          return { result: await handleGetBalance(network, context, args) };
         case "get_shielded_balance":
           return { result: await handleGetShieldedBalance(network, requireAccount(context), args) };
         case "get_shielded_portfolio":

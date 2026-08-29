@@ -234,6 +234,19 @@ export default class SwapService {
   }
 
   /**
+   * Curated symbol → token lookup for a network (case-insensitive, native excluded).
+   *
+   * This is the only symbol → contract-address registry that doesn't live behind
+   * TokenCache (a UI-owned, held-balance-driven cache) — AgentToolRunner uses it to resolve
+   * an ERC-20 tokenSymbol (e.g. "DAI") for propose_send/propose_shield previews without
+   * needing the wallet's live token list.
+   */
+  getTokenBySymbol(networkId: NetworkId, symbol: string): SwapToken | undefined {
+    const needle = symbol.toLowerCase();
+    return this.getTokens(networkId).find((t) => !t.isNative && t.symbol.toLowerCase() === needle);
+  }
+
+  /**
    * The curated list plus whatever else the wallet holds.
    *
    * The curated entries carry hand-checked decimals and a colour; a held token that is not

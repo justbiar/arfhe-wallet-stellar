@@ -10,7 +10,7 @@ import { env, SELF } from "cloudflare:test";
  * görüldü" bilgisini tutar.
  */
 
-const EXTENSION_ORIGIN = "chrome-extension://ajfpejolnhgeflhgjmboikiffpdlhngi";
+const EXTENSION_ORIGIN = "chrome-extension://cdhfecdlpblpdngkadiigjmodedapoih";
 
 function postRegister(body: unknown, origin: string = EXTENSION_ORIGIN) {
   return SELF.fetch("https://proxy.example/users/register", {

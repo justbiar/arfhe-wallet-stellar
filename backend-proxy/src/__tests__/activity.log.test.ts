@@ -9,7 +9,7 @@ import { env, SELF } from "cloudflare:test";
  * (send/shield/unshield) ve zaman damgası.
  */
 
-const EXTENSION_ORIGIN = "chrome-extension://ajfpejolnhgeflhgjmboikiffpdlhngi";
+const EXTENSION_ORIGIN = "chrome-extension://cdhfecdlpblpdngkadiigjmodedapoih";
 
 function postActivity(body: unknown, origin: string = EXTENSION_ORIGIN) {
   return SELF.fetch("https://proxy.example/activity/log", {

@@ -24,7 +24,16 @@ const AppLayout: React.FC = () => {
             <ArfBar network={network} setNetwork={setNetwork} />
           </Box>
 
-          <Box component="main" id="main-content" tabIndex={-1} sx={{ flex: 1, mt: '56px', mb: '80px', overflowY: 'auto', minHeight: 0 }}>
+          {/* Padding, not margin.
+              The header and nav are fixed, so they take no flex space and `flex: 1` hands
+              this box the full height — and then 56px + 80px of margin were added on top
+              of that, making the content area 136px taller than the window it sits in.
+              Pages that pad their own bottom and scroll never showed it; the agent chat,
+              which sizes itself with `height: 100%` so its message list can scroll
+              independently, inherited the overflow and ran off the bottom of the
+              extension. Padding offsets the content under the fixed bars without growing
+              the box. */}
+          <Box component="main" id="main-content" tabIndex={-1} sx={{ flex: 1, pt: '56px', pb: '80px', overflowY: 'auto', minHeight: 0 }}>
             <Outlet />
           </Box>
 

@@ -30,12 +30,18 @@ const ALARM_TX_MONITOR = "arfhe_tx_monitor";
 const ALARM_INCOMING_SCAN = "arfhe_incoming_scan";
 const ALARM_BADGE_SYNC = "arfhe_badge_sync";
 const ALARM_KEEPALIVE = "arfhe_keepalive";
+const ALARM_PENDING_REGISTRATIONS = "arfhe_pending_registrations";
 
 const STORAGE_KEY_NOTIFICATIONS = "arfhe_notifications";
 const STORAGE_KEY_PENDING_TXS = "arfhe_pending_txs";
 const STORAGE_KEY_RPC_URLS = "arfhe_rpc_urls";
 const STORAGE_KEY_NOTIFICATION_PREFS = "arfhe_notification_prefs";
 const STORAGE_KEY_INCOMING_CURSOR = "arfhe_incoming_cursor";
+/** Queue of failed backend-proxy /users/register calls; owned jointly with Auth.tsx. */
+const STORAGE_KEY_PENDING_REGISTRATIONS = "pendingUserRegistrations";
+/** The agent-proxy base URL, mirrored here from Auth.tsx's `VITE_AGENT_PROXY_URL` since a
+ *  statically-copied service worker has no `import.meta.env` of its own. */
+const STORAGE_KEY_AGENT_PROXY_URL = "arfhe_agent_proxy_url";
 
 const TX_POLL_INTERVAL_MINUTES = 0.25; // 15 seconds
 const BADGE_SYNC_INTERVAL_MINUTES = 1; // 1 minute
@@ -50,6 +56,14 @@ const MAX_TX_POLLS = 240; // 240 polls × 15s = 1 hour max
  * received-funds notification a minute late is still a notification the same day.
  */
 const INCOMING_SCAN_INTERVAL_MINUTES = 1;
+
+/** How often a still-running worker retries the /users/register backlog. */
+const PENDING_REGISTRATION_INTERVAL_MINUTES = 60;
+/** Give up on one registration after this many failed attempts. */
+const MAX_REGISTRATION_ATTEMPTS = 10;
+/** ...or once it's this old, whichever comes first — a wallet that never got online
+ *  again shouldn't leave a permanently-retried entry sitting in storage. */
+const MAX_REGISTRATION_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Arrivals fetched per tick, and how many are announced one by one.
@@ -105,12 +119,14 @@ chrome.runtime.onInstalled.addListener(async () => {
   await hardenSessionStorage();
   await setupAlarms();
   await restoreState();
+  await retryPendingRegistrations();
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await hardenSessionStorage();
   await setupAlarms();
   await restoreState();
+  await retryPendingRegistrations();
 });
 
 async function setupAlarms() {
@@ -125,6 +141,13 @@ async function setupAlarms() {
   chrome.alarms.create(ALARM_INCOMING_SCAN, {
     delayInMinutes: 0.2,
     periodInMinutes: INCOMING_SCAN_INTERVAL_MINUTES,
+  });
+
+  // Pending /users/register retries — keeps working for as long as the worker stays
+  // resident, on top of the onInstalled/onStartup pass.
+  chrome.alarms.create(ALARM_PENDING_REGISTRATIONS, {
+    delayInMinutes: PENDING_REGISTRATION_INTERVAL_MINUTES,
+    periodInMinutes: PENDING_REGISTRATION_INTERVAL_MINUTES,
   });
 }
 
@@ -158,6 +181,69 @@ async function restoreState() {
   }
 }
 
+// ─── Pending user registration retry ────────────────────────────────
+//
+// Auth.tsx's POST /users/register call is fire-and-forget so a flaky connection never
+// blocks onboarding — but that means a failed call would otherwise be lost for good. When
+// it fails, Auth.tsx appends {wallet_address, source, timestamp, attempts: 0} to
+// STORAGE_KEY_PENDING_REGISTRATIONS. This worker is what actually gets it there eventually:
+// once on every startup/install, and every PENDING_REGISTRATION_INTERVAL_MINUTES while it
+// stays resident.
+
+async function retryPendingRegistrations() {
+  let queue;
+  let proxyBaseUrl;
+  try {
+    const result = await chrome.storage.local.get([
+      STORAGE_KEY_PENDING_REGISTRATIONS,
+      STORAGE_KEY_AGENT_PROXY_URL,
+    ]);
+    queue = Array.isArray(result[STORAGE_KEY_PENDING_REGISTRATIONS])
+      ? result[STORAGE_KEY_PENDING_REGISTRATIONS]
+      : [];
+    proxyBaseUrl = result[STORAGE_KEY_AGENT_PROXY_URL];
+  } catch {
+    return; // storage unavailable; try again next tick
+  }
+
+  if (queue.length === 0) return;
+  if (!proxyBaseUrl) return; // never told which backend to call; leave the queue as-is
+
+  const remaining = [];
+  for (const entry of queue) {
+    if (!entry || typeof entry.wallet_address !== "string" || typeof entry.source !== "string") {
+      continue; // malformed entry, drop it
+    }
+
+    try {
+      const res = await fetch(`${proxyBaseUrl}/users/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallet_address: entry.wallet_address, source: entry.source }),
+      });
+      if (res.ok) continue; // registered — drop from the queue
+      remaining.push({ ...entry, attempts: (entry.attempts || 0) + 1 });
+    } catch {
+      remaining.push({ ...entry, attempts: (entry.attempts || 0) + 1 });
+    }
+  }
+
+  // Give up on entries that have failed too many times or aged out, so a permanently
+  // invalid record (or a backend that's gone for good) doesn't retry forever.
+  const now = Date.now();
+  const survivors = remaining.filter(
+    (entry) =>
+      entry.attempts <= MAX_REGISTRATION_ATTEMPTS &&
+      now - (entry.timestamp || 0) <= MAX_REGISTRATION_AGE_MS
+  );
+
+  try {
+    await chrome.storage.local.set({ [STORAGE_KEY_PENDING_REGISTRATIONS]: survivors });
+  } catch {
+    // Best-effort; the next tick re-reads whatever is still in storage.
+  }
+}
+
 // ─── Alarm Handler ──────────────────────────────────────────────────
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
@@ -173,6 +259,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       break;
     case ALARM_KEEPALIVE:
       // Just a keepalive ping — prevents SW from being killed
+      break;
+    case ALARM_PENDING_REGISTRATIONS:
+      await retryPendingRegistrations();
       break;
   }
 });

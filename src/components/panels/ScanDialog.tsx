@@ -54,7 +54,11 @@ export default function ScanDialog({ open, onClose }: { open: boolean; onClose: 
         setMsg("Wallet initializing — try again");
         setStatus("warning");
       } else {
-        setMsg("Connection failed — check the URI");
+        // The service's own message, not a generic one. Everything reaching here is already
+        // written for a person (see WalletConnectService.relayDiagnosis) and says something
+        // "check the URI" does not — a relay that never came up is not a typo in the URI,
+        // and telling the user to re-read a string they pasted correctly wastes their time.
+        setMsg(errMsg || "Connection failed — check the URI");
         setStatus("error");
       }
     } finally {

@@ -35,6 +35,7 @@
  */
 export const READ_ONLY_TOOLS = [
   "get_balance",
+  "get_accounts",
   "get_token_balance",
   "get_token_balances",
   "get_token_metadata",

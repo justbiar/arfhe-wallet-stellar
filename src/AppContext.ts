@@ -118,6 +118,18 @@ export class AppContext {
         const target = address.toLowerCase();
         return this.accountManager.GetAll().find((a) => a.GetAddress()?.toLowerCase() === target);
       },
+      // Name + address only. Account carries the signer too, and handing the whole object to
+      // a module that talks to a model is exactly the mistake this shape prevents — there is
+      // no path from this list to a key.
+      listAccounts: () => {
+        const activeIndex = this.accountManager.GetActiveIndex();
+        return this.accountManager.GetAll().map((account, index) => ({
+          index,
+          name: account.GetName(),
+          address: account.GetAddress() ?? "",
+          isActive: index === activeIndex,
+        }));
+      },
       // x402 (Faz 3) only targets Base Sepolia for now — any other network means "not
       // supported here", handled by AgentToolRunner as a normal tool error, not a crash.
       getUsdcTokenIdentity: (networkId) => {

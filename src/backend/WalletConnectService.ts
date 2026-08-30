@@ -6,7 +6,26 @@ import type AccountManager from "./AccountManager";
 import { PhishingDetector, PhishingCheckResult } from "./PhishingDetector";
 
 // --- CONFIGURATION ---
-const PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || "eb563a65765dfb07525fc699292aad02";
+
+/**
+ * The WalletConnect (Reown) project this build connects with.
+ *
+ * Deliberately no fallback. It used to default to a public demo project id, and that is not
+ * a working default — it is a broken one that takes a while to look broken. The relay
+ * authorises the WebSocket against the project's own origin allowlist, and this extension's
+ * origin (chrome-extension://<id>) is not on a demo project's list, so every pairing died
+ * with `code: 3000 (Unauthorized: origin not allowed)` reported through pino at level 50 —
+ * an object in the console with its message behind a disclosure triangle. What the user saw
+ * was a spinner that never stopped.
+ *
+ * Same reasoning as Auth.tsx's Web3Auth client id, which dropped its own public-testing
+ * fallback for the same class of reason: a default that quietly points at somebody else's
+ * project makes a misconfigured build look configured.
+ *
+ * Set VITE_WALLETCONNECT_PROJECT_ID (see .env.example), and add this extension's origin to
+ * that project's allowed origins in the Reown dashboard — the id alone is not enough.
+ */
+const PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID ?? "";
 
 const METADATA = {
     name: "Arfhe Wallet",
@@ -15,21 +34,27 @@ const METADATA = {
     icons: ["https://avatars.githubusercontent.com/u/37784886"]
 };
 
-// Supported EIP-155 chains
-const SUPPORTED_CHAINS = [
-    "eip155:1",       // Ethereum Mainnet
+/**
+ * Chains advertised to dApps during session negotiation.
+ *
+ * Exactly NetworkProvider.BUILT_IN_NETWORKS — the three testnets the wallet actually ships
+ * with. This list used to carry thirteen chains, mainnets included, and every one of them
+ * was handed to the site in approveSession's `accounts`. The session then connected
+ * cleanly and every subsequent request died: RequestDialog only signs when the requested
+ * chain IS the active one, and the wallet has no mainnet to be active on. A site told it
+ * had Ethereum mainnet had no way to learn otherwise until the user had already approved
+ * and the first signature silently failed.
+ *
+ * Advertising only what the wallet can sign on moves that failure to negotiation time,
+ * where WalletConnect has a protocol for it and the site can say so up front.
+ *
+ * This is also a testnet build (see manifest.json's version_name) — a mainnet entry here
+ * offers real-funds chains from a wallet whose own release notes tell users not to.
+ */
+export const SUPPORTED_CHAINS = [
     "eip155:11155111", // Ethereum Sepolia
-    "eip155:42161",   // Arbitrum One
-    "eip155:421614",  // Arbitrum Sepolia
-    "eip155:8453",    // Base Mainnet
-    "eip155:84532",   // Base Sepolia
-    "eip155:10",      // Optimism
-    "eip155:11155420", // Optimism Sepolia
-    "eip155:137",     // Polygon
-    "eip155:43114",   // Avalanche C-Chain
-    "eip155:56",      // BNB Smart Chain
-    "eip155:59144",   // Linea
-    "eip155:1329",    // Sei
+    "eip155:421614",   // Arbitrum Sepolia
+    "eip155:84532",    // Base Sepolia
 ];
 
 /**
@@ -85,6 +110,47 @@ export interface WalletConnectProposal {
     phishingResult?: PhishingCheckResult;
 }
 
+/**
+ * How long a pairing attempt may run before it is called a failure.
+ *
+ * Generous rather than snappy: a slow phone hotspot legitimately takes several seconds to
+ * open the relay socket and subscribe, and cutting off a connection that would have worked
+ * is its own bug. Fifteen seconds is well past that and well short of "the user has walked
+ * away".
+ */
+/**
+ * This extension's own id, for an error that has to tell the user what to allowlist.
+ *
+ * `typeof` rather than optional chaining: `chrome` is an undeclared identifier outside an
+ * extension (tests, any non-extension host), and `chrome?.runtime` still throws
+ * ReferenceError on one — optional chaining guards null, not undeclared.
+ */
+function extensionId(): string {
+    try {
+        if (typeof chrome !== "undefined" && chrome?.runtime?.id) return chrome.runtime.id;
+    } catch { /* not an extension context */ }
+    return "<uzanti-id>";
+}
+
+const PAIR_TIMEOUT_MS = 15_000;
+
+/** Rejects with `describe()`'s message if `promise` has not settled within `ms`. */
+async function withTimeout<T>(promise: Promise<T>, ms: number, describe: () => string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout>;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise<never>((_, reject) => {
+                timer = setTimeout(() => reject(new Error(describe())), ms);
+            }),
+        ]);
+    } finally {
+        // Cleared on the winning path too — a pending timer keeps the popup's event loop
+        // holding a reference to this rejection for as long as it runs.
+        clearTimeout(timer!);
+    }
+}
+
 export class WalletConnectService {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- WC SignClient instance type
     public client: any;
@@ -96,7 +162,22 @@ export class WalletConnectService {
     private onSessionUpdateCallback: (() => void) | null = null;
 
     private accountManager: AccountManager;
-    private isInitializing = false;
+    /**
+     * The in-flight init(), so concurrent callers await the SAME one.
+     *
+     * A boolean here was worse than nothing. init() returned early on it — `if (this.client
+     * || this.isInitializing) return;` — so a caller arriving while SignClient.init() was
+     * still running got a resolved promise and an undefined client, and pair() went straight
+     * to its own "Client not initialized" throw. That is exactly the timing of the real
+     * flow: WalletConnectManager fires init() on mount without awaiting it, and the user
+     * scans or pastes a URI seconds later, while the SDK is still opening its store and
+     * setting up crypto. Waiting a moment and trying again "fixed" it, which is what made it
+     * look intermittent rather than broken.
+     */
+    private initPromise: Promise<void> | null = null;
+
+    /** Last transport failure the relay reported, or null while it is healthy. */
+    private lastRelayError: string | null = null;
 
     // Deduplicate proposal events
     private processedProposalIds = new Set<number>();
@@ -105,11 +186,22 @@ export class WalletConnectService {
         this.accountManager = accountManager;
     }
 
-    async init() {
-        if (this.client || this.isInitializing) return;
-        this.isInitializing = true;
+    async init(): Promise<void> {
+        if (this.client) return;
+        // Join the in-flight init rather than starting a second one or returning early —
+        // see initPromise's own docs for the bug this closes.
+        if (this.initPromise) return this.initPromise;
 
-        try {
+        if (!PROJECT_ID) {
+            // Refused up front rather than at pairing time: without an id there is nothing to
+            // retry, and the message has to name the fix rather than describe a symptom.
+            throw new Error(
+                "WalletConnect yapılandırılmamış: VITE_WALLETCONNECT_PROJECT_ID tanımlı değil. " +
+                "cloud.reown.com üzerinden bir Project ID alıp .env dosyasına ekleyin."
+            );
+        }
+
+        this.initPromise = (async () => {
             // Use the declared production URL — window.location.origin returns
             // "chrome-extension://..." in extension context which WalletConnect rejects.
             this.client = await SignClient.init({
@@ -119,16 +211,21 @@ export class WalletConnectService {
             });
 
             this.setupEventListeners();
+            this.watchRelay();
 
             // Restore active session if any
             if (this.client.session.length) {
                 this.session = this.client.session.values[this.client.session.length - 1];
             }
-        } catch (e) {
-            // Re-throw so callers (pair / handleWcConnect) can surface the error
-            throw e;
+        })();
+
+        try {
+            await this.initPromise;
         } finally {
-            this.isInitializing = false;
+            // Cleared either way: a failed init must be retryable (a dropped network on the
+            // first attempt should not disable WalletConnect for the rest of the session),
+            // and once it succeeds `this.client` is the guard that matters.
+            this.initPromise = null;
         }
     }
 
@@ -273,7 +370,17 @@ export class WalletConnectService {
 
 
         try {
-            await this.client.pair({ uri });
+            // Bounded, because SignClient.pair() has no timeout of its own.
+            //
+            // Pairing subscribes to the pairing topic on the relay, and when that WebSocket
+            // never comes up the SDK simply keeps retrying — the promise neither resolves nor
+            // rejects. The UI has no state for that: ScanDialog sets "connecting" before the
+            // await and only leaves it in resolve or reject, so the user watches a spinner
+            // forever with nothing written down anywhere about why.
+            //
+            // A rejection is strictly better than a hang even when the cause is transient:
+            // the user gets told, and can retry.
+            await withTimeout(this.client.pair({ uri }), PAIR_TIMEOUT_MS, () => this.relayDiagnosis());
         } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             if (msg.includes("Pairing already exists")) {
@@ -283,6 +390,64 @@ export class WalletConnectService {
                 throw new Error("URI_EXPIRED");
             }
             throw e;
+        }
+    }
+
+    /**
+     * Subscribes to the relay's own transport events, purely to keep the last failure.
+     *
+     * The SDK reports these through pino at level 50, which lands in the console as an object
+     * whose message sits behind a disclosure triangle — technically present, practically
+     * invisible, and impossible to show a user. Keeping the text here lets relayDiagnosis()
+     * put the actual cause in front of whoever hit it.
+     */
+    private watchRelay() {
+        const relayer = this.client?.core?.relayer;
+        if (!relayer?.on) return;
+        try {
+            relayer.on("relayer_error", (e: unknown) => {
+                this.lastRelayError = e instanceof Error ? e.message : String(e);
+            });
+            relayer.on("relayer_disconnect", () => {
+                this.lastRelayError = this.lastRelayError ?? "Relay bağlantısı koptu.";
+            });
+            relayer.on("relayer_connect", () => {
+                // A successful connect clears it: a stale error from an earlier attempt would
+                // otherwise be reported as the reason for a completely different failure.
+                this.lastRelayError = null;
+            });
+        } catch {
+            // Older SDK without these events — diagnosis falls back to the connected flag.
+        }
+    }
+
+    /**
+     * What the relay looked like when something timed out — attached to the error so a hang
+     * reports a cause instead of just "it did not finish".
+     */
+    private relayDiagnosis(): string {
+        try {
+            const relayer = this.client?.core?.relayer;
+            if (!relayer) return "WalletConnect istemcisi hazır değil.";
+
+            // The relay's own words first, when there are any — anything else here is this
+            // module guessing from a boolean.
+            if (this.lastRelayError) {
+                // "origin not allowed" is a configuration answer, not a network one, and the
+                // generic wording sent people to check their wifi.
+                if (/origin not allowed/i.test(this.lastRelayError)) {
+                    return (
+                        "WalletConnect Project ID bu uzantının kaynağına izin vermiyor. " +
+                        `Reown panelinde projenin izinli kaynaklarına "chrome-extension://${extensionId()}" ekleyin.`
+                    );
+                }
+                return `Relay bağlantısı kurulamadı: ${this.lastRelayError}`;
+            }
+            return relayer.connected
+                ? "Relay bağlantısı açık görünüyor — dApp'in QR kodu süresi dolmuş olabilir, yenileyip tekrar deneyin."
+                : "Relay sunucusuna (relay.walletconnect.org) bağlanılamadı — ağ bağlantınızı veya VPN/güvenlik duvarı ayarlarınızı kontrol edin.";
+        } catch {
+            return "Relay durumu okunamadı.";
         }
     }
 

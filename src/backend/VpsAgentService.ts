@@ -25,8 +25,14 @@ const AGENT_SOURCE_STORAGE_KEY = "arfhe_agent_source";
  * to go find and type this address themselves. Still fully overridable (and clearable, which
  * falls straight back to this same default rather than to a blank field) via setVpsAgentUrl —
  * this is a default, not a hardcoded destination.
+ *
+ * Routed through mcp.arfhewallet.dev (nginx + Let's Encrypt on the VPS, terminating TLS and
+ * reverse-proxying to this same Express app on :3000 — see /etc/nginx/sites-available/
+ * mcp.arfhewallet.dev.conf on the box) rather than the bare IP over plain HTTP. This same base
+ * URL is also what getMcpAccessToken() logs into, and a wallet-signature login request has no
+ * business going out unencrypted.
  */
-const DEFAULT_VPS_AGENT_URL = "http://83.229.86.69:3000";
+const DEFAULT_VPS_AGENT_URL = "https://mcp.arfhewallet.dev";
 
 // "vps" ("Kendi VPS'im") is retired from the settings dialog — it pointed at a VPS the team
 // itself runs, not the user's own infrastructure, so "your own VPS" was a misleading label for a

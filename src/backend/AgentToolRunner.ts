@@ -33,7 +33,7 @@ import type { Network } from "./Network.js";
 import { NetworkId } from "./NetworkTypes.js";
 import type Account from "./Account.js";
 import { TransactionSimulator, type SimResult } from "./TransactionSimulator.js";
-import { isDomainName, resolveDomain } from "./DomainResolver.js";
+import { isDomainName } from "./DomainResolver.js";
 import {
   AgentPolicyEngine,
   READ_ONLY_TOOLS,
@@ -122,6 +122,16 @@ export interface AgentToolRunnerDeps {
    * IMMEDIATE_TOOLS's own docs for why create_account is allowed to skip a confirmation card.
    */
   createAccount(name?: string): { index: number; address: string; name: string };
+  /**
+   * Every account in this wallet — the same list the account switcher shows, in the same
+   * order, with the display names the user gave them.
+   *
+   * Needed because "send 1 LINK to biar" names an account, not an address, and the runner
+   * had no way to know that "biar" was one of the user's own wallets. Deliberately the
+   * wallet's own accounts only: this is not an address book, and nothing here comes from a
+   * counterparty.
+   */
+  listAccounts(): { index: number; name: string; address: string; isActive: boolean }[];
 }
 
 export interface ConnectedSitesInfo {
@@ -332,6 +342,80 @@ async function handleGetBalance(network: Network, context: ToolExecutionContext,
 }
 
 /**
+ * Every curated token on a network, with what this account actually holds of each.
+ *
+ * get_balance answers for the native coin alone, which left the agent unable to answer the
+ * most ordinary question a wallet gets asked — "what do I have?" — for anything else. It
+ * would report 0.4 ETH and say nothing about the USDC sitting next to it, and a user asking
+ * to send USDC got told the wallet could not see any.
+ *
+ * The list is SwapService's curated registry (symbol, address and decimals all read off the
+ * contracts themselves), not a chain scan: this answers "which of the tokens this wallet
+ * understands do I hold", and every entry it names is one the send/shield tools can then act
+ * on. A token the wallet has no registry entry for is deliberately absent — naming one the
+ * next tool call would reject is worse than not naming it.
+ *
+ * Zero balances are kept rather than filtered. "You have no USDC" is a real answer, and a
+ * model handed only non-empty rows tends to claim the token does not exist on the network.
+ */
+async function handleGetTokenBalances(network: Network, context: ToolExecutionContext): Promise<unknown> {
+  const { default: SwapService } = await import("./SwapService.js");
+  const curated = SwapService.getInstance().getTokens(network.network_id);
+
+  const nativeWei = await network.getBalance(context.account);
+  const tokens = await Promise.all(
+    curated
+      .filter((t) => !t.isNative)
+      .map(async (t) => ({
+        symbol: t.symbol,
+        name: t.name,
+        address: t.address,
+        decimals: t.decimals,
+        // Network.getTokenBalance swallows its own failures and returns "0" — a token whose
+        // RPC read failed is indistinguishable from one held at zero. Worth knowing, but not
+        // worth failing the whole listing over: the other rows are still correct.
+        balance: await network.getTokenBalance(t.address, context.account),
+      }))
+  );
+
+  return {
+    address: context.account,
+    network: network.network_name,
+    native: { symbol: network.currency_symbol, balance: formatEther(nativeWei) },
+    tokens,
+  };
+}
+
+/**
+ * The wallet's own accounts, so the agent can act on the names the user actually uses.
+ *
+ * People do not refer to their wallets by address. "Send it to biar" or "move some to
+ * New User #1" is how the request arrives, and until this existed the agent had no way to
+ * turn that into anything — it could see only the one active account it was given, so a
+ * perfectly clear instruction came back as a request for a 0x address the user already
+ * knew the wallet held.
+ *
+ * Addresses only, never keys or mnemonics: those never leave AccountManager, and no tool
+ * here is capable of asking for them.
+ *
+ * Worth knowing that calling this puts every account address of this wallet into the model's
+ * context, and for the hosted agent that means the proxy and OpenRouter see them together —
+ * linking addresses the chain itself does not link. That is why it is a tool the model has
+ * to choose to call for a reason, rather than something folded into every request's context.
+ */
+function handleGetAccounts(): unknown {
+  const accounts = deps!.listAccounts();
+  return {
+    count: accounts.length,
+    accounts: accounts.map((a) => ({
+      name: a.name,
+      address: a.address,
+      isActive: a.isActive,
+    })),
+  };
+}
+
+/**
  * Well-known, official faucet page for each testnet the wallet supports — deliberately just a
  * URL, never an API endpoint we POST to on the user's behalf. Every mainstream faucet requires a
  * CAPTCHA specifically to stop automated claiming, so there is no honest "auto-claim" version of
@@ -477,6 +561,67 @@ interface PreparedProposal {
   buildPreview: () => Promise<ProposalPreview>;
 }
 
+/**
+ * Turns one of the user's own account names into its address.
+ *
+ * Matching is case-insensitive and whitespace-trimmed but otherwise EXACT — no prefix or
+ * fuzzy matching. "New User #1" and "New User #5" differ by one character, and a partial
+ * match that picked the wrong one would send funds to the wrong wallet while looking like
+ * it had understood. For the same reason a name shared by two accounts is an error rather
+ * than a choice made here: the wallet cannot know which one was meant, and guessing is the
+ * one option with no way back.
+ *
+ * Not found is also an error, never a fallthrough — an unresolved name reaching the
+ * simulator would surface as an unreadable address parsing failure instead of "there is no
+ * account called that".
+ */
+function resolveOwnAccountName(name: string): string {
+  const needle = name.trim().toLowerCase();
+  const accounts = deps!.listAccounts();
+  const matches = accounts.filter((a) => a.name.trim().toLowerCase() === needle);
+
+  if (matches.length === 1) return matches[0].address;
+
+  if (matches.length > 1) {
+    throw new ToolArgumentError(
+      `"${name}" adında birden fazla hesap var (${matches.map((m) => m.address).join(", ")}). ` +
+      `Hangisini kastettiğini adresle belirt.`
+    );
+  }
+
+  const known = accounts.map((a) => a.name).filter(Boolean);
+  throw new ToolArgumentError(
+    `"${name}" bir adres değil ve bu isimde bir hesabın yok. ` +
+    (known.length ? `Hesapların: ${known.join(", ")}.` : `Bu cüzdanda kayıtlı hesap bulunamadı.`)
+  );
+}
+
+/**
+ * Resolves what a proposal tool may address, for the agent specifically.
+ *
+ * Accepts a literal 0x address or one of the user's own account names. Deliberately NOT
+ * ENS/UD, even though DomainResolver sits right there and the manual Send panel still uses
+ * it: this build ships testnets only (see manifest.json's version_name), and domain
+ * resolution is answered by MAINNET — see DomainResolver's own header, which resolves
+ * against mainnet no matter which network is active. So "send 1 ETH to vitalik.eth" quietly
+ * turns a testnet build into one that names a real mainnet identity as the recipient.
+ *
+ * The manual panel keeps domains because there the user types the name, watches it resolve,
+ * and reads the address back before pressing send. Through the agent, none of that happens:
+ * the name goes in as prose and an address the user never chose comes out the other side.
+ */
+function resolveAgentRecipient(toInput: string): string {
+  if (isDomainName(toInput)) {
+    throw new ToolArgumentError(
+      `"${toInput}" gibi alan adları (ENS/Unstoppable) agent üzerinden gönderimde kabul edilmiyor. ` +
+      `Alan adları mainnet'ten çözümleniyor, bu sürüm ise yalnızca testnet için. ` +
+      `Ya 0x... ile başlayan bir adres ver ya da kendi hesaplarından birinin adını yaz.`
+    );
+  }
+  if (/^0x[0-9a-fA-F]{40}$/.test(toInput)) return toInput;
+  return resolveOwnAccountName(toInput);
+}
+
 async function prepareProposeSend(
   network: Network,
   context: ToolExecutionContext,
@@ -487,42 +632,71 @@ async function prepareProposeSend(
   const tokenSymbolRaw = args.tokenSymbol;
   const tokenSymbol = typeof tokenSymbolRaw === "string" && tokenSymbolRaw.trim() ? tokenSymbolRaw.trim() : undefined;
 
-  // Only the native token can be previewed: there is no symbol → contract-address registry
-  // available to this bridge (that's TokenCache, owned by the UI layer), so an arbitrary
-  // ERC-20 "USDC" can't be resolved to the right contract here. Refusing explicitly beats
-  // silently simulating against the wrong address.
-  if (tokenSymbol && tokenSymbol.toLowerCase() !== network.currency_symbol.toLowerCase()) {
+  const isNative = !tokenSymbol || tokenSymbol.toLowerCase() === network.currency_symbol.toLowerCase();
+
+  // An ERC-20 symbol is resolved through SwapService's curated registry — the same one
+  // prepareProposeShield already uses, and the only symbol → address map reachable from
+  // backend/ (TokenCache is UI-owned). This used to refuse every non-native symbol outright
+  // while the tool schema advertised `tokenSymbol: "USDC"`, so the model kept proposing
+  // transfers the runner then rejected — the user saw the wallet decline its own offer.
+  //
+  // Resolution stays strict: an unknown symbol is an error naming what IS available, never
+  // a guess. Simulating a transfer against the wrong contract is how funds reach a stranger.
+  // Dynamically imported, matching prepareProposeShield below — SwapService pulls in the
+  // swap/quoting stack, which no native-only send should have to load.
+  const { default: SwapService } = await import("./SwapService.js");
+  const token = isNative ? undefined : SwapService.getInstance().getTokenBySymbol(network.network_id, tokenSymbol!);
+  if (!isNative && !token) {
+    const known = SwapService.getInstance()
+      .getTokens(network.network_id)
+      .filter((t) => !t.isNative)
+      .map((t) => t.symbol);
     throw new ToolArgumentError(
-      `"${tokenSymbol}" için gönderim önizlemesi şu an desteklenmiyor — bu araç yalnızca native token ` +
-      `(${network.currency_symbol}) gönderimlerini önizleyebilir.`
+      `"${tokenSymbol}" ${network.network_name} üzerinde tanınmıyor. ` +
+      (known.length
+        ? `Bu ağda gönderilebilen tokenlar: ${known.join(", ")} (ve native ${network.currency_symbol}).`
+        : `Bu ağda kayıtlı bir ERC-20 yok — yalnızca native ${network.currency_symbol} gönderilebilir.`)
     );
   }
 
-  // The tool schema advertises ENS/UD recipients, so resolution has to actually happen here
-  // — otherwise every domain-addressed proposal would fail simulation for a reason the user
-  // never sees explained.
-  let to = toInput;
-  if (isDomainName(toInput)) {
-    const resolved = await resolveDomain(toInput);
-    if (!resolved.address) {
-      throw new ToolArgumentError(resolved.error ?? `"${toInput}" bir adrese çözümlenemedi.`);
-    }
-    to = resolved.address;
-  }
+  const to = resolveAgentRecipient(toInput);
 
-  const balanceWei = await network.getBalance(context.account);
-  const { formatEther } = await import("ethers");
-  const balance = Number(formatEther(balanceWei));
+  // originalArgs carries the RESOLVED address onward, not the name the user typed.
+  //
+  // ConfirmationCard re-reads `to` at confirm time and signs against it, so leaving a name
+  // there would mean the preview simulated one recipient and the signature paid whatever
+  // that side resolved independently — two chances to disagree about where money goes. It
+  // also puts the real address on the confirmation screen, which is the thing the user
+  // should be checking before approving.
+  const resolvedArgs = to === toInput ? args : { ...args, to };
+
+  // The policy engine's ratio cap compares `amount` against `balance`, so for a token
+  // transfer that has to be the TOKEN's balance. Handing it the native ETH balance would
+  // measure a 100-USDC send against an ETH holding — a cap that means nothing in either
+  // direction, and one that loosens exactly when the user holds a lot of gas money.
+  const balance = token
+    ? Number(await network.getTokenBalance(token.address, context.account))
+    : Number(formatEther(await network.getBalance(context.account)));
 
   return {
     balance,
     amountNumber,
     buildPreview: async () => {
-      const { parseEther } = await import("ethers");
-      const valueWei = parseEther(amount).toString();
       const provider = await getEthersProvider(network);
-      const simulation = await simulateAndEnrich(provider, { from: context.account, to, value: valueWei });
-      return { requiresConfirmation: true, toolName: "propose_send", originalArgs: args, simulation };
+      const simulation = token
+        ? await (async () => {
+            const { Interface, parseUnits } = await import("ethers");
+            const iface = new Interface(["function transfer(address to, uint256 amount) returns (bool)"]);
+            // token.decimals comes from the curated registry, where each entry was read off
+            // the contract itself — see SwapService's own note on why guessing 18 is unsafe.
+            const data = iface.encodeFunctionData("transfer", [to, parseUnits(amount, token.decimals)]);
+            return simulateAndEnrich(provider, { from: context.account, to: token.address, value: "0", data });
+          })()
+        : await (async () => {
+            const { parseEther } = await import("ethers");
+            return simulateAndEnrich(provider, { from: context.account, to, value: parseEther(amount).toString() });
+          })();
+      return { requiresConfirmation: true, toolName: "propose_send", originalArgs: resolvedArgs, simulation };
     },
   };
 }
@@ -748,14 +922,8 @@ async function prepareProposeConfidentialTransfer(
     throw new ToolArgumentError(`Shielded token bulunamadı: "${tokenSymbol}".`);
   }
 
-  // The tool schema advertises ENS/UD recipients too — resolved here so a bad/unresolvable
-  // domain fails the proposal with a clear reason instead of reaching ConfirmationCard.
-  if (isDomainName(toInput)) {
-    const resolved = await resolveDomain(toInput);
-    if (!resolved.address) {
-      throw new ToolArgumentError(resolved.error ?? `"${toInput}" bir adrese çözümlenemedi.`);
-    }
-  }
+  const to = resolveAgentRecipient(toInput);
+  const resolvedArgs = to === toInput ? args : { ...args, to };
 
   return {
     // Confidential balance, already decrypted and decimal-formatted by getShieldedPortfolio
@@ -787,7 +955,7 @@ async function prepareProposeConfidentialTransfer(
         isNewRecipient: false,
         contractAgeDays: null,
       };
-      return { requiresConfirmation: true, toolName: "propose_confidential_transfer", originalArgs: args, simulation };
+      return { requiresConfirmation: true, toolName: "propose_confidential_transfer", originalArgs: resolvedArgs, simulation };
     },
   };
 }
@@ -1010,6 +1178,10 @@ export async function executeToolCall(
       switch (toolName as ReadOnlyTool) {
         case "get_balance":
           return { result: await handleGetBalance(network, context, args) };
+        case "get_token_balances":
+          return { result: await handleGetTokenBalances(network, context) };
+        case "get_accounts":
+          return { result: handleGetAccounts() };
         case "get_shielded_balance":
           return { result: await handleGetShieldedBalance(network, requireAccount(context), args) };
         case "get_shielded_portfolio":

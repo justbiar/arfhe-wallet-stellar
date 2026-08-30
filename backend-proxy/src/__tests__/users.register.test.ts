@@ -6,11 +6,11 @@ import { env, SELF } from "cloudflare:test";
  *
  * Aynı wallet_address ile iki kez register edildiğinde `users` tablosunda tek satır kalmalı
  * (upsert), ve ikinci çağrı last_seen'i günceller. Hiçbir alanda tutar/miktar yok — bu tablo
- * yalnızca "hangi adres, hangi email, hangi kaynaktan (google/password) ilk/son ne zaman
- * görüldü" bilgisini tutar.
+ * yalnızca "hangi adres, hangi kaynaktan (google/created/mnemonic/private_key) ilk/son ne
+ * zaman görüldü" bilgisini tutar.
  */
 
-const EXTENSION_ORIGIN = "chrome-extension://ajfpejolnhgeflhgjmboikiffpdlhngi";
+const EXTENSION_ORIGIN = "chrome-extension://cdhfecdlpblpdngkadiigjmodedapoih";
 
 function postRegister(body: unknown, origin: string = EXTENSION_ORIGIN) {
   return SELF.fetch("https://proxy.example/users/register", {
@@ -23,22 +23,21 @@ function postRegister(body: unknown, origin: string = EXTENSION_ORIGIN) {
 describe("POST /users/register", () => {
   it("yeni bir wallet_address için users tablosuna bir satır ekler", async () => {
     const address = "0xAAA0000000000000000000000000000000aaa1";
-    const res = await postRegister({ wallet_address: address, source: "password" });
+    const res = await postRegister({ wallet_address: address, source: "created" });
     expect(res.status).toBe(200);
 
     const row = await env.USERS_DB.prepare("SELECT * FROM users WHERE wallet_address = ?1")
       .bind(address)
       .first();
     expect(row).toBeTruthy();
-    expect(row!.source).toBe("password");
-    expect(row!.email).toBeNull();
+    expect(row!.source).toBe("created");
     expect(row!.first_seen).toBe(row!.last_seen);
   });
 
   it("aynı wallet_address iki kez register edilirse tek satır kalır ve last_seen güncellenir", async () => {
     const address = "0xBBB0000000000000000000000000000000bbb2";
 
-    const first = await postRegister({ wallet_address: address, source: "google", email: "user@example.com" });
+    const first = await postRegister({ wallet_address: address, source: "google" });
     expect(first.status).toBe(200);
 
     const firstRow = await env.USERS_DB.prepare("SELECT * FROM users WHERE wallet_address = ?1")
@@ -50,7 +49,7 @@ describe("POST /users/register", () => {
     // the same millisecond.
     await new Promise((resolve) => setTimeout(resolve, 5));
 
-    const second = await postRegister({ wallet_address: address, source: "google", email: "user@example.com" });
+    const second = await postRegister({ wallet_address: address, source: "google" });
     expect(second.status).toBe(200);
 
     const { results } = await env.USERS_DB.prepare("SELECT * FROM users WHERE wallet_address = ?1")
@@ -61,33 +60,34 @@ describe("POST /users/register", () => {
     const secondRow = results[0] as Record<string, unknown>;
     expect(secondRow.first_seen).toBe(firstSeen);
     expect((secondRow.last_seen as string) >= firstSeen).toBe(true);
-    expect(secondRow.email).toBe("user@example.com");
   });
 
-  it("ikinci çağrıda email gönderilmezse mevcut email korunur (COALESCE)", async () => {
-    const address = "0xCCC0000000000000000000000000000000ccc3";
+  it.each(["google", "created", "mnemonic", "private_key"])(
+    'source "%s" için 200 döner',
+    async (source) => {
+      const address = `0xF${source.padEnd(39, "0")}`.slice(0, 42);
+      const res = await postRegister({ wallet_address: address, source });
+      expect(res.status).toBe(200);
 
-    await postRegister({ wallet_address: address, source: "google", email: "keep-me@example.com" });
-    await postRegister({ wallet_address: address, source: "google" });
+      const row = await env.USERS_DB.prepare("SELECT * FROM users WHERE wallet_address = ?1")
+        .bind(address)
+        .first();
+      expect(row!.source).toBe(source);
+    }
+  );
 
-    const row = await env.USERS_DB.prepare("SELECT * FROM users WHERE wallet_address = ?1")
-      .bind(address)
-      .first();
-    expect(row!.email).toBe("keep-me@example.com");
-  });
-
-  it('source alanı "google" veya "password" değilse 400 döner', async () => {
+  it('source alanı geçerli 4 değerden biri değilse ("apple") 400 döner', async () => {
     const res = await postRegister({ wallet_address: "0xDDD", source: "apple" });
     expect(res.status).toBe(400);
   });
 
   it("wallet_address eksikse 400 döner", async () => {
-    const res = await postRegister({ source: "password" });
+    const res = await postRegister({ source: "created" });
     expect(res.status).toBe(400);
   });
 
   it("izin verilmeyen origin'den 403 döner", async () => {
-    const res = await postRegister({ wallet_address: "0xEEE", source: "password" }, "https://evil.example");
+    const res = await postRegister({ wallet_address: "0xEEE", source: "created" }, "https://evil.example");
     expect(res.status).toBe(403);
   });
 });

@@ -21,7 +21,7 @@ beforeEach(() => {
   env.X402_USE_REAL_FACILITATOR = "false";
 });
 
-const EXTENSION_ORIGIN = "chrome-extension://ajfpejolnhgeflhgjmboikiffpdlhngi";
+const EXTENSION_ORIGIN = "chrome-extension://cdhfecdlpblpdngkadiigjmodedapoih";
 
 function postX402(path: string, body: unknown, origin: string = EXTENSION_ORIGIN) {
   return SELF.fetch(`https://proxy.example${path}`, {

@@ -52,6 +52,21 @@ export function letterAvatarIcon(letter: string, bg = '#4338CA'): string {
 
 const ARFDAO_BASE = 'https://www.arfdao.dev';
 
+// ─── Icons ──────────────────────────────────────────────────────────
+//
+// Logos are bundled with the extension (public/images/dapps/) and referenced by an
+// extension-local path, never fetched from the project's own site.
+//
+// Two reasons. A remote logo is a request to fhenix.io and arfdao.dev every time someone
+// opens Explore, which tells those hosts that a wallet user is browsing — the same
+// consideration DomainResolver's own docs raise about not publishing a user's decisions to
+// third parties. And a hosted URL is somebody else's to change: the twenty project icons
+// this list used to carry pointed at paths that still resolve, but every logo path the site
+// advertises for the DAO itself now 404s.
+//
+// Explore's <img onError> still falls back to letterAvatarIcon, so a missing file degrades
+// to a letter tile rather than a broken image.
+
 export const DAPP_REGISTRY: DApp[] = [
     // ── FHE Ecosystem ──
     {
@@ -59,7 +74,7 @@ export const DAPP_REGISTRY: DApp[] = [
         name: 'Fhenix',
         description: 'The FHE network powering confidential smart contracts on Ethereum',
         url: 'https://www.fhenix.io',
-        icon: letterAvatarIcon('F', '#10b981'),
+        icon: '/images/dapps/fhenix.png',
         category: 'fhe',
         // The chains CoFHE actually runs on — Fhenix's own L2 is not one of them.
         chains: [11155111, 421614, 84532],
@@ -68,229 +83,29 @@ export const DAPP_REGISTRY: DApp[] = [
         infoOnly: true,
     },
 
-    // ── ArfDAO Community Projects ──
+    // ── ArfDAO ──
+    //
+    // One entry for the DAO itself, not a row per project.
+    //
+    // This list used to carry all twenty community projects individually, each one an
+    // `infoOnly` link to its own page on arfdao.dev. That is a directory of showcase pages,
+    // not of things a wallet can connect to: none of them declared a chain, none accepted a
+    // WalletConnect session, and every click led back to the same site. Twenty rows that all
+    // do the same thing crowd out the one entry a user is actually looking for, and make the
+    // Explore page read as filler.
+    //
+    // The projects are not lost — arfdao.dev lists them, kept current by the people who own
+    // them, which a hardcoded copy in a shipped extension never can be.
     {
-        id: 'veriarfy',
-        name: 'VeriArfy',
-        description: 'A secure, blockchain-based national data repository where biological data (DNA, health records) is stored with 100% privacy, but can be actively used for research.',
-        url: `${ARFDAO_BASE}/project.html?p=veriarfy`,
-        icon: `${ARFDAO_BASE}/assets/img/veriarfy.jpg`,
+        id: 'arfdao',
+        name: 'ArfDAO',
+        description: 'The community behind ArfheWallet — projects, contributors and everything the DAO is building.',
+        url: ARFDAO_BASE,
+        icon: '/images/dapps/arfdao.png',
         category: 'arfdao',
         chains: [],
-        tags: ['DeSci', 'Privacy', 'Web3', 'Encryption'],
+        tags: ['DAO', 'Community', 'Web3'],
         featured: true,
-        infoOnly: true,
-    },
-    {
-        id: 'degenslide',
-        name: 'DegenSlide',
-        description: 'An app that makes it easy to copy the trades of whales in the crypto market with a Tinder-style interface.',
-        url: `${ARFDAO_BASE}/project.html?p=degenslide`,
-        icon: `${ARFDAO_BASE}/assets/img/degen.jpg`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['DeFi', 'Copy Trading', 'UX', 'Fintech'],
-        infoOnly: true,
-    },
-    {
-        id: 'bilboard-dapp',
-        name: 'Bilboard dApp',
-        description: 'A decentralized application providing dynamic ad broadcasting based on instant crowd traffic.',
-        url: `${ARFDAO_BASE}/project.html?p=bilboard-dapp`,
-        icon: `${ARFDAO_BASE}/assets/img/bilboard.jpg`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['dApp', 'AdTech', 'IoT', 'Smart City'],
-        infoOnly: true,
-    },
-    {
-        id: 'deleak',
-        name: 'DeLeak',
-        description: 'Autonomous white-hat security agent: detects leaked private keys on GitHub, checks the wallet, and automatically transfers any balance to a secure address via the Monad Testnet.',
-        url: `${ARFDAO_BASE}/project.html?p=deleak`,
-        icon: `${ARFDAO_BASE}/assets/img/deleak.jpg`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['Cybersecurity', 'Bot', 'MEV', 'Wallet Recovery'],
-        featured: true,
-        infoOnly: true,
-    },
-    {
-        id: 'white-grave',
-        name: 'White Grave',
-        description: 'An atmospheric zombie-themed escape game blending suspense and survival elements.',
-        url: `${ARFDAO_BASE}/project.html?p=white-grave`,
-        icon: `${ARFDAO_BASE}/assets/img/white.jpg`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['Unity', 'Game Design', 'Horror', 'Survival'],
-        infoOnly: true,
-    },
-    {
-        id: 'mustech',
-        name: 'Smart Farming Automation',
-        description: 'An agricultural technology startup combining traditional farming with IoT and AI, enabling data-driven decisions.',
-        url: `${ARFDAO_BASE}/project.html?p=mustech`,
-        icon: `${ARFDAO_BASE}/assets/img/tarım.jpg`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['IoT', 'AgriTech', 'AI'],
-        infoOnly: true,
-    },
-    {
-        id: 'vibe',
-        name: 'VibeCoding with Education',
-        description: 'A universal, zero-config rule system that turns your AI Assistant into a contextual teacher while you vibe code.',
-        url: `${ARFDAO_BASE}/project.html?p=vibe`,
-        icon: `${ARFDAO_BASE}/assets/img/vibe.jpg`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['AI', 'Education', 'Tooling'],
-        infoOnly: true,
-    },
-    {
-        id: 'agiad',
-        name: 'ConcreteWeb',
-        description: 'An autonomous LoRa mesh communication system requiring no infrastructure that detects signs of life under rubble and relays locations to rescue teams after an earthquake.',
-        url: `${ARFDAO_BASE}/project.html?p=agiad`,
-        icon: `${ARFDAO_BASE}/assets/img/deprem.jpg`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['LoRa', 'Mesh Network', 'Disaster Relief'],
-        infoOnly: true,
-    },
-    {
-        id: 'promptstore',
-        name: 'PromptStore',
-        description: 'A virtual marketplace platform where professional AI prompts can be bought and sold.',
-        url: `${ARFDAO_BASE}/project.html?p=promptstore`,
-        icon: `${ARFDAO_BASE}/assets/img/prompt.jpg`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['AI', 'Marketplace', 'Prompt Engineering', 'SaaS'],
-        infoOnly: true,
-    },
-    {
-        id: 'suiholar',
-        name: 'SuiHolar',
-        description: 'A decentralized research and academic funding (DeSci) platform running on the Sui network.',
-        url: `${ARFDAO_BASE}/project.html?p=suiholar`,
-        icon: `${ARFDAO_BASE}/assets/img/suiholar.png`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['Sui', 'DeSci', 'Crowdfunding', 'DAO'],
-        infoOnly: true,
-    },
-    {
-        id: 'a2saga',
-        name: 'A2 Saga',
-        description: 'An action-packed 1v1 online competitive arena game inspired by Turkish mythology.',
-        url: `${ARFDAO_BASE}/project.html?p=a2saga`,
-        icon: `${ARFDAO_BASE}/assets/img/a2.jpg`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['Esports', 'Mythology', 'Action', 'PvP'],
-        featured: true,
-        infoOnly: true,
-    },
-    {
-        id: 'agentsync',
-        name: 'AgentSync',
-        description: 'A tool that resolves conflicts in collaboration processes between humans and AI agents.',
-        url: `${ARFDAO_BASE}/project.html?p=agentsync`,
-        icon: `${ARFDAO_BASE}/assets/img/agent.jpg`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['SaaS', 'AI', 'Orchestration', 'Collaboration'],
-        infoOnly: true,
-    },
-    {
-        id: 'evolu-a',
-        name: 'Evolu-A',
-        description: 'A fully autonomous AI agent running on the Sepolia network, managing its own wallet.',
-        url: `${ARFDAO_BASE}/project.html?p=evolu-a`,
-        icon: `${ARFDAO_BASE}/assets/img/evolu.png`,
-        category: 'arfdao',
-        chains: [11155111],
-        tags: ['Autonomous Agent', 'LLM', 'Web3', 'Sepolia'],
-        infoOnly: true,
-    },
-    {
-        id: 'blockucracy',
-        name: 'Blockucracy',
-        description: 'A next-generation "Governance by Code" system overseen by AI agents leveraging the Monad network\'s speed.',
-        url: `${ARFDAO_BASE}/project.html?p=blockucracy`,
-        icon: `${ARFDAO_BASE}/assets/img/blockucracy.png`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['Monad', 'DAO', 'Governance', 'DeFi'],
-        infoOnly: true,
-    },
-    {
-        id: 'kuantum-qrng',
-        name: 'Kuantum QRNG SDK',
-        description: 'An SDK providing hardware-based, unmanipulable True Quantum Randomness (QRNG) for blockchain projects.',
-        url: `${ARFDAO_BASE}/project.html?p=kuantum-qrng`,
-        icon: `${ARFDAO_BASE}/assets/img/kuantum.jpg`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['Quantum', 'RNG', 'SDK', 'Security'],
-        infoOnly: true,
-    },
-    {
-        id: 'wheatherwise',
-        name: 'Wheatherwise',
-        description: 'An application delivering hyper-local instant weather forecasts powered by machine learning.',
-        url: `${ARFDAO_BASE}/project.html?p=wheatherwise`,
-        icon: `${ARFDAO_BASE}/assets/img/weatherwise.png`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['AI', 'Machine Learning', 'SaaS', 'Meteorology'],
-        infoOnly: true,
-    },
-    {
-        id: 'whisperdao',
-        name: 'WhisperDAO',
-        description: 'A fully confidential DAO platform built on the Solana network using MagicBlock TEE and Gemini AI.',
-        url: `${ARFDAO_BASE}/project.html?p=whisperdao`,
-        icon: `${ARFDAO_BASE}/assets/img/whisperdao.png`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['Solana', 'Privacy', 'TEE', 'Gemini'],
-        infoOnly: true,
-    },
-    {
-        id: 'sunergy',
-        name: 'Sunergy',
-        description: 'A DePIN protocol rewarding solar energy producers on the Monad network based on their actual generation.',
-        url: `${ARFDAO_BASE}/project.html?p=sunergy`,
-        icon: `${ARFDAO_BASE}/assets/img/sunergy.png`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['Monad', 'DePIN', 'Green Energy', 'Tokenization'],
-        infoOnly: true,
-    },
-    {
-        id: 'obscura-finance',
-        name: 'Obscura Finance',
-        description: 'A DeFi platform offering privacy-centric, undercollateralized loans using Zero-Knowledge proofs.',
-        url: `${ARFDAO_BASE}/project.html?p=obscura-finance`,
-        icon: `${ARFDAO_BASE}/assets/img/obscura.png`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['DeFi', 'Zero-Knowledge', 'Lending', 'Capital Efficiency'],
-        featured: true,
-        infoOnly: true,
-    },
-    {
-        id: 'monadoly-arena',
-        name: 'Monadoly Arena',
-        description: 'An on-chain arena on the Monad network where AI agents clash in strategy games for token rewards.',
-        url: `${ARFDAO_BASE}/project.html?p=monadoly-arena`,
-        icon: `${ARFDAO_BASE}/assets/img/monadoly.png`,
-        category: 'arfdao',
-        chains: [],
-        tags: ['Monad', 'Autonomous Gaming', 'Strategy', 'AI'],
         infoOnly: true,
     },
 ];

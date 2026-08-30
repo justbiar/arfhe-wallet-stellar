@@ -16,13 +16,15 @@ describe('agentTools', () => {
     expect(AGENT_TOOLS.length).toBeGreaterThan(0);
   });
 
-  it('7 read-only + 1 immediate + 5 proposal + 1 x402 tool tanımlıdır', () => {
-    expect(AGENT_TOOLS).toHaveLength(14);
+  it('9 read-only + 1 immediate + 5 proposal + 1 x402 tool tanımlıdır', () => {
+    expect(AGENT_TOOLS).toHaveLength(16);
   });
 
   describe('her tool geçerli bir OpenAI function-calling şemasına sahiptir', () => {
     for (const tool of [
       'get_balance',
+      'get_accounts',
+      'get_token_balances',
       'get_shielded_balance',
       'get_shielded_portfolio',
       'get_pending_claims',

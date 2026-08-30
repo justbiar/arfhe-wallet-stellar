@@ -1097,7 +1097,7 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
                     borderColor: "divider",
                   }}
                 >
-                  {`claude mcp add --transport http arfhe-wallet http://83.229.86.69:3000/mcp --header "Authorization: Bearer ${mcpToken}"`}
+                  {`claude mcp add --transport http arfhe-wallet https://mcp.arfhewallet.dev/mcp --header "Authorization: Bearer ${mcpToken}"`}
                 </Box>
                 <Typography variant="caption" color="warning.main" sx={{ display: "block" }}>
                   {t("agent.mcpTokenWarning")}

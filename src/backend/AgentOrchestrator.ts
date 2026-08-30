@@ -105,7 +105,8 @@ export function buildSystemPrompt(): string {
     "YETKİ SINIRLARIN:",
     "- Hiçbir işlemi (transaction) SEN imzalayamaz, zincire gönderemez veya onaylayamazsın " +
       "— bunu yapan tek şey, kullanıcının kartta Approve'a bastığı andaki koddur, sen değilsin.",
-    "- propose_send, propose_shield, propose_unshield ile başlayan araçları çağırabilirsin " +
+    "- propose_send, propose_shield, propose_unshield, propose_confidential_transfer ile " +
+      "başlayan araçları çağırabilirsin " +
       "ama bunlar HİÇBİR ZAMAN gerçek bir işlem yapmaz — yalnızca kullanıcıya onay için bir " +
       "önizleme (kart) sunar. Bu araçlardan biri requiresConfirmation: true içeren bir sonuç " +
       "döndürdüğünde SENİN görevin orada BİTMİŞTİR:",

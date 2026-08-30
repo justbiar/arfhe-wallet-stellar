@@ -118,6 +118,9 @@ function resultDisplayFields(
     return { amount, symbol: nativeSymbol, recipient: typeof originalArgs.to === "string" ? originalArgs.to : undefined };
   }
   const symbol = typeof originalArgs.tokenSymbol === "string" ? originalArgs.tokenSymbol : nativeSymbol;
+  if (toolName === "propose_confidential_transfer") {
+    return { amount, symbol, recipient: typeof originalArgs.to === "string" ? originalArgs.to : undefined };
+  }
   return { amount, symbol };
 }
 

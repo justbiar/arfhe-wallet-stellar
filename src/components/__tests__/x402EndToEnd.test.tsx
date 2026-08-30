@@ -144,6 +144,7 @@ describe('x402 uçtan uca entegrasyon (gerçek modüller, yalnızca fetch mock)'
         Number(networkId) === NetworkId.Base_Sepolia
           ? { address: USDC_BASE_SEPOLIA, name: 'USD Coin', version: '2', chainId: NetworkId.Base_Sepolia }
           : undefined,
+      getConnectedSites: async () => ({ injectedSites: [], walletConnectSessions: [] }),
     });
     await new X402SpendingLedger().clearAll();
   });

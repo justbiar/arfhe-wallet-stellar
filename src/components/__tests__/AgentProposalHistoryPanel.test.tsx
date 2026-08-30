@@ -246,6 +246,8 @@ describe('AgentProposalHistoryPanel', () => {
       propose_send: 'Send',
       propose_shield: 'Shield',
       propose_unshield: 'Unshield',
+      propose_confidential_transfer: 'Confidential Transfer',
+      propose_revoke_approval: 'Revoke',
       pay_for_resource: 'x402 Payment',
     };
 

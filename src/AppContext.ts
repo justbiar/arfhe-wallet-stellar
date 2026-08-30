@@ -129,6 +129,23 @@ export class AppContext {
           chainId: NetworkId.Base_Sepolia,
         };
       },
+      getConnectedSites: async (address) => {
+        const target = address.toLowerCase();
+        const allSites = await this.sitePermissions.getAll();
+        const injectedSites = allSites
+          .filter((p) => p.accounts.includes(target))
+          .map((p) => ({ origin: p.origin, grantedAt: p.grantedAt, lastUsedAt: p.lastUsedAt }));
+
+        // Not filtered by address — a WalletConnect session isn't scoped to one account the
+        // way an injected-provider grant is, see getConnectedSites's own docs.
+        const walletConnectSessions = this.walletConnectService.getActiveSessions().map((s) => ({
+          name: s.peer?.metadata?.name || "Unknown",
+          url: s.peer?.metadata?.url || "",
+          expiry: s.expiry,
+        }));
+
+        return { injectedSites, walletConnectSessions };
+      },
     });
   }
 }

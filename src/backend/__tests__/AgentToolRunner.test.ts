@@ -188,6 +188,7 @@ describe('AgentToolRunner', () => {
         version: '2',
         chainId: 84532,
       })),
+      getConnectedSites: vi.fn().mockResolvedValue({ injectedSites: [], walletConnectSessions: [] }),
     };
     configureAgentToolRunner(deps);
   });

@@ -16,8 +16,8 @@ describe('agentTools', () => {
     expect(AGENT_TOOLS.length).toBeGreaterThan(0);
   });
 
-  it('5 read-only + 3 proposal + 1 x402 tool tanımlıdır', () => {
-    expect(AGENT_TOOLS).toHaveLength(9);
+  it('7 read-only + 5 proposal + 1 x402 tool tanımlıdır', () => {
+    expect(AGENT_TOOLS).toHaveLength(13);
   });
 
   describe('her tool geçerli bir OpenAI function-calling şemasına sahiptir', () => {
@@ -27,9 +27,13 @@ describe('agentTools', () => {
       'get_shielded_portfolio',
       'get_pending_claims',
       'get_faucet_info',
+      'get_token_approvals',
+      'get_connected_sites',
       'propose_send',
       'propose_shield',
       'propose_unshield',
+      'propose_confidential_transfer',
+      'propose_revoke_approval',
       'pay_for_resource',
     ] as const) {
       it(`${tool} tanımlıdır ve şeması geçerlidir`, () => {

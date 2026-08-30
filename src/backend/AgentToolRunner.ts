@@ -104,6 +104,21 @@ export interface AgentToolRunnerDeps {
    * from components/ — same layering AgentProposalHistory.ts's docs already call out.
    */
   getUsdcTokenIdentity(networkId: string): Eip3009TokenIdentity | undefined;
+  /**
+   * Resolves what get_connected_sites shows: injected-provider site grants for this address
+   * (SitePermissionService) plus active WalletConnect sessions (WalletConnectService) — two
+   * separate connection mechanisms, both surfaced together since a user asking "which sites
+   * can see my wallet" doesn't distinguish between them. Deliberately not scoped to one
+   * account for the WalletConnect half — a WC session isn't tied to a single address the way
+   * an injected-provider grant is (see SitePermission.accounts's own docs), so it's listed
+   * regardless of which account is currently active.
+   */
+  getConnectedSites(address: string): Promise<ConnectedSitesInfo>;
+}
+
+export interface ConnectedSitesInfo {
+  injectedSites: { origin: string; grantedAt: number; lastUsedAt: number }[];
+  walletConnectSessions: { name: string; url: string; expiry: number }[];
 }
 
 /** Raised for a malformed/unsupported tool_call argument — caught alongside Network.ts errors below. */
@@ -330,6 +345,23 @@ function handleGetFaucetInfo(network: Network, context: ToolExecutionContext): u
     return { supported: false, network: network.network_name };
   }
   return { supported: true, network: network.network_name, faucetUrl, address: context.account };
+}
+
+/**
+ * Read-only, but a real chain scan (chunked eth_getLogs) — see Network.getTokenApprovals's own
+ * docs for why. 500 blocks (not the method's own 10,000 default) matches Revoke.tsx's own live
+ * scan depth — the tradeoff that page already accepted between recency and how long a person
+ * will wait for a response, agent or manual UI, is the same tradeoff either way.
+ */
+async function handleGetTokenApprovals(network: Network, context: ToolExecutionContext): Promise<unknown> {
+  const approvals = await network.getTokenApprovals(context.account, 500);
+  // allowanceRaw is a bigint — can't cross JSON.stringify as-is, and the model never needs the
+  // raw unit anyway (the formatted `allowance` string already carries the human-readable value).
+  return approvals.map(({ allowanceRaw: _allowanceRaw, tokenDecimals: _tokenDecimals, ...rest }) => rest);
+}
+
+async function handleGetConnectedSites(context: ToolExecutionContext): Promise<unknown> {
+  return deps!.getConnectedSites(context.account);
 }
 
 async function handleGetShieldedBalance(
@@ -617,6 +649,37 @@ async function prepareProposeShield(
   };
 }
 
+/**
+ * Resolves a shielded-token `tokenSymbol` against an already-fetched shielded portfolio.
+ *
+ * The schema's primary namespace is the confidential wrapper's own symbol (e.g. "aeETH"),
+ * matched first — no registry gap there, get_shielded_portfolio already returns it. But in
+ * practice a request (especially a small local model's, or a fast-path regex match) is far
+ * more likely to name the PUBLIC underlying token ("ETH", "DAI") than its confidential
+ * wrapper name, which nothing else in the wallet ever surfaces to the user. Falling back to
+ * that — native by currency symbol, ERC-20 by the same curated registry propose_shield
+ * resolves against — turns "ETH'imi unshield et" into a working proposal instead of a
+ * guaranteed "Shielded token bulunamadı" for the single most natural way to ask. Shared by
+ * propose_unshield and propose_confidential_transfer, which both need exactly this.
+ */
+async function resolveShieldedHolding(
+  network: Network,
+  portfolio: ShieldedHolding[],
+  tokenSymbol: string
+): Promise<ShieldedHolding | undefined> {
+  const direct = portfolio.find((h) => {
+    if (h.symbol.toLowerCase() === tokenSymbol.toLowerCase()) return true;
+    if (h.isNative) return tokenSymbol.toLowerCase() === network.currency_symbol.toLowerCase();
+    return false;
+  });
+  if (direct) return direct;
+
+  const { default: SwapService } = await import("./SwapService.js");
+  const erc20 = SwapService.getInstance().getTokenBySymbol(network.network_id, tokenSymbol);
+  if (!erc20) return undefined;
+  return portfolio.find((h) => !h.isNative && h.underlying.toLowerCase() === erc20.address.toLowerCase());
+}
+
 async function prepareProposeUnshield(
   network: Network,
   context: ToolExecutionContext,
@@ -626,28 +689,8 @@ async function prepareProposeUnshield(
   const tokenSymbol = requireTokenSymbol(args, true)!;
   const account = requireAccount(context);
 
-  // The schema asks for the confidential wrapper's own symbol (e.g. "aeETH"), and that's
-  // matched first — no registry gap there, get_shielded_portfolio already returns it. But in
-  // practice a request (especially a small local model's, or a fast-path regex match) is far
-  // more likely to name the PUBLIC underlying token ("ETH", "DAI") than its confidential
-  // wrapper name, which nothing else in the wallet ever surfaces to the user. Falling back to
-  // that — native by currency symbol, ERC-20 by the same curated registry propose_shield
-  // resolves against — turns "ETH'imi unshield et" into a working proposal instead of a
-  // guaranteed "Shielded token bulunamadı" for the single most natural way to ask.
   const portfolio = await network.getShieldedPortfolio(account);
-  const holding = portfolio.find((h) => {
-    if (h.symbol.toLowerCase() === tokenSymbol.toLowerCase()) return true;
-    if (h.isNative) return tokenSymbol.toLowerCase() === network.currency_symbol.toLowerCase();
-    return false;
-  });
-  const resolvedHolding =
-    holding ??
-    (await (async () => {
-      const { default: SwapService } = await import("./SwapService.js");
-      const erc20 = SwapService.getInstance().getTokenBySymbol(network.network_id, tokenSymbol);
-      if (!erc20) return undefined;
-      return portfolio.find((h) => !h.isNative && h.underlying.toLowerCase() === erc20.address.toLowerCase());
-    })());
+  const resolvedHolding = await resolveShieldedHolding(network, portfolio, tokenSymbol);
   if (!resolvedHolding) {
     throw new ToolArgumentError(`Shielded token bulunamadı: "${tokenSymbol}".`);
   }
@@ -676,6 +719,98 @@ async function prepareProposeUnshield(
   };
 }
 
+async function prepareProposeConfidentialTransfer(
+  network: Network,
+  context: ToolExecutionContext,
+  args: Record<string, unknown>
+): Promise<PreparedProposal> {
+  const toInput = requireNonEmptyString(args, "to");
+  const { amountNumber } = requirePositiveAmount(args);
+  const tokenSymbol = requireTokenSymbol(args, true)!;
+  const account = requireAccount(context);
+
+  const portfolio = await network.getShieldedPortfolio(account);
+  const resolvedHolding = await resolveShieldedHolding(network, portfolio, tokenSymbol);
+  if (!resolvedHolding) {
+    throw new ToolArgumentError(`Shielded token bulunamadı: "${tokenSymbol}".`);
+  }
+
+  // The tool schema advertises ENS/UD recipients too — resolved here so a bad/unresolvable
+  // domain fails the proposal with a clear reason instead of reaching ConfirmationCard.
+  if (isDomainName(toInput)) {
+    const resolved = await resolveDomain(toInput);
+    if (!resolved.address) {
+      throw new ToolArgumentError(resolved.error ?? `"${toInput}" bir adrese çözümlenemedi.`);
+    }
+  }
+
+  return {
+    // Confidential balance, already decrypted and decimal-formatted by getShieldedPortfolio
+    // — exactly the unit `amount` is in, so no conversion needed for the ratio check.
+    balance: Number(resolvedHolding.balance),
+    amountNumber,
+    buildPreview: async () => {
+      // Unlike unshield's plain uint64 amount, confidentialTransfer's calldata itself must
+      // carry a real ciphertext + proof (Network.transferConfidential's encryptUint64 call) —
+      // producing that needs the account's signer to authenticate an FHE permit, which this
+      // module must never touch for a proposal tool (see file header: no path to
+      // Account.ethers_wallet for a proposal, ever). So there is no eth_call worth running
+      // here: simulating against a garbage/zero ciphertext would either revert for reasons
+      // that say nothing about whether the REAL confirm-time transfer will succeed, or pass a
+      // check the contract doesn't actually perform on nonsense input. Domain knowledge fills
+      // in instead — same pattern as buildErc20ShieldSimulation's no-allowance branch. The
+      // real encryption (and the only place this ever signs anything) happens in
+      // ConfirmationCard at confirm time, via Network.transferConfidential itself.
+      const simulation: SimResult = {
+        success: true,
+        balanceChanges: [],
+        warnings: [
+          "🔒 Gizli Transfer: Miktar şifreli olarak gönderilecek — zincirde görünmeyecek. " +
+          "Şifreleme yalnızca siz onayladığınızda, cüzdanınızda yapılır.",
+        ],
+        riskLevel: "LOW",
+        operationType: "transferEncrypted",
+        isContractInteraction: true,
+        isNewRecipient: false,
+        contractAgeDays: null,
+      };
+      return { requiresConfirmation: true, toolName: "propose_confidential_transfer", originalArgs: args, simulation };
+    },
+  };
+}
+
+async function prepareProposeRevokeApproval(
+  network: Network,
+  context: ToolExecutionContext,
+  args: Record<string, unknown>
+): Promise<PreparedProposal> {
+  const tokenAddress = requireNonEmptyString(args, "tokenAddress");
+  const spenderAddress = requireNonEmptyString(args, "spenderAddress");
+
+  const { isAddress } = await import("ethers");
+  if (!isAddress(tokenAddress)) throw new ToolArgumentError(`"${tokenAddress}" geçerli bir adres değil.`);
+  if (!isAddress(spenderAddress)) throw new ToolArgumentError(`"${spenderAddress}" geçerli bir adres değil.`);
+
+  return {
+    // Revoke has no "amount" — 0/0 makes evaluate()'s balance-ratio check a no-op (ratio is
+    // always 0/anything), which is exactly right: nothing here scales with wallet balance.
+    balance: 0,
+    amountNumber: 0,
+    buildPreview: async () => {
+      const { Interface } = await import("ethers");
+      const iface = new Interface(["function approve(address spender, uint256 amount) returns (bool)"]);
+      const provider = await getEthersProvider(network);
+      const simulation = await simulateAndEnrich(provider, {
+        from: context.account,
+        to: tokenAddress,
+        value: "0",
+        data: iface.encodeFunctionData("approve", [spenderAddress, 0]),
+      });
+      return { requiresConfirmation: true, toolName: "propose_revoke_approval", originalArgs: args, simulation };
+    },
+  };
+}
+
 async function prepareProposal(
   toolName: ProposalTool,
   network: Network,
@@ -689,6 +824,10 @@ async function prepareProposal(
       return prepareProposeShield(network, context, args);
     case "propose_unshield":
       return prepareProposeUnshield(network, context, args);
+    case "propose_confidential_transfer":
+      return prepareProposeConfidentialTransfer(network, context, args);
+    case "propose_revoke_approval":
+      return prepareProposeRevokeApproval(network, context, args);
   }
 }
 
@@ -866,6 +1005,10 @@ export async function executeToolCall(
           return { result: await handleGetPendingClaims(network, requireAccount(context), args, context) };
         case "get_faucet_info":
           return { result: handleGetFaucetInfo(network, context) };
+        case "get_token_approvals":
+          return { result: await handleGetTokenApprovals(network, context) };
+        case "get_connected_sites":
+          return { result: await handleGetConnectedSites(context) };
       }
     }
 

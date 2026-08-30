@@ -73,18 +73,20 @@ async function findErc20ShieldHolding(
 }
 
 /**
- * Resolves a propose_unshield `tokenSymbol` against an already-fetched shielded portfolio.
+ * Resolves a shielded-token `tokenSymbol` (propose_unshield's or propose_confidential_transfer's
+ * — same namespace, same fallback) against an already-fetched shielded portfolio.
  *
  * The schema's primary namespace is the confidential wrapper's own symbol (e.g. "aeETH",
  * "aeDAI") — matched first. But nothing else in the wallet ever shows that name to a user, so
  * a request naming the PUBLIC underlying token instead ("ETH", "DAI" — what a person, or a
- * fast-path regex, actually types) is resolved the same way AgentToolRunner.prepareProposeUnshield
- * falls back: native by currency symbol, ERC-20 by SwapService's curated registry. Mirroring
- * that fallback here too matters, not just in the preview — this is what handleApprove and the
- * balance-display effects re-resolve against at confirm time, and a preview that succeeded on
- * the fallback must not fail to confirm because only half of this pair knew about it.
+ * fast-path regex, actually types) is resolved the same way AgentToolRunner's shared
+ * resolveShieldedHolding falls back: native by currency symbol, ERC-20 by SwapService's curated
+ * registry. Mirroring that fallback here too matters, not just in the preview — this is what
+ * handleApprove and the balance-display effects re-resolve against at confirm time, and a
+ * preview that succeeded on the fallback must not fail to confirm because only half of this
+ * pair knew about it.
  */
-async function findUnshieldHolding(
+async function findShieldedHolding(
   network: Network,
   tokenSymbol: string,
   portfolio: ShieldedHolding[]
@@ -232,15 +234,16 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
   }, [activeAccount, cardPhase, onStatusChange, toolName, t]);
   const change = primaryBalanceChange(simulation.balanceChanges);
 
-  // propose_unshield's calldata never gets a balanceChange entry (TransactionSimulator's FHE
-  // decoder only pushes a warning for "unwrap"), so amount/symbol come from originalArgs —
-  // the same string AgentToolRunner already validated and simulated successfully with.
+  // propose_unshield/propose_confidential_transfer's calldata never gets a balanceChange
+  // entry either (the latter's amount is encrypted and never even reaches a real eth_call —
+  // see prepareProposeConfidentialTransfer's docs), so amount/symbol come from originalArgs —
+  // the same string AgentToolRunner already validated and built the proposal with.
   const displayAmount =
-    toolName === "propose_unshield" || !change || change.type === "FHE_ENCRYPTED"
+    toolName === "propose_unshield" || toolName === "propose_confidential_transfer" || !change || change.type === "FHE_ENCRYPTED"
       ? String(originalArgs.amount ?? "")
       : change.amountFormatted ?? String(originalArgs.amount ?? "");
   const displaySymbol =
-    toolName === "propose_unshield" || toolName === "propose_shield"
+    toolName === "propose_unshield" || toolName === "propose_shield" || toolName === "propose_confidential_transfer"
       // propose_shield's calldata (native or ERC-20) never gets a balanceChange symbol
       // either — see buildErc20ShieldSimulation/decodeFheOperation's "wrap" case — so this
       // reads the same originalArgs.tokenSymbol the proposal was built from, same as unshield.
@@ -252,6 +255,10 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
       ? "agent.confirmationCardShieldSummary"
       : toolName === "propose_unshield"
       ? "agent.confirmationCardUnshieldSummary"
+      : toolName === "propose_confidential_transfer"
+      ? "agent.confirmationCardConfidentialTransferSummary"
+      : toolName === "propose_revoke_approval"
+      ? "agent.confirmationCardRevokeSummary"
       : toolName === "pay_for_resource"
       ? "agent.confirmationCardX402Summary"
       : "agent.confirmationCardSendSummary";
@@ -260,17 +267,19 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
   // Skipped for pay_for_resource: it spends USDC, not the native/shielded asset this effect
   // knows how to fetch — showing "remaining ETH balance" under a USDC payment would be wrong,
   // not just unhelpful, so beforeBalance simply stays null and the row below never renders.
+  // Skipped for propose_revoke_approval too — revoking doesn't move any balance at all, "amount"
+  // has no meaning for it (see prepareProposeRevokeApproval's amountNumber:0 docs).
   React.useEffect(() => {
     let cancelled = false;
     const address = activeAccount?.GetAddress();
-    if (!network || !address || toolName === "pay_for_resource") return;
+    if (!network || !address || toolName === "pay_for_resource" || toolName === "propose_revoke_approval") return;
 
     (async () => {
       try {
-        if (toolName === "propose_unshield") {
+        if (toolName === "propose_unshield" || toolName === "propose_confidential_transfer") {
           const tokenSymbol = String(originalArgs.tokenSymbol ?? "");
           const portfolio = await network.getShieldedPortfolio(activeAccount!);
-          const holding = await findUnshieldHolding(network, tokenSymbol, portfolio);
+          const holding = await findShieldedHolding(network, tokenSymbol, portfolio);
           if (!cancelled) setBeforeBalance(holding ? Number(holding.balance) : null);
         } else if (
           toolName === "propose_shield" &&
@@ -317,12 +326,12 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
     // balance, not USDC, so it would show the wrong asset for an x402 payment. The
     // informational "kalan bütçe" the auto-pay path shows instead (X402PaymentCard, a
     // different piece) is the metric that's actually meaningful here.
-    if (!network || !activeAccount || toolName === "pay_for_resource") return null;
+    if (!network || !activeAccount || toolName === "pay_for_resource" || toolName === "propose_revoke_approval") return null;
     try {
-      if (toolName === "propose_unshield") {
+      if (toolName === "propose_unshield" || toolName === "propose_confidential_transfer") {
         const tokenSymbol = String(originalArgs.tokenSymbol ?? "");
         const portfolio = await network.getShieldedPortfolio(activeAccount);
-        const holding = await findUnshieldHolding(network, tokenSymbol, portfolio);
+        const holding = await findShieldedHolding(network, tokenSymbol, portfolio);
         if (!holding) return null;
         const balance = { amount: holding.balance, symbol: holding.symbol };
         setNewBalance(balance);
@@ -432,7 +441,7 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
           const amount = String(originalArgs.amount ?? "");
           const tokenSymbol = String(originalArgs.tokenSymbol ?? "");
           const portfolio = await network.getShieldedPortfolio(activeAccount);
-          const holding = await findUnshieldHolding(network, tokenSymbol, portfolio);
+          const holding = await findShieldedHolding(network, tokenSymbol, portfolio);
           if (!holding) throw new Error(t("agent.confirmationCardTokenMissing", { symbol: tokenSymbol }));
 
           // unshieldAndClaim waits out burn + decrypt + claim itself — no extra
@@ -451,6 +460,52 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
             }
           );
           setTxHash(hash);
+          break;
+        }
+
+        case "propose_confidential_transfer": {
+          const to = await resolveRecipient(String(originalArgs.to ?? ""));
+          const amount = String(originalArgs.amount ?? "");
+          const tokenSymbol = String(originalArgs.tokenSymbol ?? "");
+          // Re-resolved live, same reasoning as propose_shield/unshield above — the wrapper
+          // the preview was built against (or never even simulated a real call for, see
+          // prepareProposeConfidentialTransfer's docs) could have moved on since.
+          const portfolio = await network.getShieldedPortfolio(activeAccount);
+          const holding = await findShieldedHolding(network, tokenSymbol, portfolio);
+          if (!holding) throw new Error(t("agent.confirmationCardTokenMissing", { symbol: tokenSymbol }));
+
+          // This is the ONLY place the amount is ever encrypted — transferConfidential calls
+          // ensureFhe()/encryptUint64() internally, which is exactly the signer-touching step
+          // AgentToolRunner's preview was never allowed to perform (see its docs). Every onStep
+          // firing happens before the transaction is even sent, so any call here just means
+          // "still encrypting" — no need to distinguish the SDK's own internal step names.
+          hash = await network.transferConfidential(activeAccount, holding.wrapper, to, amount, () => {
+            setWorkingLabel(t("agent.confirmationCardEncrypting"));
+          });
+          setTxHash(hash);
+          setWorkingLabel(t("agent.confirmationCardConfirming"));
+          onStatusChange({ status: "pending", toolName, originalArgs, txHash: hash });
+          await network.waitForTransaction(hash);
+          break;
+        }
+
+        case "propose_revoke_approval": {
+          const tokenAddress = String(originalArgs.tokenAddress ?? "");
+          const spenderAddress = String(originalArgs.spenderAddress ?? "");
+          const { Interface } = await import("ethers");
+          const iface = new Interface(["function approve(address spender, uint256 amount) returns (bool)"]);
+          const data = iface.encodeFunctionData("approve", [spenderAddress, 0]);
+
+          hash = await network.sendTransaction(
+            activeAccount,
+            { to: tokenAddress, value: "0", data, gasLimit: 100000n },
+            (broadcastHash) => {
+              setTxHash(broadcastHash);
+              setWorkingLabel(t("agent.confirmationCardConfirming"));
+              onStatusChange({ status: "pending", toolName, originalArgs, txHash: broadcastHash });
+            }
+          );
+          await network.waitForTransaction(hash);
           break;
         }
 
@@ -564,8 +619,8 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
             {t(summaryKey, { amount: displayAmount, symbol: displaySymbol })}
           </Typography>
 
-          {/* Recipient, propose_send only */}
-          {toolName === "propose_send" && (
+          {/* Recipient, propose_send / propose_confidential_transfer only */}
+          {(toolName === "propose_send" || toolName === "propose_confidential_transfer") && (
             <Box>
               <Typography variant="caption" color="text.secondary">
                 {t("agent.confirmationCardRecipient")}
@@ -584,6 +639,25 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
               </Typography>
               <Typography variant="body2" sx={{ wordBreak: "break-all" }}>
                 {String(originalArgs.resource ?? "")}
+              </Typography>
+            </Box>
+          )}
+
+          {/* Token + spender, propose_revoke_approval only — these are the two addresses that
+              actually identify what's being revoked; there's no amount/symbol to show instead. */}
+          {toolName === "propose_revoke_approval" && (
+            <Box>
+              <Typography variant="caption" color="text.secondary">
+                {t("agent.confirmationCardRevokeToken")}
+              </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace", wordBreak: "break-all" }}>
+                {String(originalArgs.tokenAddress ?? "")}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.75 }}>
+                {t("agent.confirmationCardRevokeSpender")}
+              </Typography>
+              <Typography variant="body2" sx={{ fontFamily: "monospace", wordBreak: "break-all" }}>
+                {String(originalArgs.spenderAddress ?? "")}
               </Typography>
             </Box>
           )}

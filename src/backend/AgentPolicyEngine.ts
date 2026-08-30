@@ -45,6 +45,8 @@ export const READ_ONLY_TOOLS = [
   "get_shielded_portfolio",
   "get_pending_claims",
   "get_faucet_info",
+  "get_token_approvals",
+  "get_connected_sites",
 ] as const;
 
 /**
@@ -59,6 +61,8 @@ export const PROPOSAL_TOOLS = [
   "propose_send",
   "propose_shield",
   "propose_unshield",
+  "propose_confidential_transfer",
+  "propose_revoke_approval",
 ] as const;
 
 /**

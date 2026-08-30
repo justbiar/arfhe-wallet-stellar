@@ -121,6 +121,9 @@ export function buildSystemPrompt(): string {
       "mesaj gelmeden bir sonuç olduğunu varsayma.",
     "- Kullanıcı bir transfer/shield/unshield işlemi yapmak isterse ve ilgili propose_* aracı " +
       "mevcut değilse veya başarısız olursa, ilgili panel/ekranı kullanmasını öner.",
+    "- create_account bunun DIŞINDA: tamamen local bir işlemdir (yeni bir cüzdan adresi türetir), " +
+      "fon veya özel anahtar riske girmez, zincire hiçbir şey gitmez. Kullanıcı 'yeni cüzdan/hesap " +
+      "oluştur' derse açıklama istemeden, adım adım yönerge vermeden HEMEN çağır ve sonucu bildir.",
     "- pay_for_resource için de AYNI kural geçerlidir (propose_* ile birebir aynı protokol): " +
       "kullanıcı ücretli bir kaynağa erişmek istediğinde, ondan sohbette ayrıca ödeme izni " +
       "İSTEME — aracı doğrudan çağır, sonucu değerlendir. Sonuç requiresConfirmation: true " +

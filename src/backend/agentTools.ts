@@ -12,6 +12,10 @@
  *  - X402_TOOLS       — `pay_for_resource`. Executes for real (possibly with no confirmation
  *                        at all, if within budget) — see AgentPolicyEngine.evaluateX402Payment()
  *                        and AgentToolRunner.handlePayForResource().
+ *  - IMMEDIATE_TOOLS  — `create_account`. Executes for real, no confirmation card at all —
+ *                        see AgentPolicyEngine.IMMEDIATE_TOOLS's own docs for why this one
+ *                        specific action qualifies (purely local, never touches a key's
+ *                        signing capability or the network).
  * FORBIDDEN_TOOLS are never defined here — they're excluded at the AgentPolicyEngine level
  * and must never be offered to the model at all.
  *
@@ -31,9 +35,9 @@
  * here or on any backend; execution happens locally against Network.ts / FheCofheService.ts.
  */
 
-import type { ReadOnlyTool, ProposalTool, X402Tool } from "./AgentPolicyEngine.js";
+import type { ReadOnlyTool, ProposalTool, X402Tool, ImmediateTool } from "./AgentPolicyEngine.js";
 
-type AllowedToolName = ReadOnlyTool | ProposalTool | X402Tool;
+type AllowedToolName = ReadOnlyTool | ProposalTool | X402Tool | ImmediateTool;
 
 /** A JSON Schema object, restricted to what OpenAI-style tool parameters actually use. */
 interface ToolParameterSchema {
@@ -217,6 +221,30 @@ export const AGENT_TOOLS: AgentToolDefinition[] = [
       parameters: {
         type: "object",
         properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_account",
+      description:
+        "Cüzdana YENİ bir hesap (yeni bir adres/keypair) ekler ve onu aktif hesap yapar. " +
+        "Kullanıcı 'yeni cüzdan/hesap oluştur', 'yeni bir adres aç' gibi bir şey söylediğinde " +
+        "DİREKT bu aracı çağır — bu tamamen local bir işlemdir (cüzdanın kendi 'Create New " +
+        "Account' butonuyla aynı şeyi yapar), hiçbir fon veya özel anahtar riske girmez, " +
+        "zincire hiçbir şey gönderilmez. Bu yüzden önizleme/onay GEREKMEZ — açıklama istemeden, " +
+        "adım adım yönerge vermeden hemen çağır ve sonucu bildir.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            description: "Opsiyonel. Yeni hesaba verilecek isim. Belirtilmezse otomatik bir isim atanır.",
+          },
+        },
         required: [],
         additionalProperties: false,
       },

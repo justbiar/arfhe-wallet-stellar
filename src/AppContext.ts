@@ -146,6 +146,15 @@ export class AppContext {
 
         return { injectedSites, walletConnectSessions };
       },
+      createAccount: (name) => {
+        const index = this.accountManager.CreateAccount(name);
+        const account = this.accountManager.GetAll()[index];
+        const address = account?.GetAddress();
+        if (index < 0 || !address) {
+          throw new Error("Yeni hesap oluşturulamadı.");
+        }
+        return { index, address, name: account.GetName() };
+      },
     });
   }
 }

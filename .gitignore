@@ -42,3 +42,7 @@ bun.lockb
 # rewrites hundreds of files — tracking them buries real changes in review noise.
 deploy/artifacts/
 deploy/cache/
+
+# Claude Code's local dev-server launch config (Browser-pane preview target) — machine-
+# specific tooling, not project source.
+.claude/

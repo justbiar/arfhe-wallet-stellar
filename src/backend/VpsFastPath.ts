@@ -46,6 +46,12 @@ const SEND_VERB_RE = /\b(gönder|yolla|send)/i;
 const CHAIN_NAME_RE = /\b(ethereum|arbitrum|base)\b/i;
 const AMOUNT_RE = /\b(\d+(?:[.,]\d+)?)\b/;
 const TOKEN_SYMBOL_RE = /\b(ETH|USDC|USDT|MATIC|AVAX|BNB|DAI)\b/i;
+// create_account is IMMEDIATE_TOOLS, not a proposal — no address/amount to require first, so
+// this pattern alone is enough. "yeni (bir) cüzdan/hesap/adres" covers the wallet's own
+// phrasing regardless of which verb follows ("oluştur", "aç", "ekle" ...) — bare "aç"/"open" is
+// deliberately NOT a trigger on its own, it means a dozen unrelated things without "yeni ... "
+// right before it.
+const CREATE_ACCOUNT_RE = /\b(yeni (bir )?(cüzdan|hesap|adres)|create (a |an )?(new )?(wallet|account))\b/i;
 
 /**
  * Runs one tool directly (bypassing the model entirely) and builds the same
@@ -114,6 +120,12 @@ function formatFaucet(result: unknown): string {
   );
 }
 
+function formatCreateAccount(result: unknown): string {
+  const r = result as { address?: string; name?: string } | null;
+  if (!r?.address) return "Yeni hesap oluşturulamadı.";
+  return `Yeni hesap oluşturuldu: ${r.name ?? "isimsiz"} (${r.address}). Artık aktif hesabınız bu.`;
+}
+
 function formatShieldedPortfolio(result: unknown): string {
   const holdings = (result as { symbol: string; balance: string }[] | null) ?? [];
   if (holdings.length === 0) return "Şu an şifreli (shielded) bir varlığınız görünmüyor.";
@@ -131,6 +143,14 @@ export async function tryVpsFastPath(
 ): Promise<RunAgentTurnResult | null> {
   const address = ADDRESS_RE.exec(userMessage)?.[0];
   const amount = AMOUNT_RE.exec(userMessage)?.[1];
+
+  // create_account first: it shares no vocabulary with anything else here ("hesap"/"cüzdan"
+  // alone, without "yeni", never reaches this branch — see CREATE_ACCOUNT_RE), and unlike every
+  // other branch below it isn't a proposal tool at all, so there's no confirmation card to wait
+  // for — the result is final the moment the tool call returns.
+  if (CREATE_ACCOUNT_RE.test(userMessage)) {
+    return fastToolReply(userMessage, "create_account", {}, context, conversationHistory, formatCreateAccount);
+  }
 
   // Send: needs an explicit verb + a real address + a numeric amount, all three — narrow on
   // purpose so a hypothetical ("0.5 ETH gönderirsem ne olur?") is still ambiguous enough to

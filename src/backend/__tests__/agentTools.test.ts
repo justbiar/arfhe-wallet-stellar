@@ -1,6 +1,6 @@
 /// <reference types="vitest/globals" />
 import { AGENT_TOOLS } from '../agentTools';
-import { READ_ONLY_TOOLS, PROPOSAL_TOOLS, X402_TOOLS } from '../AgentPolicyEngine';
+import { READ_ONLY_TOOLS, PROPOSAL_TOOLS, X402_TOOLS, IMMEDIATE_TOOLS } from '../AgentPolicyEngine';
 
 /**
  * @vitest-environment node
@@ -8,16 +8,16 @@ import { READ_ONLY_TOOLS, PROPOSAL_TOOLS, X402_TOOLS } from '../AgentPolicyEngin
  * agentTools testleri
  *
  * Her tool tanımının OpenAI function-calling formatına uygun geçerli bir JSON şeması
- * olduğunu ve AgentPolicyEngine'in READ_ONLY_TOOLS + PROPOSAL_TOOLS + X402_TOOLS setleriyle
- * birebir eşleştiğini doğrular. Ağ/RPC çağrısı yapılmaz.
+ * olduğunu ve AgentPolicyEngine'in READ_ONLY_TOOLS + PROPOSAL_TOOLS + X402_TOOLS +
+ * IMMEDIATE_TOOLS setleriyle birebir eşleştiğini doğrular. Ağ/RPC çağrısı yapılmaz.
  */
 describe('agentTools', () => {
   it('AGENT_TOOLS boş değildir', () => {
     expect(AGENT_TOOLS.length).toBeGreaterThan(0);
   });
 
-  it('7 read-only + 5 proposal + 1 x402 tool tanımlıdır', () => {
-    expect(AGENT_TOOLS).toHaveLength(13);
+  it('7 read-only + 1 immediate + 5 proposal + 1 x402 tool tanımlıdır', () => {
+    expect(AGENT_TOOLS).toHaveLength(14);
   });
 
   describe('her tool geçerli bir OpenAI function-calling şemasına sahiptir', () => {
@@ -29,6 +29,7 @@ describe('agentTools', () => {
       'get_faucet_info',
       'get_token_approvals',
       'get_connected_sites',
+      'create_account',
       'propose_send',
       'propose_shield',
       'propose_unshield',
@@ -72,9 +73,9 @@ describe('agentTools', () => {
   });
 
   // ─── AgentPolicyEngine ile isim tutarlılığı ───────────────────
-  describe('READ_ONLY_TOOLS / PROPOSAL_TOOLS / X402_TOOLS ile birebir eşleşme', () => {
-    it('her AGENT_TOOLS ismi READ_ONLY_TOOLS, PROPOSAL_TOOLS veya X402_TOOLS içinde bulunur', () => {
-      const allowed = new Set<string>([...READ_ONLY_TOOLS, ...PROPOSAL_TOOLS, ...X402_TOOLS]);
+  describe('READ_ONLY_TOOLS / PROPOSAL_TOOLS / X402_TOOLS / IMMEDIATE_TOOLS ile birebir eşleşme', () => {
+    it('her AGENT_TOOLS ismi READ_ONLY_TOOLS, PROPOSAL_TOOLS, X402_TOOLS veya IMMEDIATE_TOOLS içinde bulunur', () => {
+      const allowed = new Set<string>([...READ_ONLY_TOOLS, ...PROPOSAL_TOOLS, ...X402_TOOLS, ...IMMEDIATE_TOOLS]);
       for (const tool of AGENT_TOOLS) {
         expect(allowed.has(tool.function.name)).toBe(true);
       }
@@ -100,6 +101,16 @@ describe('agentTools', () => {
     it('X402_TOOLS içindeki her isim için bir AGENT_TOOLS tanımı vardır (CONFIRMABLE_TOOLS kilidi)', () => {
       const names = new Set(AGENT_TOOLS.map((t) => t.function.name));
       for (const tool of X402_TOOLS) {
+        expect(names.has(tool)).toBe(true);
+      }
+    });
+
+    // Same structural lock as X402_TOOLS above, for the same reason: a model that never sees
+    // create_account in its tool schema can never call it, no matter how well AgentToolRunner
+    // implements it.
+    it('IMMEDIATE_TOOLS içindeki her isim için bir AGENT_TOOLS tanımı vardır', () => {
+      const names = new Set(AGENT_TOOLS.map((t) => t.function.name));
+      for (const tool of IMMEDIATE_TOOLS) {
         expect(names.has(tool)).toBe(true);
       }
     });

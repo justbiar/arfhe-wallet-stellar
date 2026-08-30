@@ -39,8 +39,10 @@ import {
   READ_ONLY_TOOLS,
   PROPOSAL_TOOLS,
   X402_TOOLS,
+  IMMEDIATE_TOOLS,
   type ReadOnlyTool,
   type ProposalTool,
+  type ImmediateTool,
   type AgentToolArgs,
   type PolicyDecision,
 } from "./AgentPolicyEngine.js";
@@ -114,6 +116,12 @@ export interface AgentToolRunnerDeps {
    * regardless of which account is currently active.
    */
   getConnectedSites(address: string): Promise<ConnectedSitesInfo>;
+  /**
+   * Derives a new local account and makes it active — the same call the wallet's own
+   * "Create New Account" button makes. Never touches the network or an existing key; see
+   * IMMEDIATE_TOOLS's own docs for why create_account is allowed to skip a confirmation card.
+   */
+  createAccount(name?: string): { index: number; address: string; name: string };
 }
 
 export interface ConnectedSitesInfo {
@@ -362,6 +370,11 @@ async function handleGetTokenApprovals(network: Network, context: ToolExecutionC
 
 async function handleGetConnectedSites(context: ToolExecutionContext): Promise<unknown> {
   return deps!.getConnectedSites(context.account);
+}
+
+function handleCreateAccount(args: Record<string, unknown>): unknown {
+  const name = typeof args.name === "string" && args.name.trim() ? args.name.trim() : undefined;
+  return deps!.createAccount(name);
 }
 
 async function handleGetShieldedBalance(
@@ -1028,6 +1041,15 @@ export async function executeToolCall(
     //    see handlePayForResource's own docs for why this is a separate branch entirely. ──
     if ((X402_TOOLS as readonly string[]).includes(toolName)) {
       return { result: await handlePayForResource(context, args) };
+    }
+
+    // ── Immediate tools: execute right away, no evaluate() call and no confirmation card —
+    //    see IMMEDIATE_TOOLS's own docs for the bar an action has to clear to belong here. ──
+    if ((IMMEDIATE_TOOLS as readonly string[]).includes(toolName)) {
+      switch (toolName as ImmediateTool) {
+        case "create_account":
+          return { result: handleCreateAccount(args) };
+      }
     }
 
     // Forbidden or genuinely unrecognized — evaluate() supplies the precise reason

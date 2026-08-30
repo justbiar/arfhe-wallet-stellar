@@ -7,25 +7,31 @@ import { ColorModeProvider, ColorModeContext } from "./ThemeContext";
 import { getTheme } from "./components/ArfTheme";
 import React, { useContext, useMemo, Suspense } from "react";
 import { PageSkeleton } from "./components/SkeletonLoaders";
+import lazyWithRetry, { noteChunkLoadSucceeded } from "./lazyWithRetry";
 
-// Lazy-loaded pages — only downloaded when navigated to
-const Home = React.lazy(() => import("./pages/Home"));
-const Portfolio = React.lazy(() => import("./pages/Portfolio"));
-const Privacy = React.lazy(() => import("./pages/Privacy"));
-const Explore = React.lazy(() => import("./pages/Explore"));
-const History = React.lazy(() => import("./pages/History"));
-const Revoke = React.lazy(() => import("./pages/Revoke"));
-const Agent = React.lazy(() => import("./pages/Agent"));
-const Settings = React.lazy(() => import("./pages/Settings"));
-const SettingsSecurity = React.lazy(() => import("./pages/SettingsSecurity"));
-const SettingsNetworks = React.lazy(() => import("./pages/SettingsNetworks"));
-const SettingsAccounts = React.lazy(() => import("./pages/SettingsAccounts"));
-const SettingsNotifications = React.lazy(() => import("./pages/SettingsNotifications"));
-const TokenDetail = React.lazy(() => import("./pages/TokenDetail"));
-const NotFound = React.lazy(() => import("./pages/NotFound"));
+// Lazy-loaded pages — only downloaded when navigated to.
+//
+// Through lazyWithRetry rather than React.lazy: a chunk that fails to arrive otherwise
+// rejects straight into the error boundary and the whole wallet is a crash screen. That
+// happens for a mundane reason — the extension was reloaded or updated while this page was
+// open, so the document is asking for the previous build's file names.
+const Home = lazyWithRetry(() => import("./pages/Home"));
+const Portfolio = lazyWithRetry(() => import("./pages/Portfolio"));
+const Privacy = lazyWithRetry(() => import("./pages/Privacy"));
+const Explore = lazyWithRetry(() => import("./pages/Explore"));
+const History = lazyWithRetry(() => import("./pages/History"));
+const Revoke = lazyWithRetry(() => import("./pages/Revoke"));
+const Agent = lazyWithRetry(() => import("./pages/Agent"));
+const Settings = lazyWithRetry(() => import("./pages/Settings"));
+const SettingsSecurity = lazyWithRetry(() => import("./pages/SettingsSecurity"));
+const SettingsNetworks = lazyWithRetry(() => import("./pages/SettingsNetworks"));
+const SettingsAccounts = lazyWithRetry(() => import("./pages/SettingsAccounts"));
+const SettingsNotifications = lazyWithRetry(() => import("./pages/SettingsNotifications"));
+const TokenDetail = lazyWithRetry(() => import("./pages/TokenDetail"));
+const NotFound = lazyWithRetry(() => import("./pages/NotFound"));
 // Opened by the service worker in its own window for injected-provider requests.
 // Deliberately outside AppLayout: no nav chrome belongs on an approval screen.
-const Approve = React.lazy(() => import("./pages/Approve"));
+const Approve = lazyWithRetry(() => import("./pages/Approve"));
 
 // Wrap a route element in a smooth Fade transition
 const FadePage = React.memo(function FadePage({ children }: { children: React.ReactNode }) {
@@ -69,6 +75,14 @@ function AppRoutes() {
 function ThemedApp() {
   const { mode } = useContext(ColorModeContext);
   const theme = useMemo(() => getTheme(mode), [mode]);
+
+  // Reaching here means the app mounted, so whatever chunk failure spent the one-shot
+  // reload earlier is behind us. Hand the budget back: a user who leaves the popup open
+  // across a later extension update should get their own reload rather than a crash
+  // screen because an unrelated failure used it hours ago.
+  React.useEffect(() => {
+    noteChunkLoadSucceeded();
+  }, []);
 
   return (
     <ThemeProvider theme={theme}>

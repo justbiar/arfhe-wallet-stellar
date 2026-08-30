@@ -34,26 +34,37 @@ export default function ConnectedSites() {
     const { t } = useTranslation();
     const context = useContext(WalletContext);
     const permissions = context?.sitePermissions;
+    const activeAddress = context?.accountManager?.GetActive()?.GetAddress();
 
     const [sites, setSites] = useState<SitePermission[]>([]);
 
+    // A grant belongs to an origin *and* an account, so this list only shows what the
+    // account currently in the wallet has given away. Showing every account's grants meant
+    // switching accounts left the connections unchanged underneath a different address.
     const reload = useCallback(async () => {
-        if (!permissions) return;
-        setSites(await permissions.getAll());
-    }, [permissions]);
+        const address = activeAddress?.toLowerCase();
+        if (!permissions || !address) {
+            setSites([]);
+            return;
+        }
+        const all = await permissions.getAll();
+        setSites(all.filter((p) => p.accounts.some((a) => a.toLowerCase() === address)));
+    }, [permissions, activeAddress]);
 
     useEffect(() => { void reload(); }, [reload]);
 
     const disconnect = async (origin: string) => {
-        if (!permissions) return;
-        await permissions.revoke(origin);
+        if (!permissions || !activeAddress) return;
+        // Only this account's access; the site may still be connected to others.
+        await permissions.revokeAccount(origin, activeAddress);
         notifyWorker();
         await reload();
     };
 
     const disconnectAll = async () => {
-        if (!permissions) return;
-        await permissions.revokeAll();
+        if (!permissions || !activeAddress) return;
+        // "All" matches the list above it: this account's grants, not every account's.
+        await permissions.revokeAccountEverywhere(activeAddress);
         notifyWorker();
         await reload();
     };

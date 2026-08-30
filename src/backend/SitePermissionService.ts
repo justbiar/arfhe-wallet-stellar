@@ -166,6 +166,34 @@ export default class SitePermissionService {
         await this.write((await this.getAll()).filter((p) => p.origin !== normalized));
     }
 
+    /**
+     * Take one account's access to one site away, leaving other accounts' alone.
+     *
+     * A grant is per origin *and* per account, so revoking is too. Dropping the whole
+     * origin because the user is looking at one account would silently disconnect the
+     * others — from a screen that named only the one in front of them.
+     *
+     * When the account being removed is the last one on that site, the site is dropped
+     * entirely: an origin with an empty account list is a grant to nobody, and leaving it
+     * in the store would keep the site listed as connected while it can see nothing.
+     */
+    async revokeAccount(origin: string, address: string): Promise<void> {
+        const normalized = normalizeOrigin(origin);
+        const target = address.toLowerCase();
+        if (!normalized || !target) return;
+
+        const next: SitePermission[] = [];
+        for (const permission of await this.getAll()) {
+            if (permission.origin !== normalized) {
+                next.push(permission);
+                continue;
+            }
+            const remaining = permission.accounts.filter((a) => a !== target);
+            if (remaining.length > 0) next.push({ ...permission, accounts: remaining });
+        }
+        await this.write(next);
+    }
+
     async revokeAll(): Promise<void> {
         await this.write([]);
     }

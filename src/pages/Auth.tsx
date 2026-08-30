@@ -103,16 +103,18 @@ enum AuthStep {
   SET_PASSWORD
 }
 
+/** How the active account's key material was obtained — mirrors backend-proxy's `users.source` enum. */
+type UserSource = 'google' | 'created' | 'mnemonic' | 'private_key';
+
 interface WalletStepProps {
   accountManager: AccountManager | undefined;
-  onDone: () => void;
+  onDone: (source: UserSource) => void;
 }
 
 interface PasswordScreenProps {
   storageManager: StorageManager | undefined;
   accountManager: AccountManager | undefined;
-  authMethod: 'password' | 'google' | null;
-  pendingEmail: string | null;
+  authMethod: UserSource | null;
   onDone: () => void;
 }
 
@@ -208,7 +210,7 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
       setQuizError(t('auth.phraseCheckFailed'));
       return;
     }
-    onDone();
+    onDone('created');
   };
 
   return (
@@ -438,7 +440,7 @@ function ImportWallet({ accountManager, onDone }: WalletStepProps) {
       ];
       await accountManager.AutoDiscoverAccounts(rpcs, 3, index);
 
-      onDone();
+      onDone('mnemonic');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setIsScanning(false);
@@ -467,7 +469,7 @@ function ImportWallet({ accountManager, onDone }: WalletStepProps) {
 
     // Nothing to discover: this key is one account, not a seed for a tree of them.
     setPrivateKey("");
-    onDone();
+    onDone('private_key');
   };
 
   const handleImport = () => {
@@ -595,10 +597,31 @@ function ImportWallet({ accountManager, onDone }: WalletStepProps) {
   );
 }
 
+const PENDING_REGISTRATIONS_KEY = "pendingUserRegistrations";
+
+/**
+ * Queue a failed /users/register call for the service worker to retry later.
+ *
+ * Appends rather than overwrites, so a second failure during the same session (or a
+ * previous one still unresolved) isn't lost. The service worker owns dropping entries
+ * that are too old or have failed too many times — see retryPendingRegistrations() in
+ * service-worker.js.
+ */
+async function enqueuePendingRegistration(walletAddress: string, source: UserSource) {
+  try {
+    const result = await chrome.storage.local.get(PENDING_REGISTRATIONS_KEY);
+    const queue = Array.isArray(result[PENDING_REGISTRATIONS_KEY]) ? result[PENDING_REGISTRATIONS_KEY] : [];
+    queue.push({ wallet_address: walletAddress, source, timestamp: Date.now(), attempts: 0 });
+    await chrome.storage.local.set({ [PENDING_REGISTRATIONS_KEY]: queue });
+  } catch {
+    // Best-effort: if storage itself is unavailable there is nowhere else to remember this.
+  }
+}
+
 /**
  * Set Password screen — shown AFTER wallet creation/import to encrypt account data.
  */
-function SetPasswordScreen({ storageManager, accountManager, authMethod, pendingEmail, onDone }: PasswordScreenProps) {
+function SetPasswordScreen({ storageManager, accountManager, authMethod, onDone }: PasswordScreenProps) {
   const { t } = useTranslation();
   const context = React.useContext(WalletContext);
   const [password, setPassword] = React.useState("");
@@ -649,20 +672,28 @@ function SetPasswordScreen({ storageManager, accountManager, authMethod, pending
 
       // Fire-and-forget: registers this wallet with the pseudonymous user/activity backend
       // (backend-proxy /users/register). Never blocks or fails the onboarding flow — the
-      // wallet is fully usable offline regardless of whether this call succeeds.
-      if (persisted) {
+      // wallet is fully usable offline regardless of whether this call succeeds. A failure
+      // is queued for the service worker to retry later rather than lost outright — see
+      // retryPendingRegistrations() in service-worker.js.
+      if (persisted && authMethod) {
         const address = accountManager?.GetActive()?.GetAddress();
         const proxyBaseUrl = import.meta.env.VITE_AGENT_PROXY_URL as string | undefined;
         if (address && proxyBaseUrl) {
+          // Mirrored into storage so the service worker — which has no `import.meta.env`
+          // of its own — knows where to send a retried registration.
+          chrome.storage.local.set({ arfhe_agent_proxy_url: proxyBaseUrl }).catch(() => {});
+
           fetch(`${proxyBaseUrl}/users/register`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               wallet_address: address,
-              email: authMethod === 'google' ? (pendingEmail ?? undefined) : undefined,
-              source: authMethod ?? 'password',
+              source: authMethod,
             }),
-          }).catch(() => { /* best-effort telemetry only */ });
+          }).catch((err) => {
+            console.warn('[users/register] kayıt başarısız, cüzdan yine de çalışır:', err);
+            enqueuePendingRegistration(address, authMethod);
+          });
         }
       }
 
@@ -988,8 +1019,7 @@ export default function Auth() {
   const [isSocialLoading, setIsSocialLoading] = React.useState(false);
   /** Surfaced under the button — social login used to fail with no explanation at all. */
   const [socialError, setSocialError] = React.useState("");
-  const [authMethod, setAuthMethod] = React.useState<'password' | 'google' | null>(null);
-  const [pendingEmail, setPendingEmail] = React.useState<string | null>(null);
+  const [authMethod, setAuthMethod] = React.useState<UserSource | null>(null);
 
   React.useEffect(() => {
     if (!storageManager) return;
@@ -1030,7 +1060,7 @@ export default function Auth() {
     initAuth();
   }, [storageManager, accountManager]);
 
-  const handleWalletCreated = (method: 'password' | 'google' = 'password') => {
+  const handleWalletCreated = (method: UserSource) => {
     // After create/import, go to set password step
     setAuthMethod(method);
     setStep(AuthStep.SET_PASSWORD);
@@ -1110,7 +1140,6 @@ export default function Auth() {
               storageManager={storageManager}
               accountManager={accountManager}
               authMethod={authMethod}
-              pendingEmail={pendingEmail}
               onDone={() => { window.location.hash = "#/home"; }}
             />
           )}
@@ -1172,12 +1201,10 @@ export default function Auth() {
                     if (web3auth.provider) {
                       const privateKey = await web3auth.provider.request({ method: "eth_private_key" }) as string;
                       let accountName = "Social Account";
-                      let socialEmail: string | null = null;
                       try {
                         const userInfo = await web3auth.getUserInfo();
                         if (userInfo.email) {
                           accountName = userInfo.email;
-                          socialEmail = userInfo.email;
                         } else if (userInfo.name) {
                           accountName = userInfo.name;
                         }
@@ -1195,7 +1222,6 @@ export default function Auth() {
                         ];
                         await accountManager?.AutoDiscoverAccounts(rpcs, 3, importedIndex);
 
-                        setPendingEmail(socialEmail);
                         handleWalletCreated('google');
                       }
                     }

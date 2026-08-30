@@ -8,7 +8,7 @@ import { env, SELF } from "cloudflare:test";
  * test koşusunda istek atmıyoruz — rate limit/flakiness riski).
  */
 
-const EXTENSION_ORIGIN = "chrome-extension://ajfpejolnhgeflhgjmboikiffpdlhngi";
+const EXTENSION_ORIGIN = "chrome-extension://cdhfecdlpblpdngkadiigjmodedapoih";
 
 function postX402(path: string, body: unknown, origin: string = EXTENSION_ORIGIN) {
   return SELF.fetch(`https://proxy.example${path}`, {

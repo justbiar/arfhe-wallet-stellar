@@ -146,6 +146,31 @@ class Network {
    * user's escape hatch, set from the network editor.
    */
   fallbackRpcUrl?: string;
+  /**
+   * Endpoints to try, in order, when the primary one cannot answer.
+   *
+   * The wallet ships with one Alchemy key per chain, compiled into a bundle every user
+   * downloads. That makes the key a shared resource: one quota for the whole userbase, and
+   * extractable by anyone who installs the extension. Exhausting it — by accident at scale,
+   * or on purpose — used to take the wallet down entirely, because a single endpoint that
+   * stops answering is a single point of failure with nothing behind it.
+   *
+   * With a chain behind it the key becomes an accelerator rather than a dependency. The
+   * indexer-backed features degrade (see {@link isAlchemyOnly}), but balances, sends and
+   * everything else keep working on public infrastructure.
+   */
+  fallbackRpcUrls: string[] = [];
+
+  /** Epoch ms until which the primary endpoint is skipped after it failed. */
+  private primaryUnhealthyUntil = 0;
+
+  /**
+   * How long a failing primary is left alone.
+   *
+   * Long enough that a rate limit has a chance to reset, short enough that a user who
+   * opens the wallet a minute later is back on the endpoint that can answer history.
+   */
+  private static readonly PRIMARY_COOLDOWN_MS = 60_000;
   explorer_url?: string;
   currency_symbol: string = "ETH";
   alchemy?: Alchemy;
@@ -183,6 +208,13 @@ class Network {
         this.rpc_url = baseUrl + this.api_key;
       }
     }
+
+    // Public endpoints stand behind whatever the primary is, including when the primary is
+    // the shared Alchemy key. The primary itself is filtered out so a failover never
+    // retries the endpoint that just failed.
+    this.fallbackRpcUrls = (Network.PUBLIC_FALLBACKS[network_id] ?? []).filter(
+      (url) => url !== this.rpc_url
+    );
 
     // Alchemy only for networks that have Alchemy support
     const noAlchemyNetworks = new Set([NetworkId.Sei, NetworkId.Monad_Testnet]);
@@ -306,6 +338,43 @@ class Network {
     return net;
   }
 
+  /**
+   * Public endpoints for the chains the wallet ships with, most reliable first.
+   *
+   * Verified against the live networks rather than copied from a list: `rpc.sepolia.org`
+   * answers with an HTML error page and `sepolia.drpc.org` reports no chain id at all, so
+   * neither is here. An endpoint that is in this table but broken is worse than no table,
+   * because it turns one failure into two.
+   */
+  private static readonly PUBLIC_FALLBACKS: Partial<Record<NetworkId, string[]>> = {
+    [NetworkId.Ethereum_Sepolia]: [
+      "https://ethereum-sepolia-rpc.publicnode.com",
+      "https://1rpc.io/sepolia",
+    ],
+    [NetworkId.Base_Sepolia]: [
+      "https://sepolia.base.org",
+      "https://base-sepolia-rpc.publicnode.com",
+      "https://base-sepolia.drpc.org",
+    ],
+    [NetworkId.Arbitrum_Sepolia]: [
+      "https://sepolia-rollup.arbitrum.io/rpc",
+      "https://arbitrum-sepolia-rpc.publicnode.com",
+      "https://arbitrum-sepolia.drpc.org",
+    ],
+  };
+
+  /**
+   * Whether a method only the indexer implements.
+   *
+   * Sending one of these to a public node produces "method not found" — a *different*
+   * failure from the one that triggered the failover, and one the caller cannot tell apart
+   * from a real answer. The callers of these already have non-indexed paths to fall back
+   * to; letting the request fail cleanly is what lets them take those.
+   */
+  private isAlchemyOnly(method: string): boolean {
+    return method.startsWith("alchemy_");
+  }
+
   isAlchemyConfigured(): boolean {
     return !!this.api_key && this.api_key !== "CUSTOM_URL";
   }
@@ -350,9 +419,19 @@ class Network {
       return json.result;
     };
 
-    return rpcClient.request(rpcUrl, method, params, async () => {
+    // While the primary is cooling off, go straight to a fallback — unless the method is
+    // one only the primary implements, in which case the attempt is still worth making:
+    // failing there lets the caller take its non-indexed path, and it is how the wallet
+    // notices the primary is back.
+    const inCooldown = Date.now() < this.primaryUnhealthyUntil;
+    const firstChoice =
+      inCooldown && !this.isAlchemyOnly(method) && this.fallbackRpcUrls.length > 0
+        ? this.fallbackRpcUrls[0]
+        : rpcUrl;
+
+    return rpcClient.request(firstChoice, method, params, async () => {
       try {
-        return await withRetry(() => post(rpcUrl), {
+        return await withRetry(() => post(firstChoice), {
           maxRetries: 2,
           initialDelayMs: 800,
           onRetry: (_attempt, _max, err) => {
@@ -372,8 +451,36 @@ class Network {
           classified.type !== NetworkErrorType.RpcError &&
           classified.type !== NetworkErrorType.UserError;
 
-        if (!this.fallbackRpcUrl || !worthFailover) throw err;
-        return post(this.fallbackRpcUrl);
+        // An indexer method has no equivalent on a public node. Failing over would swap a
+        // rate-limit error for a "method not found" one and tell the caller nothing useful.
+        if (!worthFailover || this.isAlchemyOnly(method)) throw err;
+
+        // The user's own fallback first — they chose it — then the shipped public chain,
+        // minus whichever endpoint just failed.
+        const chain = [
+          ...(this.fallbackRpcUrl ? [this.fallbackRpcUrl] : []),
+          ...this.fallbackRpcUrls,
+        ].filter((url) => url !== firstChoice);
+        if (chain.length === 0) throw err;
+
+        // Stop asking the primary for a while. Without this every request pays the full
+        // retry budget against a dead endpoint before reaching a live one, which is slower
+        // than having no primary at all.
+        //
+        // A cooldown rather than a permanent switch: the primary is the only endpoint that
+        // can answer the indexer methods, and demoting the user to a public node for the
+        // rest of the session over one bad minute costs them their transaction history.
+        this.primaryUnhealthyUntil = Date.now() + Network.PRIMARY_COOLDOWN_MS;
+
+        let lastError: unknown = err;
+        for (const url of chain) {
+          try {
+            return await post(url);
+          } catch (e) {
+            lastError = e;
+          }
+        }
+        throw lastError;
       }
     });
   }

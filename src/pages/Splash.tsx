@@ -1,168 +1,108 @@
 import { useNavigate } from "react-router";
-import { Box, Typography } from "@mui/material";
-import { useEffect } from "react";
+import { Box } from "@mui/material";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-// Precise geometry of the ring nested in the sigma mark's notch, measured
-// from public/Arfhe-logo.png (377x369): center ~(83.8%, 48.8%), outer
-// diameter ~23.3% of the logo's width, stroke ~2.9% of the logo's width.
-const LOGO_SIZE = 150; // px, displayed square-ish (image is 377x369)
-const RING_LEFT_PCT = 83.8;
-const RING_TOP_PCT = 48.8;
-const RING_DIAMETER = LOGO_SIZE * 0.233;
-const RING_STROKE = Math.max(3, LOGO_SIZE * 0.029);
+/**
+ * Splash — the brand animation the wallet opens on.
+ *
+ * A video rather than the hand-built mark it replaced. The one rule that matters here is
+ * that this screen must never be able to hold the wallet shut: it sits in front of the
+ * user's funds, and a codec that will not decode, an autoplay policy that refuses, or a
+ * file that failed to load are all reasons to move on rather than reasons to stop.
+ *
+ * So every path out is covered — the video ending, the video erroring, the user tapping,
+ * and a deadline that fires whether or not anything else did. Whichever happens first
+ * wins, and the rest are ignored.
+ */
+
+/**
+ * How long the splash may hold the screen.
+ *
+ * The clip runs a little over five seconds. This is the backstop for the case where it
+ * never reports finishing at all — muted autoplay is normally permitted, but a policy that
+ * blocks it produces a video element that simply sits there, and without a deadline that
+ * is a wallet that never opens.
+ */
+const MAX_SPLASH_MS = 5600;
 
 function Splash() {
   const navigate = useNavigate();
+  const videoRef = useRef<HTMLVideoElement>(null);
+  /** Guards against two exits racing — the deadline and the `ended` event, typically. */
+  const doneRef = useRef(false);
+  const [videoFailed, setVideoFailed] = useState(false);
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      navigate("auth");
-    }, 3000);
-    return () => clearTimeout(timer);
+  const finish = useCallback(() => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    navigate("auth", { replace: true });
   }, [navigate]);
 
-  return (
-    <Box sx={{
-      height: '100%',
-      width: '100%',
-      display: 'flex',
-      flexDirection: 'column',
-      justifyContent: 'center',
-      alignItems: 'center',
-      background: 'var(--surface-canvas)',
-      position: 'relative',
-      overflow: 'hidden'
-    }}>
+  useEffect(() => {
+    const deadline = setTimeout(finish, MAX_SPLASH_MS);
 
-      {/* Sigma mark with animated ring → coin */}
-      <Box sx={{
-        position: 'relative',
-        width: LOGO_SIZE,
-        height: LOGO_SIZE * (369 / 377),
-        mb: 3,
-      }}>
+    // Autoplay is requested through the attribute *and* here: the attribute covers the
+    // normal case, and this covers a element that mounted before the source was ready.
+    // A rejected play is not an error worth showing — it just means we leave sooner.
+    videoRef.current?.play().catch(() => setVideoFailed(true));
+
+    return () => clearTimeout(deadline);
+  }, [finish]);
+
+  return (
+    <Box
+      onClick={finish}
+      sx={{
+        height: "100%",
+        width: "100%",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        // Matches the clip's own background, so the letterboxing on a viewport that is not
+        // exactly 9:16 reads as part of the animation rather than as a gap around it.
+        background: "#0d0d0d",
+        position: "relative",
+        overflow: "hidden",
+        cursor: "pointer",
+      }}
+      // Tapping skips. Nobody wants to sit through a five-second logo every time they
+      // check a balance, and the second viewing is already the second too many.
+      role="button"
+      aria-label="Skip"
+    >
+      {!videoFailed && (
+        <Box
+          component="video"
+          ref={videoRef}
+          src="/splash.mp4"
+          autoPlay
+          muted
+          playsInline
+          preload="auto"
+          onEnded={finish}
+          onError={() => setVideoFailed(true)}
+          sx={{
+            width: "100%",
+            height: "100%",
+            // `cover` rather than `contain`: the clip is 9:16 and the popup is 2:3, so
+            // something has to give. Cropping a little off the top and bottom of a centred
+            // mark is less noticeable than bars down both sides.
+            objectFit: "cover",
+            display: "block",
+          }}
+        />
+      )}
+
+      {/* Shown only if the video cannot play at all, so the wallet still opens on its own
+          mark instead of on an empty black rectangle. */}
+      {videoFailed && (
         <Box
           component="img"
           src="/Arfhe-logo.png"
           alt="Arfhe"
-          sx={{
-            width: '100%',
-            height: '100%',
-            objectFit: 'contain',
-            // Logo ships with a dark stroke; invert so it reads as
-            // "bone glow" on the dark splash background.
-            filter: 'invert(1) brightness(1.05)',
-            display: 'block',
-          }}
+          sx={{ width: 140, filter: "invert(1) brightness(1.05)" }}
         />
-
-        {/* Mask: covers the logo's static ring right as the decoy ring falls away */}
-        <Box sx={{
-          position: 'absolute',
-          left: `${RING_LEFT_PCT}%`,
-          top: `${RING_TOP_PCT}%`,
-          width: RING_DIAMETER + 6,
-          height: RING_DIAMETER + 6,
-          borderRadius: '50%',
-          bgcolor: 'var(--surface-canvas)',
-          opacity: 0,
-          animation: 'arfheMaskReveal 0.01s steps(1) 0.6s forwards',
-          '@keyframes arfheMaskReveal': {
-            from: { opacity: 0 },
-            to: { opacity: 1 },
-          },
-        }} />
-
-        {/* Decoy ring: identical to the logo's ring, falls away to reveal the mask */}
-        <Box sx={{
-          position: 'absolute',
-          left: `${RING_LEFT_PCT}%`,
-          top: `${RING_TOP_PCT}%`,
-          width: RING_DIAMETER,
-          height: RING_DIAMETER,
-          borderRadius: '50%',
-          border: `${RING_STROKE}px solid var(--color-bone-glow)`,
-          transform: 'translate(-50%, -50%)',
-          animation: 'arfheRingFall 0.6s cubic-bezier(0.55,0,1,0.45) 0.6s forwards',
-          '@keyframes arfheRingFall': {
-            '0%': { transform: 'translate(-50%, -50%) translateY(0) rotate(0deg)', opacity: 1 },
-            '100%': { transform: 'translate(-50%, -50%) translateY(160px) rotate(60deg)', opacity: 0 },
-          },
-        }} />
-
-        {/* BTC coin drops in, holds, then fades */}
-        <Box sx={{
-          position: 'absolute',
-          left: `${RING_LEFT_PCT}%`,
-          top: `${RING_TOP_PCT}%`,
-          width: RING_DIAMETER,
-          height: RING_DIAMETER,
-          borderRadius: '50%',
-          bgcolor: '#F7931A',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#fff',
-          fontFamily: 'var(--font-mono)',
-          fontWeight: 700,
-          fontSize: RING_DIAMETER * 0.55,
-          opacity: 0,
-          animation: 'arfheCoinDrop 0.5s cubic-bezier(0.34,1.56,0.64,1) 1.3s both, arfheCoinFadeOut 0.25s ease-in 2.05s forwards',
-          '@keyframes arfheCoinDrop': {
-            '0%': { transform: 'translate(-50%, -50%) translateY(-140px) scale(0.6)', opacity: 0 },
-            '60%': { transform: 'translate(-50%, -50%) translateY(6px) scale(1.05)', opacity: 1 },
-            '80%': { transform: 'translate(-50%, -50%) translateY(-3px) scale(0.98)' },
-            '100%': { transform: 'translate(-50%, -50%) translateY(0) scale(1)', opacity: 1 },
-          },
-          '@keyframes arfheCoinFadeOut': {
-            from: { opacity: 1 },
-            to: { opacity: 0 },
-          },
-        }}>
-          ₿
-        </Box>
-
-        {/* ETH coin drops in and settles */}
-        <Box sx={{
-          position: 'absolute',
-          left: `${RING_LEFT_PCT}%`,
-          top: `${RING_TOP_PCT}%`,
-          width: RING_DIAMETER,
-          height: RING_DIAMETER,
-          borderRadius: '50%',
-          bgcolor: '#627EEA',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#fff',
-          fontFamily: 'var(--font-mono)',
-          fontWeight: 700,
-          fontSize: RING_DIAMETER * 0.55,
-          opacity: 0,
-          animation: 'arfheCoinDrop2 0.5s cubic-bezier(0.34,1.56,0.64,1) 2.15s both',
-          '@keyframes arfheCoinDrop2': {
-            '0%': { transform: 'translate(-50%, -50%) translateY(-140px) scale(0.6)', opacity: 0 },
-            '60%': { transform: 'translate(-50%, -50%) translateY(6px) scale(1.05)', opacity: 1 },
-            '80%': { transform: 'translate(-50%, -50%) translateY(-3px) scale(0.98)' },
-            '100%': { transform: 'translate(-50%, -50%) translateY(0) scale(1)', opacity: 1 },
-          },
-        }}>
-          Ξ
-        </Box>
-      </Box>
-
-      <Typography variant="h1" sx={{
-        color: 'var(--color-bone-glow)',
-        letterSpacing: 2,
-        mb: 2
-      }}>
-        ARFHE
-      </Typography>
-
-      <Typography variant="caption" sx={{ color: 'var(--color-charcoal-vein)' }}>
-        INITIALIZING SYSTEM...
-      </Typography>
-
+      )}
     </Box>
   );
 }

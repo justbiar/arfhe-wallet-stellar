@@ -242,6 +242,12 @@ export default defineConfig({
               id.includes('/node_modules/string_decoder/') || id.includes('/node-polyfills')) {
             return 'polyfills';
           }
+          // Kept as its own named chunk. Leaving it unassigned does let the dynamic
+          // import in Auth.tsx build a real async chunk — but it also scatters
+          // @web3auth's CommonJS modules across the other vendor chunks, and one of
+          // them lands somewhere its `require` is never interop-wrapped, so the wallet
+          // fails to boot with "require is not defined". A 627 KB chunk on the critical
+          // path is a cost; a wallet that shows a black screen is not a trade.
           if (id.includes('/@web3auth/')) {
             return 'web3auth';
           }

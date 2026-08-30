@@ -96,9 +96,11 @@ async function hardenSessionStorage() {
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
-
-  // Clear stale cache on install
-  try { chrome.browsingData.removeCache({}); } catch { /* */ }
+  // Nothing is cleared here. This used to call `chrome.browsingData.removeCache({})`,
+  // which does not mean "clear this extension's cache" — it means clear the *browser's*,
+  // for every site the user has ever visited. It failed silently only because the
+  // `browsingData` permission was never granted; granting it would have made installing a
+  // wallet log the user out of half the web. A wallet has no business touching that.
 
   await hardenSessionStorage();
   await setupAlarms();
@@ -710,6 +712,28 @@ async function getUnreadNotificationCount() {
 const RPC_ERR_REJECTED = 4001;
 const RPC_ERR_UNSUPPORTED_METHOD = 4200;
 
+/** `chrome-extension://<our id>` — the origin every page of this extension reports. */
+const EXTENSION_ORIGIN = chrome.runtime.getURL("").replace(/\/$/, "");
+
+/**
+ * Whether a message came from one of this extension's own pages.
+ *
+ * `sender.id` alone is not enough: a content script belongs to the extension and reports
+ * the same id from inside a web page. The origin is what separates them, and it is set by
+ * the browser rather than by anything the page can write.
+ */
+function isFromOwnExtensionPage(sender) {
+  if (!sender || sender.id !== chrome.runtime.id) return false;
+
+  if (sender.origin) return sender.origin === EXTENSION_ORIGIN;
+
+  // Older Chrome has no `origin`. Fall back to a prefix test on the URL rather than
+  // reading `new URL(...).origin`: `chrome-extension:` is not a special scheme, and what
+  // the URL parser reports as its origin is not consistent across implementations. The
+  // prefix ends in a slash so a lookalike id cannot pass by being a prefix of ours.
+  return typeof sender.url === "string" && sender.url.startsWith(`${EXTENSION_ORIGIN}/`);
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Everything in `handleMessage` is privileged: it can fetch arbitrary URLs with the
   // extension's host permissions, repoint RPC endpoints, raise wallet-branded
@@ -722,9 +746,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // and read the user's pending transactions.
   //
   // The origin of a message is the only thing that can be trusted here, so that is what
-  // gates it: extension pages (no `tab`, our own id) get the privileged surface, and
-  // everything else is handled as an untrusted dApp request.
-  const isExtensionPage = !sender.tab && sender.id === chrome.runtime.id;
+  // gates it: our own extension pages get the privileged surface, and everything else is
+  // handled as an untrusted dApp request.
+  //
+  // The test used to be `!sender.tab`, on the reasoning that a content script always has
+  // one. It does — but so does every extension page that is not the browser-action popup.
+  // The approval window is opened with `windows.create`, and its document lives in a tab
+  // inside that window, so it failed this test and had every message routed to the
+  // untrusted handler: it could not read the request it was opened to show, and could not
+  // send the user's answer back. The window opened and reported that nothing was waiting.
+  //
+  // `sender.origin` is the right discriminator and a stricter one. A content script
+  // reports the page's origin, so it still cannot reach the privileged surface, while our
+  // own pages report `chrome-extension://<id>` wherever they are hosted.
+  const isExtensionPage = isFromOwnExtensionPage(sender);
 
   if (!isExtensionPage) {
     handleDappRequest(message, sender).then(sendResponse).catch((e) => {
@@ -881,7 +916,17 @@ async function handleDappRequest(message, sender) {
       touchPermission(origin);
       return { result: method === "eth_requestAccounts" ? existing : [{ parentCapability: "eth_accounts" }] };
     }
-    return requestApproval({ method, params, origin, tabId: sender?.tab?.id });
+    return requestApproval({
+      method,
+      params,
+      origin,
+      tabId: sender?.tab?.id,
+      // Taken from the tab Chrome already has, not fetched. The approval screen shows the
+      // site's own icon so the user recognises it the way they recognise it in a tab —
+      // and reading it here costs no request that would tell anyone what they are visiting.
+      favIconUrl: sender?.tab?.favIconUrl ?? null,
+      title: sender?.tab?.title ?? null,
+    });
   }
 
   if (method === "wallet_revokePermissions") {
@@ -907,7 +952,17 @@ async function handleDappRequest(message, sender) {
 
   // ── Approval-gated ────────────────────────────────────────────────
   if (APPROVAL_METHODS.has(method)) {
-    return requestApproval({ method, params, origin, tabId: sender?.tab?.id });
+    return requestApproval({
+      method,
+      params,
+      origin,
+      tabId: sender?.tab?.id,
+      // Taken from the tab Chrome already has, not fetched. The approval screen shows the
+      // site's own icon so the user recognises it the way they recognise it in a tab —
+      // and reading it here costs no request that would tell anyone what they are visiting.
+      favIconUrl: sender?.tab?.favIconUrl ?? null,
+      title: sender?.tab?.title ?? null,
+    });
   }
 
   // ── Read-only proxy ───────────────────────────────────────────────
@@ -1206,14 +1261,28 @@ async function handleMessage(message) {
         ? { error: { code: message.error.code ?? RPC_ERR_REJECTED, message: message.error.message ?? "User rejected the request." } }
         : { result: message.result };
 
+      // Read the parked entry before settling removes it: it carries the tab the request
+      // came from, which is the one address that still works when the port is gone.
+      const parked = await findPendingApproval(message.requestId);
       const settled = settleApproval(message.requestId, payload);
 
       // A connection that was just granted has to reach the page as an event too — dApps
       // listen for `accountsChanged` rather than re-polling after connecting.
-      if (settled && !message.error && message.origin) {
-        broadcastToOrigin(message.origin, "accountsChanged", await getGrantedAccounts(message.origin));
+      //
+      // Emphatically not gated on `settled`. That flag only says whether this worker still
+      // holds the promise the site is waiting on, and it usually does not: MV3 tears the
+      // worker down when it goes idle, which is exactly what it is doing while a person
+      // reads an approval screen. The promise dies with it, the site is told the wallet
+      // disconnected — and then the grant went through with nobody announcing it.
+      //
+      // That is what made a first connection appear to fail: the permission was stored, so
+      // clicking connect a second time returned instantly, but nothing ever told the page
+      // about the first one. The grant is a fact in storage; the event follows from the
+      // fact, not from whether one worker instance survived long enough to see it.
+      if (!message.error && message.origin) {
+        await announceAccounts(message.origin, parked?.tabId ?? null);
       }
-      return { success: settled };
+      return { success: true, settled };
     }
 
     default:
@@ -1290,7 +1359,7 @@ let approvalCounter = 0;
  * down first the port drops with it and the page sees a disconnect — the honest outcome,
  * and better than resolving something the user never saw.
  */
-async function requestApproval({ method, params, origin, tabId }) {
+async function requestApproval({ method, params, origin, tabId, favIconUrl, title }) {
   const id = `${Date.now()}-${++approvalCounter}`;
 
   const entry = {
@@ -1299,6 +1368,8 @@ async function requestApproval({ method, params, origin, tabId }) {
     params,
     origin,
     tabId: tabId ?? null,
+    favIconUrl: favIconUrl ?? null,
+    title: title ?? null,
     createdAt: Date.now(),
   };
 
@@ -1319,10 +1390,26 @@ async function requestApproval({ method, params, origin, tabId }) {
   return decision;
 }
 
+/**
+ * How long a parked request stays meaningful.
+ *
+ * The promise that answers the website lives in this worker's memory, and MV3 tears the
+ * worker down when it goes idle — which waiting for a person to decide certainly is. Once
+ * that happens the website has already been told the wallet disconnected, so the stored
+ * entry describes a request nobody is waiting on any more.
+ *
+ * Without an expiry those entries accumulated for the whole browser session, and the next
+ * approval window opened onto whichever dead one it found first: a connection prompt for a
+ * site the user had long since left.
+ */
+const APPROVAL_MAX_AGE_MS = 5 * 60 * 1000;
+
 async function persistPendingApproval(entry) {
   try {
     const result = await chrome.storage.session.get(STORAGE_KEY_PENDING_APPROVALS);
-    const all = Array.isArray(result?.[STORAGE_KEY_PENDING_APPROVALS]) ? result[STORAGE_KEY_PENDING_APPROVALS] : [];
+    const stored = Array.isArray(result?.[STORAGE_KEY_PENDING_APPROVALS]) ? result[STORAGE_KEY_PENDING_APPROVALS] : [];
+    const cutoff = Date.now() - APPROVAL_MAX_AGE_MS;
+    const all = stored.filter((p) => typeof p?.createdAt === "number" && p.createdAt > cutoff);
     all.push(entry);
     await chrome.storage.session.set({ [STORAGE_KEY_PENDING_APPROVALS]: all });
   } catch { /* the in-memory resolver still drives the flow */ }
@@ -1345,8 +1432,14 @@ async function openApprovalWindow(requestId) {
   // screen with popups.
   if (approvalWindowId !== null) {
     try {
-      await chrome.windows.get(approvalWindowId);
+      const existing = await chrome.windows.get(approvalWindowId, { populate: true });
       await chrome.windows.update(approvalWindowId, { focused: true, drawAttention: true });
+
+      // Point it at the new request. Focusing alone raised a window still showing the
+      // previous one — and if that window had come up empty, all the user saw was the
+      // wallet apparently opening itself and still saying nothing was waiting.
+      const tab = existing?.tabs?.[0];
+      if (tab?.id !== undefined) await chrome.tabs.update(tab.id, { url });
       return;
     } catch {
       approvalWindowId = null; // it was closed
@@ -1431,6 +1524,46 @@ chrome.runtime.onConnect.addListener((port) => {
         }
     });
 });
+
+/**
+ * Look up a parked request without removing it.
+ */
+async function findPendingApproval(requestId) {
+  try {
+    const result = await chrome.storage.session.get(STORAGE_KEY_PENDING_APPROVALS);
+    const all = Array.isArray(result?.[STORAGE_KEY_PENDING_APPROVALS]) ? result[STORAGE_KEY_PENDING_APPROVALS] : [];
+    return all.find((p) => p?.id === requestId) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Tell a site which accounts it may now see, over both channels.
+ *
+ * The port is the normal route, but it only exists while a content script is connected —
+ * and MV3 recycles this worker while the user reads the approval screen, taking every port
+ * with it. The tab is addressable regardless: `tabs.sendMessage` reaches the content script
+ * whether or not it currently holds a port, which is what makes the announcement survive
+ * the very teardown that makes it necessary.
+ *
+ * Both are attempted rather than one as a fallback. A duplicate event is harmless — the
+ * page is being told something true twice — while a missed one leaves a site that the
+ * wallet has already granted access to convinced it was refused.
+ */
+async function announceAccounts(origin, tabId) {
+  const accounts = await getGrantedAccounts(origin);
+
+  broadcastToOrigin(origin, "accountsChanged", accounts);
+
+  if (typeof tabId === "number") {
+    try {
+      await chrome.tabs.sendMessage(tabId, { event: "accountsChanged", data: accounts });
+    } catch {
+      // The tab was closed or navigated away; nothing to tell.
+    }
+  }
+}
 
 /** Push an EIP-1193 event to every connected page. */
 function broadcastEvent(event, data) {

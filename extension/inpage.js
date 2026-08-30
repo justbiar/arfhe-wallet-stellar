@@ -15,6 +15,17 @@
     /** Give up on a silent content script rather than leaking a pending promise per call. */
     const REQUEST_TIMEOUT_MS = 30_000;
 
+    /**
+     * Deadline for a request waiting on a person.
+     *
+     * Matches how long the wallet itself keeps a parked request alive. These used to have
+     * no deadline at all, on the reasoning that a person takes as long as they take — but
+     * the answer travels over a channel the browser can recycle, and an approval whose
+     * reply is lost then left the dApp spinning with no error and no way to retry. Five
+     * minutes is long enough to read and decide, and short enough to be an answer.
+     */
+    const APPROVAL_TIMEOUT_MS = 5 * 60_000;
+
     /** Methods whose answer is a person deciding, so no timeout applies. */
     const APPROVAL_METHODS = new Set([
         'eth_requestAccounts',
@@ -39,6 +50,20 @@
 
     /** Pending requests by id, so concurrent calls resolve independently. */
     const pending = new Map();
+
+    /** Resolve any outstanding connection request with the accounts just granted. */
+    function settleConnectRequests(accounts) {
+        for (const [id, entry] of [...pending]) {
+            if (entry.method !== 'eth_requestAccounts' && entry.method !== 'wallet_requestPermissions') continue;
+            pending.delete(id);
+            if (entry.timer) clearTimeout(entry.timer);
+            entry.resolve(
+                entry.method === 'eth_requestAccounts'
+                    ? accounts
+                    : [{ parentCapability: 'eth_accounts' }]
+            );
+        }
+    }
 
     window.addEventListener('message', (event) => {
         if (event.source !== window) return;
@@ -97,16 +122,17 @@
             return new Promise((resolve, reject) => {
                 const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-                // Approval methods wait on a person, so they get no deadline; the wallet
-                // answers when the window is closed either way. Everything else must not
-                // hang forever on a wallet that never replies.
+                // Approval methods wait on a person, so they get a far longer deadline —
+                // but a deadline all the same. Nothing here may hang forever: a promise
+                // that never settles is the one outcome a dApp cannot recover from.
                 const waitsForUser = APPROVAL_METHODS.has(method);
-                const timer = waitsForUser ? null : setTimeout(() => {
+                const timer = setTimeout(() => {
                     pending.delete(id);
                     reject(new ProviderRpcError(4900, 'Arfhe Wallet did not respond'));
-                }, REQUEST_TIMEOUT_MS);
+                }, waitsForUser ? APPROVAL_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
 
                 pending.set(id, {
+                    method,
                     // Keep the provider's cached view in step with what it just learned,
                     // so `provider.chainId` is not stale the moment a dApp reads it.
                     resolve: (result) => {
@@ -211,6 +237,13 @@
                 const accounts = Array.isArray(data) ? data : [];
                 provider.selectedAddress = accounts[0] ?? null;
 
+                // A granted connection settles whatever asked for it. The direct answer to
+                // `eth_requestAccounts` travels over a port that MV3 recycles while the
+                // user is still reading the approval screen, so for a first connection the
+                // event is routinely the only thing that arrives — and without this the
+                // page kept waiting on a request the user had already approved.
+                if (accounts.length > 0) settleConnectRequests(accounts);
+
                 // An empty list is EIP-1193's "no longer authorised", which is a
                 // disconnect from the site's point of view.
                 if (accounts.length === 0 && provider._connected) {
@@ -243,13 +276,17 @@
         uuid: '9f8a6c14-2b7d-4e5a-9c31-6d0f2e8b4a17',
         name: 'Arfhe Wallet',
         rdns: 'zone.arfhe.wallet',
-        // Inline SVG so the icon needs no web-accessible resource.
-        icon: 'data:image/svg+xml;base64,' + btoa(
-            '<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">' +
-            '<rect width="96" height="96" rx="22" fill="#10b981"/>' +
-            '<path d="M48 22l20 9v20c0 13-8.5 21-20 25-11.5-4-20-12-20-25V31z" fill="#fff"/>' +
-            '</svg>'
-        ),
+        // The Arfhe mark itself, inlined as a data URI.
+        //
+        // It has to be inline: the picker renders in the page's own document, and a
+        // web-accessible extension URL would be blocked by the content security policy
+        // of most of the sites this runs on — which is how a wallet ends up listed with
+        // a blank tile next to every other wallet's logo.
+        //
+        // Composited onto the wallet's bone surface rather than shipped transparent: the
+        // mark is near-black line art, and half the pickers that show it use a dark
+        // modal, where transparent means invisible.
+        icon: 'data:image/png;base64,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',
     };
 
     const announce = () => {

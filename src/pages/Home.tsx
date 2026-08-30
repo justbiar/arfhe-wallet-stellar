@@ -31,7 +31,6 @@ import {
   ShoppingCart,
 } from "@mui/icons-material";
 import { useMatrixText } from "../hooks/useMatrixText.js";
-import ImportTokenModal from "../components/ImportTokenModal.js";
 import OnboardingTour, {
   BackupReminderBanner,
   isOnboardingCompleted,
@@ -174,7 +173,6 @@ function Home() {
   const [loading, setLoading] = useState(false);
   // Persisted state: survives popup close/reopen
   const [isBalanceHidden, setIsBalanceHidden] = usePersistedState("balance_hidden", false);
-  const [importTokenModalOpen, setImportTokenModalOpen] = useState(false);
   const [showHiddenTokens, setShowHiddenTokens] = useState(false);
 
   // Onboarding tour (first-time UX)
@@ -1109,42 +1107,14 @@ function Home() {
               );
             })()}
 
-            {/* Tokens Tab Footer */}
-            <Box sx={{ mt: 2, display: 'flex', justifyContent: 'center' }}>
-              <Button
-                variant="outlined"
-                startIcon={<Add />}
-                onClick={() => setImportTokenModalOpen(true)}
-                sx={{
-                  fontWeight: 600,
-                  px: 2.5,
-                  py: 0.5,
-                  borderRadius: '0px',
-                  fontSize: '0.75rem',
-                  textTransform: 'none',
-                  borderColor: 'divider',
-                  color: 'text.primary',
-                  opacity: 0.8,
-                  '&:hover': {
-                    borderColor: 'text.primary',
-                    color: 'text.primary',
-                    opacity: 1,
-                    bgcolor: 'action.hover',
-                  },
-                }}
-              >
-                {t('home.importCustomToken')}
-              </Button>
-            </Box>
+            {/* No "import a token" button. A token the account holds shows up on its own —
+                balance discovery walks the chain for anything with a non-zero balance — so
+                the button existed to solve a problem the wallet does not have. What it did
+                instead was invite people to paste an address they were given, which is how
+                a fake token with a real token's name ends up in a wallet looking legitimate. */}
         </Box>
 
       </Box>
-
-      <ImportTokenModal
-        open={importTokenModalOpen}
-        onClose={() => setImportTokenModalOpen(false)}
-        onImportSuccess={fetchData}
-      />
 
       {/* Onboarding Tour (first-time users) */}
       <OnboardingTour

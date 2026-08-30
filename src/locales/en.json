@@ -157,12 +157,24 @@
     "disconnectAll": "Disconnect all",
     "lastUsed": "Last used",
     "message": "Message",
-    "noPending": "There is no request waiting for approval.",
+    "noPending": "No request is waiting for approval.",
     "phishingDangerous": "This site is flagged as a known phishing domain. Approving may cost you funds.",
     "phishingSuspicious": "This site's address looks like it imitates a well-known one. Check it carefully.",
     "requestLabel": "Request",
     "to": "To",
-    "unlockFirst": "Unlock your wallet in the extension, then reopen this request."
+    "noPendingHint": "The request may have expired, or the site may have given up waiting. Go back to the site and connect again.",
+    "unlockToContinue": "Unlock to continue",
+    "unlockRequestKept": "The request from this site is waiting. Unlocking here keeps it — you do not have to start again.",
+    "switchTo": "Switch to",
+    "switchFrom": "Current network",
+    "firstTime": "First time connecting to this site",
+    "seenBefore": "Connected before · last used {{when}}",
+    "connectAddress": "Connect address",
+    "canDo": "This site will be able to",
+    "canSeeAddress": "See your wallet address and balance",
+    "canAsk": "Ask you to approve transactions and signatures",
+    "cannotDo": "It cannot move funds, or sign anything, without your approval each time.",
+    "chainUnsupported": "{{chain}} is not supported. Arfhe runs on Sepolia, Base Sepolia and Arbitrum Sepolia — the chains its confidential balances exist on. Confirming will tell the site the network is unavailable."
   },
   "auth": {
     "biometricFailed": "Biometric authentication failed. Please use your password.",
@@ -296,7 +308,9 @@
     "swap": "Swap",
     "tokens": "Tokens",
     "total": "Total",
-    "yes": "Yes"
+    "yes": "Yes",
+    "show": "Show",
+    "hide": "Hide"
   },
   "contacts": {
     "addNew": "Add New Contact",
@@ -317,10 +331,20 @@
     "title": "Contact Book"
   },
   "errorBoundary": {
-    "description": "The app encountered an unexpected error. Your funds are safe.",
-    "restart": "Restart",
-    "retry": "Try Again",
-    "title": "Something went wrong"
+    "description": "Something in the interface failed. Your recovery phrase, keys and balances are untouched — they live in encrypted storage this screen cannot reach.",
+    "restart": "Restart wallet",
+    "retry": "Try again",
+    "title": "The wallet stopped",
+    "descriptionRepeat": "The wallet has failed again on restart. Something it loaded is in a state it cannot recover from on its own.",
+    "clearCaches": "Clear cached data and restart",
+    "clearCachesExplain": "Discards balances, token lists and the selected network — all of which are read back from the chain. It does not touch your recovery phrase, keys, accounts, contacts or pending claims.",
+    "clearConfirm": "Clear cached data?",
+    "clearConfirmYes": "Yes, clear and restart",
+    "clearConfirmNo": "Cancel",
+    "details": "Error details",
+    "copy": "Copy details",
+    "copied": "Copied",
+    "attempt": "Failure {{n}} this session"
   },
   "errors": {
     "amountTooSmall": "That amount is too small. Confidential balances support up to 6 decimals.",
@@ -461,7 +485,6 @@
     "hideBalance": "Hide Balance",
     "hideHidden": "Hide Hidden",
     "hideSpamTokens": "Hide spam tokens",
-    "importCustomToken": "Import Custom Token",
     "importNft": "Import NFT",
     "importToken": "Import Token",
     "noAssets": "No assets found on this network",
@@ -481,7 +504,7 @@
   },
   "network": {
     "allNetworks": "Networks",
-    "allNetworksDesc": "Change an endpoint, or add your own chain",
+    "allNetworksDesc": "Change the RPC endpoint a network uses",
     "arbitrum": "Arbitrum",
     "base": "Base",
     "chainId": "Chain ID",
@@ -516,7 +539,8 @@
     "testOk": "Reachable, serving chain {{chainId}}",
     "testUnreachable": "No answer from this endpoint.",
     "testing": "Testing…",
-    "testnet": "Testnet"
+    "testnet": "Testnet",
+    "onlyThreeChains": "This release runs on these three testnets only — they are the chains the confidential coprocessor is deployed on. You can point each at a different RPC endpoint, but no other network can be added."
   },
   "networkError": {
     "fetchFailed": "Failed to load portfolio data.",
@@ -858,8 +882,8 @@
     "title": "Settings",
     "toggleTheme": "Toggle app theme",
     "version": "Version",
-    "x402Payments": "x402 Payments",
-    "x402PaymentsDesc": "Automatic micro-payments for paid services"
+    "accounts": "Accounts",
+    "accountsDesc": "Rename, switch or remove the accounts in this wallet"
   },
   "swap": {
     "approveToken": "Approve Token",
@@ -931,15 +955,22 @@
     "unhideToken": "Show this token",
     "viewOnExplorer": "View on Explorer"
   },
-  "x402": {
-    "absoluteCapNotice": "Hard system limit: {{perTransactionCap}} per payment, {{dailyBudget}} per day — your values above can never exceed this, no matter what you enter.",
-    "currencyUnit": "USD",
-    "dailyBudget": "Daily budget",
-    "dailyBudgetDesc": "The most that may be spent automatically within one day, across all payments.",
-    "enable": "Enable x402 payments",
-    "enableDesc": "Let Arfio automatically pay for paid services on your behalf, within the limits below.",
-    "perTransactionCap": "Per-payment cap",
-    "perTransactionCapDesc": "The most a single automatic payment may spend.",
-    "title": "x402 Payments"
+  "accounts": {
+    "accountsTitle": "Accounts",
+    "accountsIntro": "Every account here is derived from the recovery phrase you wrote down, or imported by you. Removing one does not destroy it — the phrase brings it back.",
+    "active": "Active",
+    "rename": "Rename",
+    "renameTitle": "Rename account",
+    "accountName": "Account name",
+    "removeAccount": "Remove account",
+    "removeTitle": "Remove {{name}}?",
+    "removeBodyDerived": "This account came from your recovery phrase, so entering that phrase again restores it. Any site connected to it loses access.",
+    "removeBodyImported": "This account was imported from a private key. The wallet has no other copy of that key — without it, this account and anything in it are gone for good.",
+    "removeConfirm": "Remove",
+    "cannotRemoveLast": "This is the only account. A wallet with no account has nothing to unlock.",
+    "addAccount": "Add account",
+    "copyAddress": "Copy address",
+    "addressCopied": "Address copied",
+    "importedBadge": "Imported key"
   }
 }

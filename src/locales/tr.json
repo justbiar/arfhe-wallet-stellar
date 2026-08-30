@@ -157,12 +157,24 @@
     "disconnectAll": "Tümünün bağlantısını kes",
     "lastUsed": "Son kullanım",
     "message": "Mesaj",
-    "noPending": "Onay bekleyen bir istek yok.",
+    "noPending": "Onay bekleyen istek yok.",
     "phishingDangerous": "Bu site bilinen bir oltalama adresi olarak işaretli. Onaylamak paranıza mal olabilir.",
     "phishingSuspicious": "Bu adres tanınmış bir siteyi taklit ediyor olabilir. Dikkatle kontrol edin.",
     "requestLabel": "İstek",
     "to": "Alıcı",
-    "unlockFirst": "Cüzdanın kilidini eklentiden açın, sonra bu isteği tekrar açın."
+    "noPendingHint": "İstek zaman aşımına uğramış ya da site beklemekten vazgeçmiş olabilir. Siteye dönüp yeniden bağlanmayı deneyin.",
+    "unlockToContinue": "Devam etmek için kilidi açın",
+    "unlockRequestKept": "Bu sitenin isteği bekliyor. Kilidi burada açmak isteği korur — baştan başlamanız gerekmez.",
+    "switchTo": "Geçilecek ağ",
+    "switchFrom": "Mevcut ağ",
+    "firstTime": "Bu siteye ilk kez bağlanıyorsunuz",
+    "seenBefore": "Daha önce bağlandınız · son kullanım {{when}}",
+    "connectAddress": "Bağlanacak adres",
+    "canDo": "Bu site şunları yapabilecek",
+    "canSeeAddress": "Cüzdan adresinizi ve bakiyenizi görmek",
+    "canAsk": "İşlem ve imza onayı istemek",
+    "cannotDo": "Her seferinde onayınız olmadan para taşıyamaz, hiçbir şey imzalayamaz.",
+    "chainUnsupported": "{{chain}} desteklenmiyor. Arfhe; Sepolia, Base Sepolia ve Arbitrum Sepolia üzerinde çalışır — gizli bakiyelerin var olduğu zincirler bunlar. Onaylarsanız siteye ağın kullanılamadığı bildirilecek."
   },
   "auth": {
     "biometricFailed": "Biyometrik doğrulama başarısız oldu. Lütfen şifrenizi kullanın.",
@@ -296,7 +308,9 @@
     "swap": "Takas",
     "tokens": "Tokenlar",
     "total": "Toplam",
-    "yes": "Evet"
+    "yes": "Evet",
+    "show": "Göster",
+    "hide": "Gizle"
   },
   "contacts": {
     "addNew": "Yeni Kişi Ekle",
@@ -317,10 +331,20 @@
     "title": "Kişi Defteri"
   },
   "errorBoundary": {
-    "description": "Uygulama beklenmeyen bir hata ile karşılaştı. Fonlarınız güvende.",
-    "restart": "Yeniden Başlat",
-    "retry": "Tekrar Dene",
-    "title": "Bir şeyler ters gitti"
+    "description": "Arayüzde bir şey hata verdi. Kurtarma ifadeniz, anahtarlarınız ve bakiyeleriniz etkilenmedi — şifreli depoda duruyorlar, bu ekran oraya erişemez.",
+    "restart": "Cüzdanı yeniden başlat",
+    "retry": "Tekrar dene",
+    "title": "Cüzdan durdu",
+    "descriptionRepeat": "Cüzdan yeniden başlatıldıktan sonra tekrar hata verdi. Yüklediği bir şey kendi başına toparlanamayacağı bir durumda.",
+    "clearCaches": "Önbelleği temizle ve yeniden başlat",
+    "clearCachesExplain": "Bakiyeler, token listeleri ve seçili ağ silinir — hepsi zincirden yeniden okunur. Kurtarma ifadenize, anahtarlarınıza, hesaplarınıza, kişilerinize veya bekleyen taleplerinize dokunmaz.",
+    "clearConfirm": "Önbellek temizlensin mi?",
+    "clearConfirmYes": "Evet, temizle ve yeniden başlat",
+    "clearConfirmNo": "Vazgeç",
+    "details": "Hata ayrıntıları",
+    "copy": "Ayrıntıları kopyala",
+    "copied": "Kopyalandı",
+    "attempt": "Bu oturumda {{n}}. hata"
   },
   "errors": {
     "amountTooSmall": "Bu miktar çok küçük. Gizli bakiyeler en fazla 6 ondalık destekler.",
@@ -461,7 +485,6 @@
     "hideBalance": "Bakiyeyi Gizle",
     "hideHidden": "Gizlileri Gizle",
     "hideSpamTokens": "Spam tokenleri gizle",
-    "importCustomToken": "Özel Token Ekle",
     "importNft": "NFT Ekle",
     "importToken": "Token Ekle",
     "noAssets": "Bu ağda varlık bulunamadı",
@@ -481,7 +504,7 @@
   },
   "network": {
     "allNetworks": "Ağlar",
-    "allNetworksDesc": "Bir uç noktayı değiştirin veya kendi zincirinizi ekleyin",
+    "allNetworksDesc": "Bir ağın kullandığı RPC ucunu değiştirin",
     "arbitrum": "Arbitrum",
     "base": "Base",
     "chainId": "Zincir kimliği",
@@ -516,7 +539,8 @@
     "testOk": "Erişilebilir, {{chainId}} zincirine hizmet veriyor",
     "testUnreachable": "Bu uç noktadan yanıt alınamadı.",
     "testing": "Test ediliyor…",
-    "testnet": "Test Ağı"
+    "testnet": "Test Ağı",
+    "onlyThreeChains": "Bu sürüm yalnızca bu üç testnette çalışır — gizli işlemcinin kurulu olduğu zincirler bunlar. Her birinin RPC ucunu değiştirebilirsiniz ama başka bir ağ eklenemez."
   },
   "networkError": {
     "fetchFailed": "Portföy verileri yüklenemedi.",
@@ -858,8 +882,8 @@
     "title": "Ayarlar",
     "toggleTheme": "Uygulama temasını değiştir",
     "version": "Sürüm",
-    "x402Payments": "x402 Ödemeleri",
-    "x402PaymentsDesc": "Ücretli servisler için otomatik mikro-ödemeler"
+    "accounts": "Hesaplar",
+    "accountsDesc": "Bu cüzdandaki hesapları yeniden adlandır, değiştir veya kaldır"
   },
   "swap": {
     "approveToken": "Token Onayla",
@@ -931,15 +955,22 @@
     "unhideToken": "Bu tokenı göster",
     "viewOnExplorer": "Explorer'da Görüntüle"
   },
-  "x402": {
-    "absoluteCapNotice": "Sistem geneli sabit sınır: işlem başına {{perTransactionCap}}, günde {{dailyBudget}} — yukarıdaki değerleriniz ne girerseniz girin bunu asla aşamaz.",
-    "currencyUnit": "USD",
-    "dailyBudget": "Günlük bütçe",
-    "dailyBudgetDesc": "Bir gün içinde, tüm ödemeler toplamında otomatik olarak harcanabilecek en fazla tutar.",
-    "enable": "x402 ödemelerini etkinleştir",
-    "enableDesc": "Arfio, aşağıdaki sınırlar dahilinde ücretli servisler için sizin adınıza otomatik ödeme yapabilsin.",
-    "perTransactionCap": "İşlem başı tavan",
-    "perTransactionCapDesc": "Tek bir otomatik ödemenin harcayabileceği en fazla tutar.",
-    "title": "x402 Ödemeleri"
+  "accounts": {
+    "accountsTitle": "Hesaplar",
+    "accountsIntro": "Buradaki her hesap ya yazdığınız kurtarma ifadesinden türetildi ya da sizin içeri aktardığınız bir hesap. Birini kaldırmak onu yok etmez — ifade geri getirir.",
+    "active": "Aktif",
+    "rename": "Yeniden adlandır",
+    "renameTitle": "Hesabı yeniden adlandır",
+    "accountName": "Hesap adı",
+    "removeAccount": "Hesabı kaldır",
+    "removeTitle": "{{name}} kaldırılsın mı?",
+    "removeBodyDerived": "Bu hesap kurtarma ifadenizden geldi, yani ifadeyi tekrar girmek onu geri getirir. Ona bağlı siteler erişimini kaybeder.",
+    "removeBodyImported": "Bu hesap bir özel anahtardan içeri aktarıldı. Cüzdanda o anahtarın başka kopyası yok — anahtar olmadan bu hesap ve içindeki her şey kalıcı olarak kaybolur.",
+    "removeConfirm": "Kaldır",
+    "cannotRemoveLast": "Bu tek hesap. Hesabı olmayan bir cüzdanın açacak bir şeyi olmaz.",
+    "addAccount": "Hesap ekle",
+    "copyAddress": "Adresi kopyala",
+    "addressCopied": "Adres kopyalandı",
+    "importedBadge": "İçeri aktarılmış anahtar"
   }
 }

@@ -110,6 +110,57 @@ export function toChainId(networkId: NetworkId | number): number {
     }
 }
 
+/**
+ * Names for chains the wallet does not itself carry.
+ *
+ * A site can ask to switch to any chain, and the wallet ships with three. Everything else
+ * was rendered as a bare number — "Chain 143" — which asks the user to approve something
+ * they have no way to identify. The number is the least useful part of a chain id: it is
+ * how machines refer to a network and how nobody else does.
+ *
+ * Deliberately a static list rather than a lookup against chainlist.org: this is used on
+ * the approval screen, and fetching the name of a chain from a third party at the moment a
+ * user is deciding whether to trust a site would leak that decision to that third party.
+ * A wrong-but-offline "unknown" is better than a right-but-published one.
+ */
+const WELL_KNOWN_CHAINS: Record<number, string> = {
+    1: "Ethereum",
+    10: "OP Mainnet",
+    56: "BNB Smart Chain",
+    97: "BNB Smart Chain Testnet",
+    100: "Gnosis",
+    137: "Polygon",
+    143: "Monad",
+    250: "Fantom Opera",
+    324: "zkSync Era",
+    5000: "Mantle",
+    8453: "Base",
+    10143: "Monad Testnet",
+    17000: "Holesky",
+    42161: "Arbitrum One",
+    43113: "Avalanche Fuji",
+    43114: "Avalanche",
+    59144: "Linea",
+    80002: "Polygon Amoy",
+    81457: "Blast",
+    84532: "Base Sepolia",
+    421614: "Arbitrum Sepolia",
+    534352: "Scroll",
+    560048: "Hoodi",
+    11155111: "Sepolia",
+    11155420: "OP Sepolia",
+};
+
+/**
+ * The common name of a chain id, when there is one.
+ *
+ * @returns The name, or undefined for a chain nobody has a name for — in which case the
+ *          caller should say so rather than inventing one.
+ */
+export function wellKnownChainName(chainId: number): string | undefined {
+    return WELL_KNOWN_CHAINS[Number(chainId)];
+}
+
 /** Check whether a given network supports FHE operations */
 export function isFheNetwork(networkId: NetworkId): boolean {
     return FHE_NETWORK_IDS.has(networkId);

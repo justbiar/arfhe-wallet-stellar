@@ -28,11 +28,20 @@ const AGENT_SOURCE_STORAGE_KEY = "arfhe_agent_source";
  */
 const DEFAULT_VPS_AGENT_URL = "http://83.229.86.69:3000";
 
-export type AgentSource = "arfio" | "vps";
+// "vps" ("Kendi VPS'im") is retired from the settings dialog — it pointed at a VPS the team
+// itself runs, not the user's own infrastructure, so "your own VPS" was a misleading label for a
+// choice that was really just another Arfio-adjacent option. "ownkey" (OwnKeyAgentService.ts)
+// replaced it as the actual bring-your-own-credentials alternative. The value is kept in the
+// type (and still handled below) purely so a tester who already had "vps" persisted in
+// localStorage from before this change falls back to "arfio" instead of AgentChatPanel hitting
+// an unhandled source at runtime — it is simply never offered as a choice going forward.
+export type AgentSource = "arfio" | "vps" | "ownkey";
 
 /** Which agent backend the chat panel should talk to — durable across restarts (localStorage), like the language preference in i18n.ts. */
 export function getAgentSource(): AgentSource {
-  return localStorage.getItem(AGENT_SOURCE_STORAGE_KEY) === "vps" ? "vps" : "arfio";
+  // Anything other than "ownkey" — including a stale "vps" from before that mode was retired,
+  // or nothing saved at all — falls back to "arfio".
+  return localStorage.getItem(AGENT_SOURCE_STORAGE_KEY) === "ownkey" ? "ownkey" : "arfio";
 }
 
 export function setAgentSource(source: AgentSource): void {
@@ -144,6 +153,23 @@ async function loginToVps(account: Account, baseUrl: string): Promise<string> {
 
   writeCachedToken(address, body.token);
   return body.token;
+}
+
+/**
+ * Signs the same fixed login message and returns the resulting 24h JWT, for the user to paste
+ * into their OWN Claude/MCP client config (`Authorization: Bearer <token>`) — see mcp.js on the
+ * VPS for what that token is checked against. Deliberately just `loginToVps` against the team's
+ * VPS (the same origin /mcp is mounted on) rather than a separate token type: this wallet
+ * already has exactly one signed-login flow, and the MCP server reuses the exact same
+ * requireAuth middleware every other authenticated VPS route does, so there is nothing
+ * MCP-specific to add here beyond reusing it under a name that reads correctly at the call site.
+ * Does NOT cache the result under the normal token cache key — a token meant to be copied out of
+ * the wallet and pasted somewhere else (Claude Desktop's config, on disk, outside this session)
+ * is worth minting fresh each time the user asks, not silently reusing whatever the "own VPS
+ * agent" flow happened to cache last.
+ */
+export async function getMcpAccessToken(account: Account): Promise<string> {
+  return loginToVps(account, DEFAULT_VPS_AGENT_URL);
 }
 
 /**

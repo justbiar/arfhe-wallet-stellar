@@ -13,6 +13,7 @@ overrides:
   '@ethersproject/providers>ws': '>=8.21.0'
   yaml: '>=2.8.3'
   '@swc/core': 1.15.18
+  uuid: '>=11.1.1'
 
 importers:
 
@@ -4008,18 +4009,8 @@ packages:
   util@0.12.5:
     resolution: {integrity: sha512-kZf/K6hEIrWHI6XqOFUiiMa+79wE/D8Q+NCNAWclkyg3b4d2k7s0QGepNjiABc+aR3N1PAyHL7p6UcLY6LmrnA==}
 
-  uuid@10.0.0:
-    resolution: {integrity: sha512-8XkAphELsDnEGrDxUOHB3RGvXz6TeuYSGEZBOjtTtPm2lwhGBjLgOzLHB63IUWfBpNucQjND6d3AOudO+H3RWQ==}
-    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
-    hasBin: true
-
   uuid@14.0.2:
     resolution: {integrity: sha512-xZe/16rV4aa+HGSOCiY2YeLT1OybRLrrkL/Rqaq7p7GMVXjFh+6wN4oMYgjFmnSnhY8t6Xpdl2l9qmnHYuMHwQ==}
-    hasBin: true
-
-  uuid@8.3.2:
-    resolution: {integrity: sha512-+NYs2QeMWy+GWFOEm9xnn6HCDp0l7QBD7ml8zLUmJ+93Q5NF0NocErnwkTkXVFNiX3/fpC6afS8Dhb/gz7R7eg==}
-    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
     hasBin: true
 
   varint@5.0.2:
@@ -4150,7 +4141,7 @@ packages:
     engines: {node: '>=18'}
 
   web-bip39@https://codeload.github.com/hujiulong/web-bip39/tar.gz/946009264f9e9c7babe381eeb337b1d47f559edf:
-    resolution: {tarball: https://codeload.github.com/hujiulong/web-bip39/tar.gz/946009264f9e9c7babe381eeb337b1d47f559edf}
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/hujiulong/web-bip39/tar.gz/946009264f9e9c7babe381eeb337b1d47f559edf}
     version: 0.0.3
 
   webidl-conversions@3.0.1:
@@ -7731,7 +7722,7 @@ snapshots:
       isomorphic-ws: 4.0.1(ws@7.5.13(bufferutil@4.1.0)(utf-8-validate@6.0.6))
       json-stringify-safe: 5.0.1
       stream-json: 1.9.1
-      uuid: 8.3.2
+      uuid: 14.0.2
       ws: 7.5.13(bufferutil@4.1.0)(utf-8-validate@6.0.6)
     transitivePeerDependencies:
       - bufferutil
@@ -8938,11 +8929,7 @@ snapshots:
       is-typed-array: 1.1.15
       which-typed-array: 1.1.22
 
-  uuid@10.0.0: {}
-
   uuid@14.0.2: {}
-
-  uuid@8.3.2: {}
 
   varint@5.0.2: {}
 
@@ -9001,7 +8988,7 @@ snapshots:
       '@rollup/plugin-virtual': 3.0.2(rollup@4.62.5)
       '@swc/core': 1.15.18(@swc/helpers@0.5.23)
       '@swc/wasm': 1.16.1
-      uuid: 10.0.0
+      uuid: 14.0.2
       vite: 6.4.3(@types/node@26.2.0)(jiti@1.21.7)(terser@5.44.0)(yaml@2.9.0)
     transitivePeerDependencies:
       - '@swc/helpers'

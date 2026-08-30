@@ -44,8 +44,10 @@ describe('DAppRegistry', () => {
 
   // ─── DAPP_REGISTRY ────────────────────────────────────────────
   describe('DAPP_REGISTRY', () => {
-    it('en az 10 dApp kayıtlıdır', () => {
-      expect(DAPP_REGISTRY.length).toBeGreaterThanOrEqual(10);
+    it('yalnızca Fhenix ve ArfDAO kayıtlıdır', () => {
+      // Kasıtlı olarak kısa bir liste: tek tek ArfDAO projeleri kaldırıldı, hepsi aynı
+      // siteye giden showcase linkleriydi. Sayı büyürse bu test bilerek kırılsın.
+      expect(DAPP_REGISTRY.map(d => d.id).sort()).toEqual(['arfdao', 'fhenix']);
     });
 
     it('her dApp\'ın gerekli alanları vardır', () => {
@@ -116,7 +118,7 @@ describe('DAppRegistry', () => {
     });
 
     it('tag ile arama yapar', () => {
-      const results = searchDApps('DeFi');
+      const results = searchDApps('DAO');
       expect(results.length).toBeGreaterThan(0);
     });
 
@@ -126,7 +128,7 @@ describe('DAppRegistry', () => {
     });
 
     it('büyük/küçük harf duyarsız arama yapar', () => {
-      const results = searchDApps('SUNERGY');
+      const results = searchDApps('ARFDAO');
       expect(results.length).toBeGreaterThan(0);
     });
 
@@ -149,10 +151,10 @@ describe('DAppRegistry', () => {
       expect(dapp!.name).toBe('Fhenix');
     });
 
-    it('a2saga ID ile dApp bulur', () => {
-      const dapp = getDAppById('a2saga');
+    it('arfdao ID ile dApp bulur', () => {
+      const dapp = getDAppById('arfdao');
       expect(dapp).toBeDefined();
-      expect(dapp!.name).toBe('A2 Saga');
+      expect(dapp!.name).toBe('ArfDAO');
     });
 
     it('olmayan ID undefined döner', () => {
@@ -172,8 +174,8 @@ describe('DAppRegistry', () => {
     it('chains boş olan dApp\'lar her zincirde görünür', () => {
       // Çoğu ArfDAO projesinin chains: [] olduğu için tüm zincirlerde gelmeli
       const results = getDAppsForChain(999999);
-      const veriarfy = results.find(d => d.id === 'veriarfy');
-      expect(veriarfy).toBeDefined();
+      const arfdao = results.find(d => d.id === 'arfdao');
+      expect(arfdao).toBeDefined();
     });
   });
 });

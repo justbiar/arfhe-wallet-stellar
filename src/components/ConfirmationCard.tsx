@@ -401,11 +401,35 @@ export default function ConfirmationCard({ preview, onStatusChange, onRetry }: C
         case "propose_send": {
           const to = await resolveRecipient(String(originalArgs.to ?? ""));
           const amount = String(originalArgs.amount ?? "");
-          hash = await network.sendTransaction(activeAccount, { to, value: amount }, (broadcastHash) => {
+          const sendSymbol = String(originalArgs.tokenSymbol ?? "");
+          const isNativeSend = !sendSymbol || sendSymbol.toLowerCase() === network.currency_symbol.toLowerCase();
+
+          const onBroadcast = (broadcastHash: string) => {
             setTxHash(broadcastHash);
             setWorkingLabel(t("agent.confirmationCardConfirming"));
             onStatusChange({ status: "pending", toolName, originalArgs, txHash: broadcastHash });
-          });
+          };
+
+          if (isNativeSend) {
+            hash = await network.sendTransaction(activeAccount, { to, value: amount }, onBroadcast);
+          } else {
+            // Re-resolved here rather than carried over from the preview, the same way
+            // propose_shield re-reads its wrapper below: the confirmation the user is
+            // approving must be built from what the wallet holds now, not from a snapshot
+            // taken before they read it.
+            const { default: SwapService } = await import("../backend/SwapService.js");
+            const token = SwapService.getInstance().getTokenBySymbol(network.network_id, sendSymbol);
+            if (!token) throw new Error(t("agent.confirmationCardTokenUnknown", { symbol: sendSymbol }));
+
+            const { Interface, parseUnits } = await import("ethers");
+            const iface = new Interface(["function transfer(address to, uint256 amount) returns (bool)"]);
+            const data = iface.encodeFunctionData("transfer", [to, parseUnits(amount, token.decimals)]);
+
+            // An ERC-20 transfer carries no native value: the amount lives in the calldata,
+            // and the `to` on the wire is the token contract, not the recipient.
+            hash = await network.sendTransaction(activeAccount, { to: token.address, value: "0", data }, onBroadcast);
+          }
+
           await network.waitForTransaction(hash);
           break;
         }

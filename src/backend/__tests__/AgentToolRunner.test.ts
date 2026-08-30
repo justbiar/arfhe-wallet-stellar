@@ -8,6 +8,7 @@ import {
 } from '../AgentToolRunner';
 import type { Network } from '../Network';
 import type Account from '../Account';
+import { NetworkId } from '../NetworkTypes';
 import type { ShieldedHolding, UnshieldClaim } from '../../types/fhe';
 import type { SimResult } from '../TransactionSimulator';
 
@@ -86,10 +87,14 @@ describe('AgentToolRunner', () => {
 
   let mockNetwork: {
     getBalance: ReturnType<typeof vi.fn>;
+    getTokenBalance: ReturnType<typeof vi.fn>;
+    getWrapperFor: ReturnType<typeof vi.fn>;
     getShieldedPortfolio: ReturnType<typeof vi.fn>;
     getPendingClaims: ReturnType<typeof vi.fn>;
     rpc_url: string;
     currency_symbol: string;
+    network_id: NetworkId;
+    network_name: string;
   };
   let mockAccount: Account;
   let deps: AgentToolRunnerDeps;
@@ -168,10 +173,19 @@ describe('AgentToolRunner', () => {
 
     mockNetwork = {
       getBalance: vi.fn().mockResolvedValue('1000000000000000000'), // 1 ETH
+      getTokenBalance: vi.fn().mockResolvedValue('1000'), // 1000 USDC
+      // Varsayılan: bu ağda o token için henüz wrapper deploy edilmemiş. Wrapper bekleyen
+      // testler bunu kendi içinde override eder.
+      getWrapperFor: vi.fn().mockResolvedValue(null),
       getShieldedPortfolio: vi.fn().mockResolvedValue([]),
       getPendingClaims: vi.fn().mockResolvedValue([]),
       rpc_url: 'https://rpc.example.test',
       currency_symbol: 'ETH',
+      // Sepolia because that is the network SwapService's curated registry actually carries
+      // USDC on — the ERC-20 send path resolves its symbol through that registry, so a
+      // placeholder id here would make every token test fail for the wrong reason.
+      network_id: NetworkId.Ethereum_Sepolia,
+      network_name: 'Sepolia',
     };
     mockAccount = {
       GetAddress: () => context.account,
@@ -190,6 +204,12 @@ describe('AgentToolRunner', () => {
       })),
       getConnectedSites: vi.fn().mockResolvedValue({ injectedSites: [], walletConnectSessions: [] }),
       createAccount: vi.fn((name?: string) => ({ index: 1, address: '0xNEWACCOUNT', name: name ?? 'Account 2' })),
+      listAccounts: vi.fn(() => [
+        { index: 0, name: 'biar', address: '0xc27c79000000000000000000000000000000a1a1', isActive: false },
+        { index: 1, name: 'New User #1', address: '0x003c36c8Eaa07e61165D06F2fC7c72B32cd1d0df', isActive: true },
+        { index: 2, name: 'Ikiz', address: '0x1111111111111111111111111111111111111111', isActive: false },
+        { index: 3, name: 'Ikiz', address: '0x2222222222222222222222222222222222222222', isActive: false },
+      ]),
     };
     configureAgentToolRunner(deps);
   });
@@ -202,12 +222,115 @@ describe('AgentToolRunner', () => {
     expect(res.result).toBeUndefined();
   });
 
+  // ─── get_accounts ──────────────────────────────────────────────
+  describe('get_accounts', () => {
+    it('tüm hesapları isim/adres ve aktif bayrağıyla döner', async () => {
+      const res = await executeToolCall('get_accounts', {}, context);
+      expect(res.error).toBeUndefined();
+      const result = res.result as { count: number; accounts: { name: string; address: string; isActive: boolean }[] };
+      expect(result.count).toBe(4);
+      expect(result.accounts.map((a) => a.name)).toContain('biar');
+      expect(result.accounts.filter((a) => a.isActive)).toHaveLength(1);
+    });
+  });
+
+  // ─── hesap adıyla gönderim ─────────────────────────────────────
+  describe('propose_send — alıcı olarak hesap adı', () => {
+    it('hesap adı adrese çözümlenir ve onaya RESOLVED adres taşınır', async () => {
+      mockSimulateTransaction.mockResolvedValueOnce(makeSimResult());
+      const res = await executeToolCall('propose_send', { to: 'biar', amount: '0.1' }, context);
+
+      expect(res.error).toBeUndefined();
+      const [tx] = mockSimulateTransaction.mock.calls.at(-1)!;
+      expect(tx.to).toBe('0xc27c79000000000000000000000000000000a1a1');
+
+      // ConfirmationCard originalArgs.to'yu okuyup ona imza atıyor — orada isim kalırsa
+      // önizlenen alıcı ile imzalanan alıcı ayrışabilir.
+      const preview = res.result as { originalArgs: { to: string } };
+      expect(preview.originalArgs.to).toBe('0xc27c79000000000000000000000000000000a1a1');
+    });
+
+    it('büyük/küçük harf ve boşluk farkı tolere edilir', async () => {
+      mockSimulateTransaction.mockResolvedValueOnce(makeSimResult());
+      const res = await executeToolCall('propose_send', { to: '  BIAR ', amount: '0.1' }, context);
+      expect(res.error).toBeUndefined();
+      const [tx] = mockSimulateTransaction.mock.calls.at(-1)!;
+      expect(tx.to).toBe('0xc27c79000000000000000000000000000000a1a1');
+    });
+
+    it('kısmi eşleşme kabul edilmez — yanlış hesaba göndermez', async () => {
+      // 'New User' tek başına 'New User #1'i seçmemeli.
+      const res = await executeToolCall('propose_send', { to: 'New User', amount: '0.1' }, context);
+      expect(res.result).toBeUndefined();
+      expect(res.error).toContain('New User');
+      expect(mockSimulateTransaction).not.toHaveBeenCalled();
+    });
+
+    it('aynı isimde iki hesap varsa seçim yapmaz, hata verir', async () => {
+      const res = await executeToolCall('propose_send', { to: 'Ikiz', amount: '0.1' }, context);
+      expect(res.result).toBeUndefined();
+      expect(res.error).toMatch(/birden fazla/);
+      expect(mockSimulateTransaction).not.toHaveBeenCalled();
+    });
+
+    it('bilinmeyen isim için mevcut hesap adlarını sayar, simüle etmez', async () => {
+      const res = await executeToolCall('propose_send', { to: 'yok-boyle-hesap', amount: '0.1' }, context);
+      expect(res.result).toBeUndefined();
+      expect(res.error).toContain('biar');
+      expect(mockSimulateTransaction).not.toHaveBeenCalled();
+    });
+
+    it('0x adresi hesap adı çözümlemesine hiç girmez', async () => {
+      mockSimulateTransaction.mockResolvedValueOnce(makeSimResult());
+      const res = await executeToolCall('propose_send', { to: RECIPIENT, amount: '0.1' }, context);
+      expect(res.error).toBeUndefined();
+      expect(deps.listAccounts).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── get_token_balances ────────────────────────────────────────
+  describe('get_token_balances', () => {
+    it('native bakiyeyi ve ağın kayıtlı ERC-20 bakiyelerini birlikte döner', async () => {
+      const res = await executeToolCall('get_token_balances', {}, context);
+      expect(res.error).toBeUndefined();
+
+      const result = res.result as {
+        address: string;
+        network: string;
+        native: { symbol: string; balance: string };
+        tokens: { symbol: string; address: string; decimals: number; balance: string }[];
+      };
+      expect(result.address).toBe(context.account);
+      expect(result.native).toEqual({ symbol: 'ETH', balance: '1.0' });
+
+      // Sepolia'nın kayıtlı ERC-20'leri — native listeye girmemeli.
+      const symbols = result.tokens.map((t) => t.symbol);
+      expect(symbols).toContain('USDC');
+      expect(symbols).toContain('LINK');
+      expect(symbols).not.toContain('ETH');
+
+      // USDC 6 haneli; yanlış decimals gönderim miktarını milyon kat kaydırır.
+      expect(result.tokens.find((t) => t.symbol === 'USDC')?.decimals).toBe(6);
+      expect(mockNetwork.getTokenBalance).toHaveBeenCalled();
+    });
+
+    it('bakiyesi 0 olan token listeden düşmez', async () => {
+      mockNetwork.getTokenBalance.mockResolvedValue('0');
+      const res = await executeToolCall('get_token_balances', {}, context);
+      const result = res.result as { tokens: { symbol: string; balance: string }[] };
+      // "USDC'niz yok" gerçek bir cevap; satırı gizlemek modele tokenın o ağda hiç
+      // bulunmadığını söyletiyor.
+      expect(result.tokens.length).toBeGreaterThan(0);
+      expect(result.tokens.every((t) => t.balance === '0')).toBe(true);
+    });
+  });
+
   // ─── get_balance ───────────────────────────────────────────────
   describe('get_balance', () => {
     it('başarılı çağrı network.getBalance sonucunu döner', async () => {
       const res = await executeToolCall('get_balance', {}, context);
       expect(res.error).toBeUndefined();
-      expect(res.result).toEqual({ address: context.account, balance: '1.0', balanceWei: '1000000000000000000' });
+      expect(res.result).toEqual({ address: context.account, network: 'Sepolia', balance: '1.0', balanceWei: '1000000000000000000' });
       expect(mockNetwork.getBalance).toHaveBeenCalledWith(context.account);
     });
 
@@ -388,29 +511,71 @@ describe('AgentToolRunner', () => {
       expect(mockSimulateTransaction).not.toHaveBeenCalled();
     });
 
-    it('native olmayan tokenSymbol için desteklenmediğini belirtir, simüle etmez', async () => {
+    it('tanınan bir ERC-20 sembolü token kontratına transfer olarak simüle edilir', async () => {
+      mockSimulateTransaction.mockResolvedValueOnce(makeSimResult());
       const res = await executeToolCall('propose_send', { to: RECIPIENT, amount: '1', tokenSymbol: 'USDC' }, context);
+
+      expect(res.error).toBeUndefined();
+      expect(res.result).toMatchObject({ requiresConfirmation: true, toolName: 'propose_send' });
+
+      // Sepolia USDC. `to` alıcı DEĞİL token kontratıdır, value 0'dır ve miktar calldata'da
+      // taşınır — 6 haneli USDC için 1 token = 1_000_000, 1e18 değil.
+      const [tx] = mockSimulateTransaction.mock.calls.at(-1)!;
+      expect(tx.to.toLowerCase()).toBe('0x1c7d4b196cb0c7b01d743fbc6116a902379c7238');
+      expect(tx.value).toBe('0');
+      expect(tx.data).toMatch(/^0xa9059cbb/); // transfer(address,uint256)
+      expect(tx.data.toLowerCase()).toContain(RECIPIENT.slice(2).toLowerCase());
+      expect(BigInt('0x' + tx.data.slice(-64))).toBe(1_000_000n);
+    });
+
+    it('ERC-20 gönderiminde policy oranı native değil TOKEN bakiyesine göre uygulanır', async () => {
+      // 1000 USDC bakiye (mockNetwork.getTokenBalance), 600 USDC gönderimi %60 eder —
+      // native bakiye 1 ETH olduğu halde reddedilmeli.
+      const res = await executeToolCall('propose_send', { to: RECIPIENT, amount: '600', tokenSymbol: 'USDC' }, context);
       expect(res.result).toBeUndefined();
-      expect(res.error).toContain('desteklenmiyor');
+      expect(res.error).toMatch(/50/);
       expect(mockSimulateTransaction).not.toHaveBeenCalled();
     });
 
-    it('ENS/UD alan adı çözümlenip önizlemede kullanılır', async () => {
-      mockResolveDomain.mockResolvedValueOnce({ address: RECIPIENT, method: 'ens', error: null });
-      mockSimulateTransaction.mockResolvedValueOnce(makeSimResult());
-
-      const res = await executeToolCall('propose_send', { to: 'vitalik.eth', amount: '0.1' }, context);
-      expect(res.error).toBeUndefined();
-      expect(mockSimulateTransaction).toHaveBeenCalledWith(expect.objectContaining({ to: RECIPIENT }));
+    it('tanınmayan tokenSymbol için hangi tokenların gönderilebileceğini söyler, simüle etmez', async () => {
+      const res = await executeToolCall('propose_send', { to: RECIPIENT, amount: '1', tokenSymbol: 'DOGE' }, context);
+      expect(res.result).toBeUndefined();
+      expect(res.error).toContain('DOGE');
+      expect(res.error).toContain('USDC'); // ne gönderilebileceğini isimlendirir
+      expect(mockSimulateTransaction).not.toHaveBeenCalled();
     });
 
-    it('alan adı çözümlenemezse {error} döner, simüle etmez', async () => {
-      mockResolveDomain.mockResolvedValueOnce({ address: null, method: 'ens', error: 'Could not find an Ethereum address for "vitalik.eth".' });
+    it('ENS alan adı reddedilir — çözümlenmez, simüle edilmez', async () => {
+      // Bu sürüm testnet-only; alan adları ise DomainResolver tarafından her zaman
+      // MAINNET'ten çözümleniyor. Çözümleme başarılı olsa bile alıcı olarak kabul edilmemeli.
+      mockResolveDomain.mockResolvedValueOnce({ address: RECIPIENT, method: 'ens', error: null });
 
       const res = await executeToolCall('propose_send', { to: 'vitalik.eth', amount: '0.1' }, context);
       expect(res.result).toBeUndefined();
       expect(res.error).toContain('vitalik.eth');
+      expect(res.error).toMatch(/testnet/i);
+      expect(mockResolveDomain).not.toHaveBeenCalled(); // mainnet'e hiç sorulmamalı
       expect(mockSimulateTransaction).not.toHaveBeenCalled();
+    });
+
+    it('Unstoppable alan adı da reddedilir', async () => {
+      const res = await executeToolCall('propose_send', { to: 'birisi.crypto', amount: '0.1' }, context);
+      expect(res.result).toBeUndefined();
+      expect(res.error).toContain('birisi.crypto');
+      expect(mockResolveDomain).not.toHaveBeenCalled();
+      expect(mockSimulateTransaction).not.toHaveBeenCalled();
+    });
+
+    it('gizli transferde de alan adı reddedilir', async () => {
+      mockNetwork.getShieldedPortfolio.mockResolvedValueOnce([makeHolding({ isNative: true })]);
+      const res = await executeToolCall(
+        'propose_confidential_transfer',
+        { to: 'vitalik.eth', amount: '0.1', tokenSymbol: 'aeETH' },
+        context
+      );
+      expect(res.result).toBeUndefined();
+      expect(res.error).toContain('vitalik.eth');
+      expect(mockResolveDomain).not.toHaveBeenCalled();
     });
   });
 
@@ -452,10 +617,21 @@ describe('AgentToolRunner', () => {
       expect(res.error).toContain('İşlem başarısız olacak');
     });
 
-    it('native olmayan tokenSymbol için desteklenmediğini belirtir', async () => {
+    it('tanınan ERC-20 için wrapper yoksa deploy edilmediğini söyler, simüle etmez', async () => {
+      // USDC kayıtlı bir token, dolayısıyla registry'yi geçer — burada duran şey wrapper'ın
+      // yokluğu. Eski hali bu testi mock'ta network_id olmadığı için geçiyordu ve kodun
+      // ERC-20 shield'ı desteklemediğini iddia ediyordu; desteklıyor.
       const res = await executeToolCall('propose_shield', { amount: '1', tokenSymbol: 'USDC' }, context);
       expect(res.result).toBeUndefined();
+      expect(res.error).toContain('deploy edilmemiş');
+      expect(mockSimulateTransaction).not.toHaveBeenCalled();
+    });
+
+    it('registry\'de olmayan tokenSymbol için desteklenmediğini belirtir', async () => {
+      const res = await executeToolCall('propose_shield', { amount: '1', tokenSymbol: 'DOGE' }, context);
+      expect(res.result).toBeUndefined();
       expect(res.error).toContain('desteklenmiyor');
+      expect(mockNetwork.getWrapperFor).not.toHaveBeenCalled();
       expect(mockSimulateTransaction).not.toHaveBeenCalled();
     });
 

@@ -149,6 +149,7 @@ describe('x402 uçtan uca entegrasyon (gerçek modüller, yalnızca fetch mock)'
           : undefined,
       getConnectedSites: async () => ({ injectedSites: [], walletConnectSessions: [] }),
       createAccount: () => ({ index: 1, address: '0xNEWACCOUNT', name: 'Account 2' }),
+      listAccounts: () => [],
     });
     await new X402SpendingLedger().clearAll();
   });

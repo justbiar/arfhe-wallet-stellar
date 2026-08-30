@@ -95,6 +95,49 @@ export const AGENT_TOOLS: AgentToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "get_accounts",
+      description:
+        "Kullanıcının bu cüzdandaki TÜM hesaplarını isimleriyle ve adresleriyle listeler " +
+        "(ör. 'biar', 'Account 2', 'New User #1') ve hangisinin şu an aktif olduğunu söyler. " +
+        "Kullanıcı 'hesaplarım neler', 'kaç cüzdanım var', 'hangi hesaptayım' gibi bir şey " +
+        "sorduğunda kullan. Kullanıcı bir hesabı ADIYLA hedef gösterdiğinde " +
+        "(ör. 'biar hesabına 1 LINK gönder') bu listeye bakman GEREKMEZ — propose_send'in " +
+        "`to` alanına hesap adını aynen yazman yeterli, cüzdan ismi kendisi çözümler. " +
+        "Bu listede yalnızca kullanıcının KENDİ hesapları vardır, bir adres defteri değildir.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_token_balances",
+      description:
+        "Kullanıcının AKTİF ağdaki tüm AÇIK (şifrelenmemiş) token bakiyelerini tek seferde " +
+        "döndürür — native token (ör. ETH) ve cüzdanın bu ağda tanıdığı bütün ERC-20'ler " +
+        "(ör. USDC, WETH, LINK). Kullanıcı 'hangi tokenlarım var', 'cüzdanımda ne var', " +
+        "'portföyümü göster', 'USDC'm var mı' gibi bir şey sorduğunda BUNU kullan — " +
+        "get_balance yalnızca native tokenı bilir ve ERC-20 sorularına cevap veremez. " +
+        "Bakiyesi 0 olan tokenlar da listede döner; bu 'o token bu ağda yok' demek değil, " +
+        "'kullanıcının o tokendan hiç yok' demektir, öyle aktar. " +
+        "Buradan dönen `symbol` değerlerini propose_send'e aynen geçirebilirsin. " +
+        "ŞİFRELİ (shielded/gizli) bakiyeler buraya DAHİL DEĞİLDİR — onlar için " +
+        "get_shielded_portfolio kullan.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "get_shielded_balance",
       description:
         "Belirtilen shielded token sembolü için kullanıcının FHE ile şifrelenmiş (gizli) " +
@@ -265,7 +308,16 @@ export const AGENT_TOOLS: AgentToolDefinition[] = [
         properties: {
           to: {
             type: "string",
-            description: "Alıcının adresi (0x... formatında) veya bilinen bir ENS/UD alan adı.",
+            description:
+              "Alıcı: 0x... ile başlayan bir adres, ya da kullanıcının KENDİ hesaplarından " +
+              "birinin adı (ör. 'biar', 'New User #1'). Hesap adını buraya AYNEN yaz — cüzdan " +
+              "onu adrese kendisi çevirir; adresi get_accounts'tan kopyalamaya çalışma, tek bir " +
+              "karakteri yanlış yazmak parayı başkasına yollar. İsim tam eşleşmelidir. " +
+              "ENS/Unstoppable alan adları (vitalik.eth gibi) KABUL EDİLMEZ — bu sürüm yalnızca " +
+              "testnet içindir, alan adları ise mainnet'ten çözümlenir. Kullanıcı bir alan adı " +
+              "söylerse adresini KENDİN yazmaya çalışma; ezberinden yazacağın adres yanlış " +
+              "olursa para geri dönmez. Bunun yerine testnet sürümünde alan adı gönderimi " +
+              "yapılamadığını söyle ve 0x adres ya da hesap adı iste.",
           },
           amount: {
             type: "string",
@@ -364,7 +416,16 @@ export const AGENT_TOOLS: AgentToolDefinition[] = [
         properties: {
           to: {
             type: "string",
-            description: "Alıcının adresi (0x... formatında) veya bilinen bir ENS/UD alan adı.",
+            description:
+              "Alıcı: 0x... ile başlayan bir adres, ya da kullanıcının KENDİ hesaplarından " +
+              "birinin adı (ör. 'biar', 'New User #1'). Hesap adını buraya AYNEN yaz — cüzdan " +
+              "onu adrese kendisi çevirir; adresi get_accounts'tan kopyalamaya çalışma, tek bir " +
+              "karakteri yanlış yazmak parayı başkasına yollar. İsim tam eşleşmelidir. " +
+              "ENS/Unstoppable alan adları (vitalik.eth gibi) KABUL EDİLMEZ — bu sürüm yalnızca " +
+              "testnet içindir, alan adları ise mainnet'ten çözümlenir. Kullanıcı bir alan adı " +
+              "söylerse adresini KENDİN yazmaya çalışma; ezberinden yazacağın adres yanlış " +
+              "olursa para geri dönmez. Bunun yerine testnet sürümünde alan adı gönderimi " +
+              "yapılamadığını söyle ve 0x adres ya da hesap adı iste.",
           },
           amount: {
             type: "string",

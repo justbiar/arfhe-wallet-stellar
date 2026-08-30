@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Typography, Box, Button, Grid, Alert, Stack, Tab, Tabs, TextField, Paper, Container, IconButton, InputAdornment, CircularProgress, LinearProgress, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
+import { Typography, Box, Button, Grid, Alert, Stack, Tab, Tabs, TextField, Paper, Container, IconButton, InputAdornment, CircularProgress, LinearProgress, Dialog, DialogTitle, DialogContent, DialogActions, Checkbox, FormControlLabel } from "@mui/material";
 import { AppContext, WalletContext } from "../AppContext.js";
 import { useNavigate } from "react-router";
 import { Visibility, VisibilityOff, Google, Lock, Fingerprint, ContentCopy, Check } from "@mui/icons-material";
@@ -144,6 +144,12 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
   const [words, setWords] = React.useState<string[]>([]);
   const [isGenerated, setIsGenerated] = React.useState(false);
 
+  // Both gate the "Generate Phrase" button itself, not just a later step — someone who
+  // hasn't yet agreed the wallet is testnet-only or that a lost phrase is unrecoverable
+  // shouldn't be handed a mnemonic before agreeing to either.
+  const [acceptedTestnetOnly, setAcceptedTestnetOnly] = React.useState(false);
+  const [acceptedNoRecovery, setAcceptedNoRecovery] = React.useState(false);
+
   // A recovery phrase the user never actually wrote down is the single most common way
   // people lose a wallet permanently — no support channel can undo it. Showing the words
   // and accepting "I saved it" on trust verifies nothing, so the phrase has to be proved
@@ -175,7 +181,7 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
   };
 
   const handleGenerate = () => {
-    if (!accountManager || !username.trim()) return;
+    if (!accountManager || !username.trim() || !acceptedTestnetOnly || !acceptedNoRecovery) return;
     const index = accountManager.CreateAccount(username.trim());
     if (index < 0) return;
 
@@ -351,11 +357,47 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
             autoFocus
             sx={{ mb: 2, textAlign: 'left' }}
           />
+
+          <Stack spacing={0.5} sx={{ mb: 2, textAlign: 'left' }}>
+            <FormControlLabel
+              sx={{ alignItems: 'flex-start', ml: 0 }}
+              control={
+                <Checkbox
+                  size="small"
+                  checked={acceptedTestnetOnly}
+                  onChange={(e) => setAcceptedTestnetOnly(e.target.checked)}
+                  sx={{ pt: 0.25 }}
+                />
+              }
+              label={
+                <Typography variant="caption" color="text.secondary">
+                  {t('auth.acceptTestnetOnly')}
+                </Typography>
+              }
+            />
+            <FormControlLabel
+              sx={{ alignItems: 'flex-start', ml: 0 }}
+              control={
+                <Checkbox
+                  size="small"
+                  checked={acceptedNoRecovery}
+                  onChange={(e) => setAcceptedNoRecovery(e.target.checked)}
+                  sx={{ pt: 0.25 }}
+                />
+              }
+              label={
+                <Typography variant="caption" color="text.secondary">
+                  {t('auth.acceptNoRecoveryHelp')}
+                </Typography>
+              }
+            />
+          </Stack>
+
           <Button
             variant="contained"
             fullWidth
             onClick={handleGenerate}
-            disabled={!accountManager || !username.trim()}
+            disabled={!accountManager || !username.trim() || !acceptedTestnetOnly || !acceptedNoRecovery}
             size="large"
             sx={{ borderRadius: 0, height: 44 }}
           >
@@ -1098,6 +1140,15 @@ export default function Auth() {
               ARFHE WALLET
             </Typography>
           </Box>
+
+          {/* Shown on every step here (login, create, import, set password) rather than
+              only once on first run — the risk it guards against (mistaking this for a
+              mainnet wallet and sending real funds) exists every time the wallet is opened,
+              not only the first time. Ömer Aydoğan, 30.08.2026: "cüzdana bu cüzdan testnet
+              cüzdanıdır uyarısı eklenecek girişte". */}
+          <Alert severity="warning" sx={{ mb: 2, borderRadius: 0 }}>
+            {t('auth.testnetWarning')}
+          </Alert>
 
           {/* Login Screen (Existing encrypted wallet) */}
           {step === AuthStep.LOGIN && (

@@ -12,6 +12,14 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
 
+  // Wires the AI Agent's tool runner to THIS committed appContext — see configureAgent's own
+  // docs for why this has to be a layout effect keyed on the value above, not a side effect of
+  // the constructor itself (React StrictMode's dev-only double-invocation of the useMemo
+  // factory above was silently binding the agent to a phantom, account-less instance).
+  React.useLayoutEffect(() => {
+    appContext.configureAgent();
+  }, [appContext]);
+
   // State just for forcing re-renders
   const [, setRefresh] = React.useState(0);
 

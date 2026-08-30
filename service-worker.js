@@ -470,7 +470,7 @@ async function notifyTxConfirmed(tx, receipt) {
 
   await addStoredNotification({
     type: "tx_confirmed",
-    title: "✅ Transaction Confirmed",
+    title: "Transaction Confirmed",
     message: `${tx.type === "swap" ? "Swap" : "Transfer"} of ${tx.value} ${tx.symbol} confirmed${gasUsed ? ` (gas: ${gasUsed.toLocaleString()})` : ""}`,
     data: { txHash: tx.hash, from: tx.from, to: tx.to, value: tx.value, networkId: String(tx.networkId) },
   });
@@ -479,7 +479,7 @@ async function notifyTxConfirmed(tx, receipt) {
     chrome.notifications.create(`arfhe_tx_ok_${Date.now()}`, {
       type: "basic",
       iconUrl: "images/icon48.png",
-      title: "✅ Transaction Confirmed",
+      title: "Transaction Confirmed",
       message: `${tx.value} ${tx.symbol} — ${shortHash(tx.hash)}`,
       priority: 2,
     });
@@ -495,7 +495,7 @@ async function notifyTxFailed(tx) {
 
   await addStoredNotification({
     type: "tx_failed",
-    title: "❌ Transaction Failed",
+    title: "Transaction Failed",
     message: `${tx.type === "swap" ? "Swap" : "Transfer"} of ${tx.value} ${tx.symbol} failed`,
     data: { txHash: tx.hash, from: tx.from, to: tx.to, value: tx.value, networkId: String(tx.networkId) },
   });
@@ -504,7 +504,7 @@ async function notifyTxFailed(tx) {
     chrome.notifications.create(`arfhe_tx_fail_${Date.now()}`, {
       type: "basic",
       iconUrl: "images/icon48.png",
-      title: "❌ Transaction Failed",
+      title: "Transaction Failed",
       message: `${tx.value} ${tx.symbol} — ${shortHash(tx.hash)}`,
       priority: 2,
     });
@@ -648,7 +648,7 @@ async function scanForIncomingTransfers() {
   if (arrivals.length > MAX_INCOMING_ANNOUNCED) {
     await addStoredNotification({
       type: "incoming_tx",
-      title: "💰 Funds Received",
+      title: "Funds Received",
       message: `${arrivals.length} incoming transfers — open the wallet to see them`,
       data: { networkId: String(chainId) },
     });
@@ -656,7 +656,7 @@ async function scanForIncomingTransfers() {
       chrome.notifications.create(`arfhe_in_batch_${Date.now()}`, {
         type: "basic",
         iconUrl: "images/icon48.png",
-        title: "💰 Funds Received",
+        title: "Funds Received",
         message: `${arrivals.length} incoming transfers`,
         priority: 2,
       });
@@ -718,7 +718,7 @@ async function notifyIncomingTransfer(transfer, chainId, isConfidential = false)
 
   await addStoredNotification({
     type: "incoming_tx",
-    title: isConfidential ? "🛡️ Confidential Transfer Received" : "💰 Funds Received",
+    title: isConfidential ? "Confidential Transfer Received" : "Funds Received",
     message,
     data: {
       txHash: transfer.hash || undefined,
@@ -733,7 +733,7 @@ async function notifyIncomingTransfer(transfer, chainId, isConfidential = false)
     chrome.notifications.create(`arfhe_in_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, {
       type: "basic",
       iconUrl: "images/icon48.png",
-      title: isConfidential ? "🛡️ Confidential Transfer Received" : "💰 Funds Received",
+      title: isConfidential ? "Confidential Transfer Received" : "Funds Received",
       message,
       priority: 2,
     });
@@ -1225,7 +1225,7 @@ async function handleMessage(message) {
         chrome.notifications.create(`arfhe_tx_${Date.now()}`, {
           type: "basic",
           iconUrl: "images/icon48.png",
-          title: "✅ Transaction Confirmed",
+          title: "Transaction Confirmed",
           message: `TX ${sh} confirmed on-chain`,
           priority: 2,
         });
@@ -1238,7 +1238,7 @@ async function handleMessage(message) {
         chrome.notifications.create(`arfhe_txfail_${Date.now()}`, {
           type: "basic",
           iconUrl: "images/icon48.png",
-          title: "❌ Transaction Failed",
+          title: "Transaction Failed",
           message: message.reason || "Transaction failed",
           priority: 2,
         });
@@ -1587,6 +1587,11 @@ chrome.runtime.onConnect.addListener((port) => {
     providerPorts.add(port);
 
     port.onDisconnect.addListener(() => {
+        // See content-script.js's onDisconnect for why this is read: unread, Chrome logs
+        // "Unchecked runtime.lastError" for every disconnect this listener didn't
+        // acknowledge, including the routine one where the tab holding the other end of this
+        // port was moved into the back/forward cache.
+        void chrome.runtime.lastError;
         providerPorts.delete(port);
     });
 

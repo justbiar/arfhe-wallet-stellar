@@ -94,6 +94,30 @@ class NetworkProvider {
     }
   }
 
+  /**
+   * Resolves a Network instance for ANY built-in or custom network, regardless of which one is
+   * currently active — unlike getActiveNetwork(), this never touches activeNetworkId or fires
+   * listeners. All three built-ins are already instantiated eagerly in init() (see class docs),
+   * so this is just picking one of three already-live objects, not spinning up a new RPC
+   * connection. Used by the in-wallet AI Agent (AgentToolRunner.ts) so a read-only tool like
+   * get_balance can answer "what's my balance on Base?" without silently switching the user's
+   * active network out from under them. Returns undefined for a network id that isn't a
+   * built-in and isn't a registered custom network — the caller decides how to report that
+   * (a tool error, not a crash).
+   */
+  getNetworkById(networkId: NetworkId): Network | undefined {
+    switch (networkId) {
+      case NetworkId.Ethereum_Sepolia:
+        return this.getSepoliaNetwork();
+      case NetworkId.Arbitrum_Sepolia:
+        return this.getArbitrumSepoliaNetwork();
+      case NetworkId.Base_Sepolia:
+        return this.getBaseSepoliaNetwork();
+      default:
+        return this.customNetworks.get(networkId as number);
+    }
+  }
+
   switchNetwork(networkId: NetworkId) {
     if (this.activeNetworkId === networkId) return;
     this.activeNetworkId = networkId;

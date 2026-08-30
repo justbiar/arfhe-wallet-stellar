@@ -78,21 +78,41 @@ export class AppContext {
       this.portfolioHistory.clearMemory();
     });
 
-    // The in-wallet AI Agent (AgentChatPanel -> AgentOrchestrator -> AgentToolRunner) needs
-    // to resolve a live Network / Account from the context it's given before it can execute
-    // any tool call. Wired here, synchronously in the constructor, so it's configured before
-    // React ever renders a child that could call runAgentTurn — a useEffect elsewhere would
-    // leave a real window where the UI is mounted but the runner isn't configured yet.
+  }
+
+  /**
+   * Wires the in-wallet AI Agent (AgentChatPanel -> AgentOrchestrator -> AgentToolRunner) to
+   * resolve a live Network / Account from the context it's given before it can execute any
+   * tool call.
+   *
+   * MUST be called from WalletProvider's useLayoutEffect on the actual COMMITTED appContext,
+   * never from this class's own constructor. configureAgentToolRunner sets a MODULE-LEVEL
+   * singleton (see its docs) — a constructor call fires on every candidate render, including
+   * one React StrictMode double-invokes and then throws away, and the LAST call wins that
+   * singleton regardless of which instance actually ends up mounted. That silently wired the
+   * agent to a phantom AppContext whose AccountManager never has any accounts loaded into it
+   * — every propose_shield/unshield/get_shielded_* call failed with "Hesap bulunamadı veya
+   * cüzdan kilitli" even though the wallet was fully unlocked, because requireAccount() was
+   * asking an AccountManager that was never the one anything actually logged into. A
+   * useLayoutEffect keyed on the appContext value only ever runs against whichever instance
+   * useMemo actually kept, and fires synchronously before paint — before any child could call
+   * runAgentTurn — so it closes the same "must be configured before first render" requirement
+   * the old constructor-side comment described, without the phantom-instance risk.
+   */
+  configureAgent(): void {
     configureAgentToolRunner({
+      // Resolves ANY built-in/custom network by id, not just the active one — see
+      // NetworkProvider.getNetworkById's docs. Safety for state-changing tools (propose_*)
+      // doesn't come from restricting this resolver: it comes from those tools always being
+      // called with context.networkId (the active network) and nothing else, since only
+      // AgentToolRunner's read-only cross-chain override (get_balance's `network` arg) ever
+      // asks this for a network other than the active one.
       getNetwork: (networkId) => {
-        const activeId = this.networkProvider.getActiveNetworkId();
-        if (String(activeId) !== networkId) {
-          throw new Error(
-            `Requested network (${networkId}) does not match the active network (${activeId}). ` +
-            "Switch networks and try again."
-          );
+        const network = this.networkProvider.getNetworkById(Number(networkId) as NetworkId);
+        if (!network) {
+          throw new Error(`Network ${networkId} is not configured in this wallet.`);
         }
-        return this.networkProvider.getActiveNetwork();
+        return network;
       },
       getAccount: (address) => {
         const target = address.toLowerCase();
@@ -108,6 +128,32 @@ export class AppContext {
           version: "2",
           chainId: NetworkId.Base_Sepolia,
         };
+      },
+      getConnectedSites: async (address) => {
+        const target = address.toLowerCase();
+        const allSites = await this.sitePermissions.getAll();
+        const injectedSites = allSites
+          .filter((p) => p.accounts.includes(target))
+          .map((p) => ({ origin: p.origin, grantedAt: p.grantedAt, lastUsedAt: p.lastUsedAt }));
+
+        // Not filtered by address — a WalletConnect session isn't scoped to one account the
+        // way an injected-provider grant is, see getConnectedSites's own docs.
+        const walletConnectSessions = this.walletConnectService.getActiveSessions().map((s) => ({
+          name: s.peer?.metadata?.name || "Unknown",
+          url: s.peer?.metadata?.url || "",
+          expiry: s.expiry,
+        }));
+
+        return { injectedSites, walletConnectSessions };
+      },
+      createAccount: (name) => {
+        const index = this.accountManager.CreateAccount(name);
+        const account = this.accountManager.GetAll()[index];
+        const address = account?.GetAddress();
+        if (index < 0 || !address) {
+          throw new Error("Yeni hesap oluşturulamadı.");
+        }
+        return { index, address, name: account.GetName() };
       },
     });
   }

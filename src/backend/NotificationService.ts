@@ -201,7 +201,7 @@ export class NotificationService {
         });
 
         await this.showBrowserNotification(
-            `💰 Incoming ${token}`,
+            `Incoming ${token}`,
             `Received ${value} ${token} from ${shortFrom}`
         );
     }
@@ -217,13 +217,13 @@ export class NotificationService {
 
         await this.addNotification({
             type: "tx_confirmed",
-            title: "Transaction Confirmed ✅",
+            title: "Transaction Confirmed",
             message: `TX ${shortHash} has been confirmed`,
             data: { txHash, explorerUrl },
         });
 
         await this.showBrowserNotification(
-            "✅ Transaction Confirmed",
+            "Transaction Confirmed",
             `TX ${shortHash} confirmed on-chain`
         );
     }
@@ -239,13 +239,13 @@ export class NotificationService {
 
         await this.addNotification({
             type: "tx_failed",
-            title: "Transaction Failed ❌",
+            title: "Transaction Failed",
             message: reason || `TX ${shortHash} has failed`,
             data: { txHash },
         });
 
         await this.showBrowserNotification(
-            "❌ Transaction Failed",
+            "Transaction Failed",
             reason || `TX ${shortHash} failed`
         );
     }

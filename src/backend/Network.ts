@@ -30,6 +30,108 @@ export function getCoinGeckoBase(): string {
   // Vite dev server proxy
   return "/api/coingecko";
 }
+
+// ─── ERC-20 approval scanning (shared by Revoke.tsx and the agent's revoke tools) ───────
+//
+// Originally lived only in Revoke.tsx as a page-local `RevokeService` class — moved here,
+// unchanged in behavior, so AgentToolRunner's get_token_approvals/propose_revoke_approval
+// tools can reuse the exact same on-chain scan instead of duplicating it. This is pure
+// ethers.js + eth_getLogs; it has never depended on React or TokenCache.
+
+/** Well-known DeFi router/protocol addresses — used only to label a spender and, as a
+ *  smaller factor, to nudge its risk score down slightly relative to a totally unknown
+ *  contract. Absence from this list is not itself a red flag — most legitimate contracts
+ *  aren't on it — so it does not gate anything, only labels and lightly scores it. */
+export const COMMON_SPENDERS = [
+  { address: '0x7a250d5630b4cF539739dF2C5dAcb4c659F2488D', name: 'Uniswap V2 Router' },
+  { address: '0xE592427A0AEce92De3Edee1F18E0157C05861564', name: 'Uniswap V3 Router' },
+  { address: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45', name: 'Uniswap Universal Router' },
+  { address: '0xC532a74256D3Db42D0Bf7a0400fEFDbad7694008', name: 'Uniswap Sepolia Router' },
+  { address: '0x1111111254EEB25477B68fb85Ed929f73A960582', name: '1inch V5 Router' },
+  { address: '0xDef1C0ded9bec7F1a1670819833240f027b25EfF', name: '0x Exchange Proxy' },
+  { address: '0x000000000022D473030F116dDEE9F6B43aC78BA3', name: 'Permit2' },
+];
+
+export interface TokenApproval {
+  tokenAddress: string;
+  tokenName: string;
+  tokenSymbol: string;
+  tokenDecimals: number;
+  spenderAddress: string;
+  spenderName: string;
+  allowance: string;
+  allowanceRaw: bigint;
+  isUnlimited: boolean;
+  riskScore: number; // 0-100
+  riskLevel: 'critical' | 'high' | 'medium' | 'low';
+  riskReasons: string[];
+}
+
+/**
+ * Scores one (token, spender) approval 0-100 from three factors: how much it grants, how
+ * well-known the spender is, and a flat base for any active grant at all. Purely a heuristic
+ * for sorting/flagging in the UI — never blocks a revoke, an agent proposal, or anything else.
+ */
+export function calculateApprovalRisk(
+  allowanceRaw: bigint,
+  isUnlimited: boolean,
+  spenderAddress: string,
+  tokenDecimals: number,
+  /** False when the token would not report `decimals()`, so the size is unverified. */
+  decimalsKnown: boolean = true,
+): { score: number; level: 'critical' | 'high' | 'medium' | 'low'; reasons: string[] } {
+  let score = 0;
+  const reasons: string[] = [];
+
+  if (isUnlimited) {
+    score += 50;
+    reasons.push('Unlimited approval — spender can drain all tokens');
+  } else if (!decimalsKnown) {
+    // Scoring an amount whose scale is unknown would be guessing, and guessing low is the
+    // dangerous direction. An unsized allowance is treated as significant until the token
+    // says otherwise.
+    score += 35;
+    reasons.push('Token does not report its decimals — the allowance size cannot be verified');
+  } else {
+    const allowanceFloat = Number(allowanceRaw) / Math.pow(10, tokenDecimals);
+    if (allowanceFloat > 1_000_000) {
+      score += 35;
+      reasons.push(`Very large allowance (${allowanceFloat.toLocaleString()} tokens)`);
+    } else if (allowanceFloat > 10_000) {
+      score += 20;
+      reasons.push(`Significant allowance (${allowanceFloat.toLocaleString()} tokens)`);
+    } else if (allowanceFloat > 100) {
+      score += 10;
+      reasons.push('Moderate allowance');
+    } else {
+      score += 5;
+      reasons.push('Small allowance');
+    }
+  }
+
+  const isKnownSpender = COMMON_SPENDERS.some(
+    s => s.address.toLowerCase() === spenderAddress.toLowerCase()
+  );
+  if (!isKnownSpender) {
+    score += 30;
+    reasons.push('Unknown/unverified spender contract');
+  } else {
+    score += 5;
+    reasons.push('Known protocol spender');
+  }
+
+  score += 10; // base risk for any active approval
+  score = Math.min(score, 100);
+
+  let level: 'critical' | 'high' | 'medium' | 'low';
+  if (score >= 75) level = 'critical';
+  else if (score >= 50) level = 'high';
+  else if (score >= 30) level = 'medium';
+  else level = 'low';
+
+  return { score, level, reasons };
+}
+
 class Network {
   network_id: NetworkId;
   network_name: string;
@@ -3073,6 +3175,142 @@ class Network {
         encrypted.proof,
       ]),
     });
+  }
+
+  /**
+   * Scans this account's ERC-20 approval history and returns every still-active one (current
+   * allowance > 0), with a risk score for each. Ported unchanged from Revoke.tsx's page-local
+   * RevokeService — see this file's COMMON_SPENDERS/calculateApprovalRisk docs — so the manual
+   * Revoke screen and the agent's get_token_approvals/propose_revoke_approval tools always see
+   * the exact same scan, never two drifting copies of the same ~150 lines.
+   *
+   * Read-only and can be slow (a real chain scan, chunked for free-tier RPC limits) — this is
+   * NOT a fast-path candidate, and callers should expect it to take real time.
+   *
+   * @param scanDepth How many blocks back to look for Approval events. Default 10,000.
+   */
+  async getTokenApprovals(
+    ownerAddress: string,
+    scanDepth = 10000,
+    onProgress?: (progress: number, message: string) => void
+  ): Promise<TokenApproval[]> {
+    const { JsonRpcProvider, Contract, formatUnits, MaxUint256 } = await import("ethers");
+    const provider = new JsonRpcProvider(this.rpc_url);
+
+    const ERC20_ABI = [
+      "function approve(address spender, uint256 amount) returns (bool)",
+      "function allowance(address owner, address spender) view returns (uint256)",
+      "function decimals() view returns (uint8)",
+      "function symbol() view returns (string)",
+      "function name() view returns (string)",
+    ];
+    const approvalTopic = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925"; // keccak256("Approval(address,address,uint256)")
+
+    const latestBlock = await provider.getBlockNumber();
+    const startBlock = Math.max(0, latestBlock - scanDepth);
+    const endBlock = latestBlock;
+    const ownerTopic = "0x" + ownerAddress.slice(2).toLowerCase().padStart(64, "0");
+
+    // Chunked for free-tier RPC block-range limits (Alchemy's free tier caps at 10 blocks
+    // per eth_getLogs call) — a chunk that fails is skipped rather than aborting the whole
+    // scan, so one flaky range costs missed history in that window, not the entire result.
+    const CHUNK_SIZE = 10;
+    type LogEntry = { address: string; topics: readonly string[]; blockNumber: number };
+    const allLogs: LogEntry[] = [];
+    const totalChunks = Math.ceil((endBlock - startBlock) / CHUNK_SIZE);
+    let processedChunks = 0;
+
+    for (let currentBlock = startBlock; currentBlock <= endBlock; currentBlock += CHUNK_SIZE) {
+      const chunkEnd = Math.min(currentBlock + CHUNK_SIZE - 1, endBlock);
+      try {
+        const chunkLogs = await provider.getLogs({
+          topics: [approvalTopic, ownerTopic],
+          fromBlock: currentBlock,
+          toBlock: chunkEnd,
+        });
+        allLogs.push(...(chunkLogs as unknown as LogEntry[]));
+        processedChunks++;
+        onProgress?.(Math.round((processedChunks / totalChunks) * 100), `Scanning blocks... ${processedChunks}/${totalChunks} chunks`);
+      } catch {
+        // Continue with next chunk.
+      }
+    }
+
+    if (allLogs.length === 0) return [];
+
+    const tokenAddresses = new Set<string>();
+    for (const log of allLogs) {
+      if (log.address) tokenAddresses.add(log.address.toLowerCase());
+    }
+
+    // Latest log per (token, spender) — a spender re-approved more than once only needs its
+    // most recent grant checked, since allowance() already reflects the current total anyway.
+    const latestPerSpender = (logs: LogEntry[]): Map<string, LogEntry> => {
+      const map = new Map<string, LogEntry>();
+      for (const log of logs) {
+        if (!log.topics || log.topics.length < 3) continue;
+        const spender = ("0x" + log.topics[2].slice(-40)).toLowerCase();
+        const existing = map.get(spender);
+        if (!existing || log.blockNumber > existing.blockNumber) map.set(spender, log);
+      }
+      return map;
+    };
+
+    const approvals: TokenApproval[] = [];
+    for (const tokenAddress of tokenAddresses) {
+      try {
+        const tokenContract = new Contract(tokenAddress, ERC20_ABI, provider);
+        const [symbol, rawDecimals, name] = await Promise.all([
+          tokenContract.symbol().catch(() => "UNKNOWN"),
+          tokenContract.decimals().catch(() => null),
+          tokenContract.name().catch(() => "Unknown Token"),
+        ]);
+        const decimalsKnown = rawDecimals !== null && rawDecimals !== undefined;
+        const decimals = decimalsKnown ? Number(rawDecimals) : 18;
+
+        const tokenLogs = allLogs.filter((log) => log.address.toLowerCase() === tokenAddress);
+        const latestApprovals = latestPerSpender(tokenLogs);
+
+        for (const [spenderAddress] of latestApprovals.entries()) {
+          try {
+            const currentAllowance: bigint = await tokenContract.allowance(ownerAddress, spenderAddress);
+            if (currentAllowance === 0n) continue; // already revoked/spent down
+
+            const isUnlimited = currentAllowance >= MaxUint256 / 2n;
+            const allowanceFormatted = isUnlimited
+              ? "∞ UNLIMITED"
+              : decimalsKnown
+              ? formatUnits(currentAllowance, decimals)
+              : `${currentAllowance.toString()} (raw)`;
+
+            const spenderInfo = COMMON_SPENDERS.find((s) => s.address.toLowerCase() === spenderAddress.toLowerCase());
+            const spenderName = spenderInfo?.name || `Contract ${spenderAddress.slice(0, 6)}...`;
+            const risk = calculateApprovalRisk(currentAllowance, isUnlimited, spenderAddress, decimals, decimalsKnown);
+
+            approvals.push({
+              tokenAddress,
+              tokenName: name,
+              tokenSymbol: symbol,
+              tokenDecimals: decimals,
+              spenderAddress,
+              spenderName,
+              allowance: `${allowanceFormatted} ${symbol}`,
+              allowanceRaw: currentAllowance,
+              isUnlimited,
+              riskScore: risk.score,
+              riskLevel: risk.level,
+              riskReasons: risk.reasons,
+            });
+          } catch {
+            // One spender's allowance() call failing shouldn't drop the rest of the token's.
+          }
+        }
+      } catch {
+        // One token's metadata/logs failing shouldn't abort the whole scan.
+      }
+    }
+
+    return approvals;
   }
 }
 

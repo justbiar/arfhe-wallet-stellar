@@ -73,6 +73,15 @@ const SWAP_CONTRACTS: Partial<Record<NetworkId, SwapContracts>> = {
     quoterV2: "0x2779a0CC1c3e0E44D2542EC3e79e3864Ae93Ef0B",  // Uniswap V3 QuoterV2 Arb Sepolia
     weth: "0x980B62Da83eFf3D4576C647993b0c1D7faf17c73",      // WETH Arb Sepolia
   },
+  // Base Sepolia was missing entirely, which made getTokens() return [] for it — and that
+  // list is the wallet's only backend-reachable symbol -> address registry, so the agent
+  // could not name a single ERC-20 on this chain. Both addresses below were verified
+  // on-chain: each answers WETH9() with 0x4200...0006, the same WETH listed here.
+  [NetworkId.Base_Sepolia]: {
+    swapRouter: "0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4", // Uniswap V3 SwapRouter02 Base Sepolia
+    quoterV2: "0xC5290058841028F1614F3A6F0F5816cAd0df5E27",  // Uniswap V3 QuoterV2 Base Sepolia
+    weth: "0x4200000000000000000000000000000000000006",      // WETH Base Sepolia
+  },
 };
 
 // ─── Supported Swap Tokens Per Network ────────────────────────
@@ -142,6 +151,21 @@ const NETWORK_TOKENS: Partial<Record<NetworkId, SwapToken[]>> = {
     { symbol: "ETH",  name: "Ethereum",       address: "NATIVE",                                       decimals: 18, logoColor: "#627EEA", isNative: true },
     { symbol: "WETH", name: "Wrapped Ether",   address: "0x980B62Da83eFf3D4576C647993b0c1D7faf17c73", decimals: 18, logoColor: "#EC4899" },
     { symbol: "USDC", name: "USD Coin",        address: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d", decimals: 6,  logoColor: "#2775CA" },
+    { symbol: "LINK", name: "Chainlink",       address: "0xb1D4538B4571d411F07960EF2838Ce337FE1E80E", decimals: 18, logoColor: "#2A5ADA" },
+  ],
+  // ═══════════════════════════════════════════════════════════
+  //  BASE SEPOLIA TESTNET
+  // ═══════════════════════════════════════════════════════════
+  //
+  // Every address here was read off Base Sepolia itself — symbol() and decimals() were
+  // called on each one rather than copied from a chain list. Getting decimals wrong is the
+  // expensive mistake: USDC is 6, and treating it as 18 sends a millionth of the intended
+  // amount (or a million times it, the other way round).
+  [NetworkId.Base_Sepolia]: [
+    { symbol: "ETH",  name: "Ethereum",       address: "NATIVE",                                       decimals: 18, logoColor: "#627EEA", isNative: true },
+    { symbol: "WETH", name: "Wrapped Ether",   address: "0x4200000000000000000000000000000000000006", decimals: 18, logoColor: "#EC4899" },
+    { symbol: "USDC", name: "USD Coin",        address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", decimals: 6,  logoColor: "#2775CA" },
+    { symbol: "LINK", name: "Chainlink",       address: "0xE4aB69C077896252FAFBD49EFD26B5D171A32410", decimals: 18, logoColor: "#2A5ADA" },
   ],
 };
 

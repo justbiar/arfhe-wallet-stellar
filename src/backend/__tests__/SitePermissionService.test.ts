@@ -146,6 +146,60 @@ describe("SitePermissionService", () => {
   });
 });
 
+describe("per-account revocation", () => {
+  /**
+   * A grant belongs to an origin *and* an account. The screens that show connections show
+   * one account's, so the revoke behind them has to match — otherwise a user looking at
+   * one account disconnects sites from another they never saw.
+   */
+  let store: ReturnType<typeof makeStore>;
+  let perms: SitePermissionService;
+
+  const ALICE = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const BOB = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+  beforeEach(async () => {
+    store = makeStore();
+    perms = new SitePermissionService(store);
+    await perms.grant("https://shared.example", [ALICE, BOB]);
+    await perms.grant("https://alice-only.example", [ALICE]);
+  });
+
+  it("bir hesabı kaldırmak diğerinin erişimini korur", async () => {
+    await perms.revokeAccount("https://shared.example", ALICE);
+
+    expect(await perms.canUseAccount("https://shared.example", ALICE)).toBe(false);
+    // Bob never asked to be disconnected and was not on the screen that did it.
+    expect(await perms.canUseAccount("https://shared.example", BOB)).toBe(true);
+  });
+
+  it("son hesap da kaldırılınca site tamamen düşer", async () => {
+    // An origin with an empty account list is a grant to nobody; leaving it would keep the
+    // site listed as connected while it can see nothing.
+    await perms.revokeAccount("https://alice-only.example", ALICE);
+
+    const all = await perms.getAll();
+    expect(all.some((p) => p.origin === "https://alice-only.example")).toBe(false);
+  });
+
+  it("hepsini kaldır yalnızca o hesabı etkiler", async () => {
+    await perms.revokeAccountEverywhere(ALICE);
+
+    expect(await perms.canUseAccount("https://shared.example", ALICE)).toBe(false);
+    expect(await perms.canUseAccount("https://alice-only.example", ALICE)).toBe(false);
+    // Bob keeps the site he shares, which is the whole point of scoping the button.
+    expect(await perms.canUseAccount("https://shared.example", BOB)).toBe(true);
+  });
+
+  it("bilinmeyen hesap veya origin hiçbir şeyi silmez", async () => {
+    await perms.revokeAccount("https://shared.example", "0xdead");
+    await perms.revokeAccount("https://not-a-site.example", ALICE);
+
+    expect(await perms.canUseAccount("https://shared.example", ALICE)).toBe(true);
+    expect(await perms.canUseAccount("https://shared.example", BOB)).toBe(true);
+  });
+});
+
 describe("normalizeOrigin", () => {
   it("tam URL'den origin çıkarır", () => {
     expect(normalizeOrigin("https://app.uniswap.org/swap?a=1")).toBe("https://app.uniswap.org");

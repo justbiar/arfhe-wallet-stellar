@@ -1,8 +1,8 @@
 import * as React from "react";
-import { Typography, Box, Button, Grid, Alert, Stack, TextField, Paper, Container, IconButton, InputAdornment, CircularProgress, LinearProgress, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
+import { Typography, Box, Button, Grid, Alert, Stack, Tab, Tabs, TextField, Paper, Container, IconButton, InputAdornment, CircularProgress, LinearProgress, Dialog, DialogTitle, DialogContent, DialogActions, Checkbox, FormControlLabel } from "@mui/material";
 import { AppContext, WalletContext } from "../AppContext.js";
 import { useNavigate } from "react-router";
-import { Visibility, VisibilityOff, Google, Lock, Fingerprint } from "@mui/icons-material";
+import { Visibility, VisibilityOff, Google, Lock, Fingerprint, ContentCopy, Check } from "@mui/icons-material";
 import { Mnemonic } from "ethers";
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
@@ -15,7 +15,68 @@ import { Web3Auth } from "@web3auth/modal";
 import { CHAIN_NAMESPACES, WEB3AUTH_NETWORK } from "@web3auth/base";
 import { EthereumPrivateKeyProvider } from "@web3auth/ethereum-provider";
 
-const clientId = import.meta.env.VITE_WEB3AUTH_CLIENT_ID || "BPi5PB_UiIZ-cPz1GtV5i1I2iOSOHuimiXBI0e-Oe_u6X3oVAbCiAZOTEBtTXw4tsluTITPqA8zMsfxIKMjiqNQ"; // Fallback: Web3Auth public testing clientId
+/**
+ * Web3Auth project this build talks to.
+ *
+ * Deliberately no fallback. It used to default to Web3Auth's public testing client id,
+ * which made a misconfigured build *look* like it worked: social login completed against a
+ * shared demo project instead of ours. Since the derived key is scoped to the client id,
+ * every account created that way lives at a different address than the same user would get
+ * from a correct build — a silent fork of everyone's wallet, discovered far too late.
+ *
+ * An empty value now disables the button and says why.
+ */
+const clientId = import.meta.env.VITE_WEB3AUTH_CLIENT_ID ?? "";
+
+/**
+ * Whether this document is the browser-action popup rather than a tab or window.
+ *
+ * `chrome.tabs.getCurrent()` resolves to a tab in anything that *is* a tab — including a
+ * `windows.create({type:"popup"})` window, whose content is a tab — and to `undefined` in
+ * the action popup, which is not one. That is the distinction that matters here, and it
+ * needs no extra permission.
+ */
+async function isActionPopup(): Promise<boolean> {
+  try {
+    const tabs = (globalThis as { chrome?: typeof chrome }).chrome?.tabs;
+    if (!tabs?.getCurrent) return false;
+    return !(await tabs.getCurrent());
+  } catch {
+    // Not an extension context at all (dev server) — treat as a normal page.
+    return false;
+  }
+}
+
+/**
+ * Re-open the wallet in its own window so an OAuth flow can survive.
+ *
+ * The action popup is destroyed by Chrome the moment it loses focus, and Web3Auth's login
+ * opens a window of its own — so the popup died mid-`await`, the resolved private key was
+ * never imported, and the user was left staring at a closed wallet. Clicking again
+ * appeared to fix it only because Web3Auth had cached the session by then and resolved
+ * before focus moved.
+ *
+ * A window created here is an ordinary window: it keeps running while the OAuth window is
+ * in front, so the flow completes where it started.
+ */
+async function openSocialLoginWindow(): Promise<boolean> {
+  try {
+    const runtime = (globalThis as { chrome?: typeof chrome }).chrome?.runtime;
+    const windows = (globalThis as { chrome?: typeof chrome }).chrome?.windows;
+    if (!runtime?.getURL || !windows?.create) return false;
+
+    await windows.create({
+      url: runtime.getURL("index.html#/auth?social=1"),
+      type: "popup",
+      width: 420,
+      height: 700,
+      focused: true,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Calculate password strength 0-100 */
 function getPasswordStrength(pw: string): { score: number; label: string; color: string } {
@@ -83,6 +144,12 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
   const [words, setWords] = React.useState<string[]>([]);
   const [isGenerated, setIsGenerated] = React.useState(false);
 
+  // Both gate the "Generate Phrase" button itself, not just a later step — someone who
+  // hasn't yet agreed the wallet is testnet-only or that a lost phrase is unrecoverable
+  // shouldn't be handed a mnemonic before agreeing to either.
+  const [acceptedTestnetOnly, setAcceptedTestnetOnly] = React.useState(false);
+  const [acceptedNoRecovery, setAcceptedNoRecovery] = React.useState(false);
+
   // A recovery phrase the user never actually wrote down is the single most common way
   // people lose a wallet permanently — no support channel can undo it. Showing the words
   // and accepting "I saved it" on trust verifies nothing, so the phrase has to be proved
@@ -92,13 +159,36 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
   const [answers, setAnswers] = React.useState<Record<number, string>>({});
   const [quizError, setQuizError] = React.useState('');
 
+  // Copying is offered because the alternative people actually choose is worse: retyping
+  // twelve words by hand into a password manager is where transcription errors are made,
+  // and a phrase that restores nothing is the same as no backup at all. The clipboard is
+  // readable by other software, so the wording says to clear it rather than implying the
+  // copy is safe on its own.
+  const [copied, setCopied] = React.useState(false);
+  const [copyError, setCopyError] = React.useState('');
+
+  const copyPhrase = async () => {
+    try {
+      await navigator.clipboard.writeText(words.join(' '));
+      setCopyError('');
+      setCopied(true);
+      // Long enough to read the warning, short enough that the button is ready again if
+      // the paste did not land where they meant it to.
+      window.setTimeout(() => setCopied(false), 4000);
+    } catch {
+      setCopyError(t('auth.copyFailed'));
+    }
+  };
+
   const handleGenerate = () => {
-    if (!accountManager || !username.trim()) return;
+    if (!accountManager || !username.trim() || !acceptedTestnetOnly || !acceptedNoRecovery) return;
     const index = accountManager.CreateAccount(username.trim());
     if (index < 0) return;
 
     const mnemonicWords = accountManager.accounts[index]?.GetWords();
     setWords(mnemonicWords ?? []);
+    setCopied(false);
+    setCopyError('');
     setIsGenerated(true);
   };
 
@@ -220,6 +310,29 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
           </Paper>
 
           <Button
+            fullWidth
+            variant="outlined"
+            onClick={copyPhrase}
+            startIcon={copied ? <Check /> : <ContentCopy />}
+            color={copied ? 'success' : 'primary'}
+            sx={{ mt: 1.5, borderRadius: 0, height: 40, fontSize: 14 }}
+          >
+            {copied ? t('auth.phraseCopied') : t('auth.copyPhrase')}
+          </Button>
+
+          {copied && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+              {t('auth.phraseCopiedWarning')}
+            </Typography>
+          )}
+
+          {copyError && (
+            <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
+              {copyError}
+            </Typography>
+          )}
+
+          <Button
             variant="contained"
             fullWidth
             onClick={startVerification}
@@ -244,11 +357,47 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
             autoFocus
             sx={{ mb: 2, textAlign: 'left' }}
           />
+
+          <Stack spacing={0.5} sx={{ mb: 2, textAlign: 'left' }}>
+            <FormControlLabel
+              sx={{ alignItems: 'flex-start', ml: 0 }}
+              control={
+                <Checkbox
+                  size="small"
+                  checked={acceptedTestnetOnly}
+                  onChange={(e) => setAcceptedTestnetOnly(e.target.checked)}
+                  sx={{ pt: 0.25 }}
+                />
+              }
+              label={
+                <Typography variant="caption" color="text.secondary">
+                  {t('auth.acceptTestnetOnly')}
+                </Typography>
+              }
+            />
+            <FormControlLabel
+              sx={{ alignItems: 'flex-start', ml: 0 }}
+              control={
+                <Checkbox
+                  size="small"
+                  checked={acceptedNoRecovery}
+                  onChange={(e) => setAcceptedNoRecovery(e.target.checked)}
+                  sx={{ pt: 0.25 }}
+                />
+              }
+              label={
+                <Typography variant="caption" color="text.secondary">
+                  {t('auth.acceptNoRecoveryHelp')}
+                </Typography>
+              }
+            />
+          </Stack>
+
           <Button
             variant="contained"
             fullWidth
             onClick={handleGenerate}
-            disabled={!accountManager || !username.trim()}
+            disabled={!accountManager || !username.trim() || !acceptedTestnetOnly || !acceptedNoRecovery}
             size="large"
             sx={{ borderRadius: 0, height: 44 }}
           >
@@ -260,14 +409,53 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
   );
 }
 
+/** Accepts the key with or without the 0x prefix, which is how people paste them. */
+const PRIVATE_KEY_PATTERN = /^(0x)?[0-9a-fA-F]{64}$/;
+
+/**
+ * Height reserved for whichever input the active tab shows.
+ *
+ * Sized to the private-key field plus its warning — the taller of the two — so switching
+ * tabs moves nothing below it. Kept deliberately tight: the whole screen has to fit the
+ * popup, and a reserved block that is larger than it needs to be is what pushes the
+ * button past the bottom edge and turns a still page into a scrolling one.
+ */
+const INPUT_AREA_MIN_HEIGHT = 124;
+
+/** Two lines of `body2`, so a one-line description does not shorten the card. */
+const DESCRIPTION_MIN_HEIGHT = 40;
+
+type ImportMode = "phrase" | "key";
+
+/**
+ * Import an existing wallet, from either a recovery phrase or a single private key.
+ *
+ * The two are not variants of one input. A phrase is a seed: it regenerates a whole tree
+ * of accounts, which is why the phrase path scans several chains for accounts that were
+ * already used. A private key is one account and nothing else — scanning would find
+ * nothing to find, and running it anyway would leave the user watching a progress message
+ * for a search that could not succeed.
+ *
+ * The other asymmetry is what the wallet can give back later. An account imported from a
+ * key has no phrase to reveal, so the key the user pastes here is the only copy that will
+ * ever exist. That is said on the screen rather than discovered on the day it matters.
+ */
 function ImportWallet({ accountManager, onDone }: WalletStepProps) {
   const { t } = useTranslation();
+  const [mode, setMode] = React.useState<ImportMode>("phrase");
   const [mnemonic, setMnemonic] = React.useState("");
+  const [privateKey, setPrivateKey] = React.useState("");
+  const [showKey, setShowKey] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
   const [isScanning, setIsScanning] = React.useState(false);
 
-  const handleImport = async () => {
+  const switchMode = (next: ImportMode) => {
+    setMode(next);
+    setError(null);
+  };
+
+  const importFromMnemonic = async () => {
     if (!accountManager) return;
 
     if (!Mnemonic.isValidMnemonic(mnemonic.trim())) {
@@ -299,43 +487,149 @@ function ImportWallet({ accountManager, onDone }: WalletStepProps) {
     }
   };
 
+  const importFromPrivateKey = () => {
+    if (!accountManager) return;
+
+    const trimmed = privateKey.trim();
+    // Checked here as well as inside AccountManager, so a mistyped key is answered with
+    // what is wrong with it rather than a generic failure.
+    if (!PRIVATE_KEY_PATTERN.test(trimmed)) {
+      setError(t('auth.invalidPrivateKey'));
+      return;
+    }
+
+    const index = accountManager.ImportPrivateKey(
+      trimmed,
+      `New User #${accountManager.accounts.length + 1}`
+    );
+    if (index === -1) {
+      setError(t('auth.importFailed'));
+      return;
+    }
+
+    // Nothing to discover: this key is one account, not a seed for a tree of them.
+    setPrivateKey("");
+    onDone();
+  };
+
+  const handleImport = () => {
+    if (mode === "phrase") void importFromMnemonic();
+    else importFromPrivateKey();
+  };
+
+  const canSubmit = !!accountManager && !isScanning &&
+    (mode === "phrase" ? mnemonic.trim().length > 0 : privateKey.trim().length > 0);
+
   return (
     <Box>
       <Typography variant="h5" fontWeight={700} gutterBottom align="center" color="text.primary">
         {t('auth.importTitle')}
       </Typography>
-      <Typography variant="body2" color="text.secondary" align="center" sx={{ mb: 3 }}>
-        {t('auth.importDescription')}
+
+      <Tabs
+        value={mode}
+        onChange={(_e, next: ImportMode) => switchMode(next)}
+        variant="fullWidth"
+        sx={{ mb: 2, minHeight: 36, '& .MuiTab-root': { minHeight: 36, textTransform: 'none', fontWeight: 600 } }}
+      >
+        <Tab value="phrase" label={t('auth.importPhraseTab')} />
+        <Tab value="key" label={t('auth.importKeyTab')} />
+      </Tabs>
+
+      {/* Two lines are reserved whether or not the sentence needs both. The card is
+          vertically centred, so a tab whose description wraps to one line instead of two
+          makes the whole card shorter — and every control below it, the import button
+          included, shifts up by a line when the tab changes. */}
+      <Typography
+        variant="body2"
+        color="text.secondary"
+        align="center"
+        sx={{ mb: 2, minHeight: DESCRIPTION_MIN_HEIGHT }}
+      >
+        {mode === "phrase" ? t('auth.importDescription') : t('auth.importKeyDescription')}
       </Typography>
 
       {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 0 }}>{error}</Alert>}
 
-      <TextField
-        placeholder="apple banana cat dog..."
-        multiline
-        fullWidth
-        minRows={4}
-        value={mnemonic}
-        onChange={(e) => {
-          setMnemonic(e.target.value);
-          setError(null);
-        }}
-        sx={{
-          '& .MuiOutlinedInput-root': {
-            borderRadius: 0,
-            bgcolor: 'background.default',
-            fontFamily: 'monospace'
-          }
-        }}
-      />
+      {/* Both tabs reserve the same height. `minRows` let the phrase box grow with every
+          word typed, which pushed the import button down the page — and with the popup
+          unable to scroll, out of reach entirely. A fixed row count scrolls inside itself
+          instead, and the shared minimum keeps the button from jumping when the tab
+          changes. */}
+      <Box sx={{ minHeight: INPUT_AREA_MIN_HEIGHT }}>
+      {mode === "phrase" ? (
+        <TextField
+          placeholder="apple banana cat dog..."
+          multiline
+          fullWidth
+          rows={4}
+          value={mnemonic}
+          onChange={(e) => {
+            setMnemonic(e.target.value);
+            setError(null);
+          }}
+          sx={{
+            '& .MuiOutlinedInput-root': {
+              borderRadius: 0,
+              bgcolor: 'background.default',
+              fontFamily: 'monospace',
+              alignItems: 'flex-start',
+            }
+          }}
+        />
+      ) : (
+        <>
+          <TextField
+            label={t('auth.privateKeyLabel')}
+            placeholder="0x..."
+            fullWidth
+            // Masked by default: this screen is as likely to be open over someone's
+            // shoulder as any password field, and the value is worth strictly more.
+            type={showKey ? "text" : "password"}
+            value={privateKey}
+            onChange={(e) => {
+              setPrivateKey(e.target.value);
+              setError(null);
+            }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && canSubmit) handleImport(); }}
+            autoComplete="off"
+            spellCheck={false}
+            InputProps={{
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton
+                    onClick={() => setShowKey((v) => !v)}
+                    edge="end"
+                    aria-label={showKey ? t('auth.hidePrivateKey') : t('auth.showPrivateKey')}
+                  >
+                    {showKey ? <VisibilityOff /> : <Visibility />}
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }}
+            sx={{
+              '& .MuiOutlinedInput-root': {
+                borderRadius: 0,
+                bgcolor: 'background.default',
+                fontFamily: 'monospace'
+              }
+            }}
+          />
+
+          <Alert severity="warning" sx={{ mt: 1.5, borderRadius: 0, fontSize: '0.7rem', py: 0.25, '& .MuiAlert-icon': { py: 0.5 } }}>
+            {t('auth.privateKeyNoPhraseWarning')}
+          </Alert>
+        </>
+      )}
+      </Box>
 
       <Button
         variant="contained"
         fullWidth
         onClick={handleImport}
-        disabled={!accountManager || isScanning}
+        disabled={!canSubmit}
         size="large"
-        sx={{ mt: 3, borderRadius: 0, height: 44 }}
+        sx={{ mt: 2, borderRadius: 0, height: 44 }}
       >
         {isScanning ? t('auth.scanningAccounts') : t('auth.importWallet')}
       </Button>
@@ -734,6 +1028,8 @@ export default function Auth() {
 
   const [step, setStep] = React.useState(AuthStep.CHOICE);
   const [isSocialLoading, setIsSocialLoading] = React.useState(false);
+  /** Surfaced under the button — social login used to fail with no explanation at all. */
+  const [socialError, setSocialError] = React.useState("");
   const [authMethod, setAuthMethod] = React.useState<'password' | 'google' | null>(null);
   const [pendingEmail, setPendingEmail] = React.useState<string | null>(null);
 
@@ -794,15 +1090,28 @@ export default function Auth() {
   }, []);
 
   return (
+    // Every step here is sized to fit the popup, so in normal use this box does not
+    // scroll at all — a screen that drifts under the reader while they type is worse than
+    // one that is simply still.
+    //
+    // `auto` rather than `hidden` because one step genuinely cannot be made to fit: a
+    // 24-word recovery phrase is twelve rows of words, and the popup root is a fixed
+    // height with `overflow: hidden`, so anything past the bottom edge there is not
+    // scrolled past — it is unreachable. The scroll region engages for that case and
+    // stays dormant for the rest.
+    //
+    // Centring is `margin: auto` on the child rather than `align-items: center`: a centred
+    // flex item that overflows is clipped at *both* ends and cannot be scrolled back to,
+    // which would leave the top of a long phrase out of reach even with scrolling on.
     <Box sx={{
-      minHeight: '100%',
+      height: '100%',
+      overflowY: 'auto',
       display: 'flex',
-      alignItems: 'center',
       justifyContent: 'center',
       bgcolor: 'background.default',
       p: 2
     }}>
-      <Container maxWidth="xs">
+      <Container maxWidth="xs" sx={{ my: 'auto' }}>
         <Paper elevation={0} sx={{
           p: 3,
           borderRadius: 0,
@@ -832,6 +1141,15 @@ export default function Auth() {
             </Typography>
           </Box>
 
+          {/* Shown on every step here (login, create, import, set password) rather than
+              only once on first run — the risk it guards against (mistaking this for a
+              mainnet wallet and sending real funds) exists every time the wallet is opened,
+              not only the first time. Ömer Aydoğan, 30.08.2026: "cüzdana bu cüzdan testnet
+              cüzdanıdır uyarısı eklenecek girişte". */}
+          <Alert severity="warning" sx={{ mb: 2, borderRadius: 0 }}>
+            {t('auth.testnetWarning')}
+          </Alert>
+
           {/* Login Screen (Existing encrypted wallet) */}
           {step === AuthStep.LOGIN && (
             <LoginIntoWallet storageManager={storageManager} accountManager={accountManager} />
@@ -860,7 +1178,26 @@ export default function Auth() {
                 variant="contained"
                 disabled={isSocialLoading}
                 onClick={async () => {
+                  // A misconfigured build must say so rather than silently authenticate
+                  // against someone else's project.
+                  if (!clientId) {
+                    setSocialError(t('auth.socialNotConfigured'));
+                    return;
+                  }
+
+                  // Web3Auth opens its own window, which costs the action popup its focus —
+                  // and Chrome destroys a popup that loses focus. Move to a real window
+                  // first and let the flow run there.
+                  if (await isActionPopup()) {
+                    if (await openSocialLoginWindow()) {
+                      window.close();
+                      return;
+                    }
+                    // Could not open one; fall through and try inline rather than dead-end.
+                  }
+
                   setIsSocialLoading(true);
+                  setSocialError("");
                   try {
                     const chainConfig = {
                       chainNamespace: CHAIN_NAMESPACES.EIP155,
@@ -914,6 +1251,9 @@ export default function Auth() {
                       }
                     }
                   } catch (error) {
+                    // Previously swallowed whole, so a failed login looked like nothing
+                    // had happened and the user simply clicked again.
+                    setSocialError(error instanceof Error ? error.message : String(error));
                   } finally {
                     setIsSocialLoading(false);
                   }
@@ -929,6 +1269,12 @@ export default function Auth() {
               >
                 {isSocialLoading ? t('auth.connectingScanning') : t('auth.continueWithSocial')}
               </Button>
+
+              {socialError && (
+                <Alert severity="error" sx={{ borderRadius: 0, fontSize: '0.75rem' }}>
+                  {socialError}
+                </Alert>
+              )}
 
               <Box sx={{ display: 'flex', alignItems: 'center', my: 1 }}>
                 <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />
@@ -967,7 +1313,7 @@ export default function Auth() {
               <Button
                 onClick={() => setStep(AuthStep.CHOICE)}
                 color="inherit"
-                sx={{ mt: 2, textTransform: 'none', color: 'text.secondary' }}
+                sx={{ mt: 1, textTransform: 'none', color: 'text.secondary' }}
               >
                 {t('auth.cancel')}
               </Button>

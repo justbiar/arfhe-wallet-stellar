@@ -7,12 +7,45 @@ import {
   Box,
   Paper,
 } from "@mui/material";
-import type { BoxProps } from "@mui/material";
-import { History, Home, Send, SupportAgent, Explore } from "@mui/icons-material";
+import type { BoxProps, SvgIconProps } from "@mui/material";
+import { SvgIcon } from "@mui/material";
+import { History, Home, Send, Explore } from "@mui/icons-material";
 import ArfBottomMenu from "./ArfBottomMenu";
 import { useNavigate, useLocation } from "react-router";
 import { useTheme } from "@mui/material";
 import { useTranslation } from "react-i18next";
+
+/**
+ * Arfio's mark — a squared-off chat bubble around an arrow bending through a gold core.
+ * Mirrors AgentChatPanel.tsx's AgentAvatarIcon (kept as a separate local copy since the two
+ * files don't otherwise share components); see that file's docs for why the core stays a
+ * fixed brand color instead of a theme token.
+ */
+function ArfioIcon(props: SvgIconProps) {
+  return (
+    <SvgIcon {...props} viewBox="0 0 160 160">
+      <path
+        d="M20 27H140V107H107L80 140L80 107H53L20 73V27Z"
+        stroke="currentColor"
+        strokeWidth="4"
+        strokeLinecap="square"
+        strokeLinejoin="miter"
+        fill="none"
+      />
+      <g transform="translate(44,31) scale(0.6)">
+        <path
+          d="M96 24 L24 24 L76 60 L24 96 L96 96"
+          stroke="currentColor"
+          strokeWidth="8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          fill="none"
+        />
+        <circle cx="100" cy="60" r="10" fill="#FFD700" />
+      </g>
+    </SvgIcon>
+  );
+}
 
 /** Fix for MUI passing invalid props to non-Action children */
 interface SafeBoxProps extends Omit<BoxProps, 'onChange'> {
@@ -146,7 +179,7 @@ function ArfBottomBar() {
           />
           <BottomNavigationAction
             label={t('agent.navTabLabel')}
-            icon={<SupportAgent sx={{ fontSize: 22 }} />}
+            icon={<ArfioIcon sx={{ fontSize: 22 }} />}
             onClick={() => navigate('agent')}
           />
         </BottomNavigation>

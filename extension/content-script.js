@@ -39,8 +39,75 @@ const reply = (id, data) => post({ id, data });
 // ─── Port to the service worker ─────────────────────────────────────
 
 let port = null;
-/** Requests sent but not yet answered, so a dropped port can fail them explicitly. */
-const inFlight = new Set();
+/**
+ * Requests sent but not yet answered, keyed by id → method.
+ *
+ * The method matters when the port drops. A read that was in flight is genuinely lost and
+ * has to be failed, or the page waits on a promise nobody will settle. A request waiting on
+ * a *person* is not lost: the approval window is still open and the user is still deciding,
+ * and the worker being recycled underneath them says nothing about their answer. Failing
+ * those was telling the site the connection had been refused while the user was in the
+ * middle of granting it.
+ */
+const inFlight = new Map();
+
+/** Methods whose answer is a person deciding — mirrors inpage.js. */
+const APPROVAL_METHODS = new Set([
+    'eth_requestAccounts',
+    'wallet_requestPermissions',
+    'eth_sendTransaction',
+    'personal_sign',
+    'eth_signTypedData',
+    'eth_signTypedData_v4',
+    'wallet_switchEthereumChain',
+    'wallet_addEthereumChain',
+]);
+
+/** Backoff for re-opening the channel, so a wallet being reloaded is not hammered. */
+let reconnectDelay = 500;
+const RECONNECT_DELAY_MAX = 15_000;
+let reconnectTimer = null;
+
+/**
+ * Re-open the channel after the worker goes away.
+ *
+ * The port is not only how requests travel — it is the only way the wallet can *push*
+ * anything to this page. MV3 tears the worker down when it goes idle, which it does
+ * routinely, and previously that left `port = null` for good: a page loaded once and left
+ * open could never again receive `accountsChanged` or `chainChanged`.
+ *
+ * That is what made a first connection look like it had failed. Approving takes long
+ * enough for the worker to be recycled, so by the time the grant existed there was no
+ * channel to announce it on — the site sat waiting, and only a second click, which found
+ * the stored permission, appeared to work.
+ *
+ * Reconnecting only while the tab is visible keeps a hundred background tabs from holding
+ * the worker awake for no one's benefit; a hidden tab reconnects when it is looked at.
+ */
+function scheduleReconnect() {
+    if (reconnectTimer !== null) return;
+
+    const attempt = () => {
+        reconnectTimer = null;
+        if (port) return;
+        if (document.visibilityState === 'hidden') return; // retried on visibilitychange
+        if (connect()) {
+            reconnectDelay = 500;
+            return;
+        }
+        reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_DELAY_MAX);
+        scheduleReconnect();
+    };
+
+    reconnectTimer = setTimeout(attempt, reconnectDelay);
+}
+
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && !port) {
+        reconnectDelay = 500;
+        scheduleReconnect();
+    }
+});
 
 function connect() {
     try {
@@ -62,20 +129,45 @@ function connect() {
     });
 
     port.onDisconnect.addListener(() => {
+        // Reading this — even to discard it — marks the error as handled. Otherwise Chrome
+        // logs "Unchecked runtime.lastError" on every disconnect this listener didn't
+        // explicitly acknowledge, including the routine one where the tab this port lived on
+        // is moved into the back/forward cache. That disconnect is expected (see connect()'s
+        // docs) and carries no information the reconnect logic below needs.
+        void chrome.runtime.lastError;
         port = null;
         // The worker was torn down (extension reload, update, idle shutdown). Anything
         // still waiting will never be answered, and a promise that never settles leaves
         // the dApp spinning forever — so fail them explicitly.
-        for (const id of inFlight) {
+        for (const [id, method] of [...inFlight]) {
+            if (APPROVAL_METHODS.has(method)) continue; // still in front of the user
+            inFlight.delete(id);
             reply(id, { error: { code: 4900, message: 'Arfhe Wallet disconnected' } });
         }
-        inFlight.clear();
+        scheduleReconnect();
     });
 
     return port;
 }
 
 connect();
+
+/**
+ * Second route for wallet-pushed events.
+ *
+ * The port is the primary one, but it exists only while a content script is connected, and
+ * the worker is recycled precisely when it matters — while an approval sits in front of the
+ * user. A message addressed to this tab arrives whether or not a port is open, so the
+ * "you are connected now" event reaches the page even when the channel it was supposed to
+ * travel on no longer exists.
+ *
+ * Only events are accepted here. Request replies stay on the port, where they are matched
+ * to the id that asked.
+ */
+chrome.runtime.onMessage.addListener((msg) => {
+    if (!msg?.event) return;
+    post({ event: msg.event, data: msg.data });
+});
 
 // ─── Page → worker ──────────────────────────────────────────────────
 
@@ -106,7 +198,7 @@ window.addEventListener('message', (event) => {
     }
 
     try {
-        inFlight.add(id);
+        inFlight.set(id, method);
         active.postMessage(request);
     } catch (e) {
         inFlight.delete(id);

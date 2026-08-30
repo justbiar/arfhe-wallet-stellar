@@ -45,6 +45,10 @@ import { useToast } from "../components/ToastProvider";
 import { downloadCsv } from "../backend/TransactionExportService";
 import { useTranslation } from "react-i18next";
 import { toUtf8String, formatEther } from "ethers";
+import { onTxConfirmed } from "../backend/TxNotifier";
+
+/** How often an open History page re-asks for activity it could not have been told about. */
+const INCOMING_POLL_MS = 45_000;
 
 /** Try to decode a UTF-8 memo from raw tx input hex.
  *  - Pure data (ETH transfer): entire input is the memo.
@@ -187,28 +191,79 @@ export default function History() {
     }
   };
 
-  useEffect(() => {
+  /**
+   * Re-read the account's activity.
+   *
+   * @param showSpinner False for background refreshes, so a list already on screen is
+   *                    replaced in place rather than collapsing into skeletons under a
+   *                    user who is reading it.
+   */
+  const fetchHistory = useCallback(async (showSpinner = true) => {
     if (!walletContext || !network || !activeAccount) {
       setLoading(false);
       return;
     }
-
-    const fetchHistory = async () => {
-      try {
-        setLoading(true);
-        const address = activeAccount.GetAddress();
-        if (!address) return;
-        const res = await network.getHistory(address, tokenCache);
+    const address = activeAccount.GetAddress();
+    if (!address) {
+      setLoading(false);
+      return;
+    }
+    try {
+      if (showSpinner) setLoading(true);
+      const res = await network.getHistory(address, tokenCache);
+      if (showSpinner) {
         setTransactions(res.history);
         setNextBlock(res.nextBlock);
-      } catch (err) {
-      } finally {
-        setLoading(false);
+      } else {
+        // A background refresh returns the newest page only. Someone who pressed "load
+        // more" is several pages in, and replacing the list would silently throw that
+        // away under them — so the fresh page goes on top and the older pages stay.
+        setTransactions((prev) => {
+          const fresh = new Set(res.history.map((tx) => tx.hash));
+          return [...res.history, ...prev.filter((tx) => !fresh.has(tx.hash))];
+        });
+        setNextBlock((prev) => prev ?? res.nextBlock);
       }
-    };
-
-    fetchHistory();
+    } catch {
+      // Leave whatever is on screen: an empty list would claim the account has no
+      // activity, which is a different statement from "this fetch failed".
+    } finally {
+      if (showSpinner) setLoading(false);
+    }
   }, [network, tokenCache, activeAccount, walletContext]);
+
+  useEffect(() => {
+    void fetchHistory(true);
+  }, [fetchHistory]);
+
+  /**
+   * Keep the list current while it is being looked at.
+   *
+   * History is the one screen whose content changes without the user doing anything —
+   * money arriving is somebody else's action. A list fetched once at mount showed the
+   * account as it was when the page opened, so a transfer that landed a minute later was
+   * simply absent until the wallet was reopened.
+   *
+   * Two triggers, because they cover different events: the wallet's own transactions
+   * announce themselves through TxNotifier, and incoming ones are only found by asking.
+   * The poll is paused while the document is hidden — a background popup polling the
+   * indexer is spending someone's rate limit on a screen nobody is reading.
+   */
+  useEffect(() => {
+    if (!network || !activeAccount) return;
+
+    const unsubscribe = onTxConfirmed(() => { void fetchHistory(false); });
+
+    const poll = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      void fetchHistory(false);
+    }, INCOMING_POLL_MS);
+
+    return () => {
+      unsubscribe();
+      clearInterval(poll);
+    };
+  }, [fetchHistory, network, activeAccount]);
 
   const handleLoadMore = async () => {
     if (!walletContext || !network || !activeAccount || !nextBlock) return;
@@ -620,7 +675,11 @@ export default function History() {
               // every confidential wrapper the account holds. Matching against a pair of
               // .env addresses used to label every other wrapper — and every wrapper on
               // Arbitrum and Base, whose addresses were never checked — as generic.
+              // The indexer's own ticker is the fallback the cache cannot provide: a token
+              // received from someone else has never been held, so it is not in the cache
+              // — and the row used to render as a bare amount with nothing beside it.
               const symbol = token?.symbol
+                || tx.assetSymbol
                 || (tx.isNative ? "ETH" : "")
                 || (tx.isShielded ? t("history.shielded") : "");
 

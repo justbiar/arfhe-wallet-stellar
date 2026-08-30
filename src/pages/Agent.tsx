@@ -8,21 +8,19 @@
  * user ever saw a card. Selected tab persists across popup close/open (usePersistedState,
  * same chrome.storage.session pattern as the chat/proposal history below).
  *
- * OWNS both `agent_chat_history` (per-account: `Record<address, ChatMessage[]>`) and
- * `agent_proposal_history` (cross-account, each record tagged with `accountAddress`) — NOT
- * AgentChatPanel/AgentProposalHistoryPanel themselves, which receive them as props. Two
- * reasons this lives here rather than in the tab components:
+ * Reads both `agent_chat_history` (per-account: `Record<address, ChatMessage[]>`) and
+ * `agent_proposal_history` (cross-account, each record tagged with `accountAddress`) from
+ * AgentSessionProvider (mounted in AppLayout, above the router) rather than owning them
+ * itself — NOT AgentChatPanel/AgentProposalHistoryPanel either, which still only receive them
+ * as props. See that provider's own docs for why ownership had to move up: a usePersistedState
+ * instance living in THIS page component was torn down the moment the user switched to another
+ * tab (or closed the popup) while an agent turn was still in flight, silently dropping the
+ * reply that arrived after — indistinguishable from the operation having been cancelled.
  *
- *  1. usePersistedState instances don't sync with each other — each is an independent read of
- *     chrome.storage.session at mount, with one-directional (component → storage) writes. If
- *     both this page AND AgentChatPanel held their own copy of the same key, a write from one
- *     could be silently lost to a stale write from the other (last write wins, no merge). This
- *     page is always mounted for the whole /agent route regardless of which tab is showing, so
- *     it's the only place that can safely be the single source of truth for both keys.
- *  2. The account-switch handling below (cancel a pending card left on the OUTGOING account,
- *     drop a notice into the INCOMING account's chat, toast) needs to work no matter which tab
- *     the user is on — putting it inside AgentChatPanel would silently stop working whenever
- *     the user happened to be looking at the Agent Geçmişi tab when they switched accounts.
+ * The account-switch handling below (cancel a pending card left on the OUTGOING account, drop
+ * a notice into the INCOMING account's chat, toast) still lives here rather than in
+ * AgentSessionProvider, deliberately — a toast and a chat notice are only meaningful while the
+ * Agent tab is the thing on screen, unlike the raw history data itself.
  *
  * Per-account chat history (rather than one shared transcript, or a `agent_chat_history:
  * <address>` storage key per account) avoids a real UX bug: usePersistedState's initial read
@@ -37,14 +35,13 @@ import { Box, Tabs, Tab } from "@mui/material";
 import { useTranslation } from "react-i18next";
 import { usePersistedState } from "../hooks/usePersistedState.js";
 import { useActiveAccount } from "../ActiveAccountProvider.js";
+import { useAgentSession } from "../AgentSessionProvider.js";
 import { useToast } from "../components/ToastProvider.js";
 import type { ChatMessage } from "../backend/AgentOrchestrator.js";
 import {
-  PROPOSAL_HISTORY_STORAGE_KEY,
   buildRecordFromOutcome,
   appendProposalRecords,
   findPendingConfirmation,
-  type ProposalRecord,
 } from "../backend/AgentProposalHistory.js";
 import { buildConfirmationOutcomeSummary, ACCOUNT_CHANGED_REASON_KEY } from "../components/ConfirmationCard.js";
 import AgentChatPanel from "../components/AgentChatPanel.js";
@@ -54,11 +51,11 @@ function Agent() {
   const { t } = useTranslation();
   const [tabIndex, setTabIndex] = usePersistedState("agent_active_tab", 0);
 
-  const [historyByAccount, setHistoryByAccount] = usePersistedState<Record<string, ChatMessage[]>>(
-    "agent_chat_history",
-    {}
-  );
-  const [proposalHistory, setProposalHistory] = usePersistedState<ProposalRecord[]>(PROPOSAL_HISTORY_STORAGE_KEY, []);
+  // Owned by AgentSessionProvider (mounted in AppLayout, above the router's <Outlet/>) rather
+  // than here directly — see that provider's docs for why: a usePersistedState instance living
+  // in this page component would be torn down the moment the user switches to another tab
+  // while an agent turn is still in flight, silently dropping the reply that arrives after.
+  const { historyByAccount, setHistoryByAccount, proposalHistory, setProposalHistory } = useAgentSession();
 
   const { activeAccount } = useActiveAccount();
   const { showToast } = useToast();

@@ -6,6 +6,7 @@ import * as React from 'react';
 import AgentChatPanel from '../AgentChatPanel';
 import { WalletContext } from '../../AppContext';
 import { ActiveAccountContext } from '../../ActiveAccountProvider';
+import { AgentSessionProvider } from '../../AgentSessionProvider';
 import { runAgentTurn } from '../../backend/AgentOrchestrator';
 import { executeToolCall } from '../../backend/AgentToolRunner';
 import type { AppContext } from '../../AppContext';
@@ -179,29 +180,36 @@ function Harness({ withAccount = true, withWallet = true }: { withAccount?: bool
 
   return (
     <WalletContext.Provider value={withWallet ? makeWallet() : undefined}>
-      <ActiveAccountContext.Provider
-        value={{
-          activeIndex: 0,
-          activeAccount: withAccount ? makeAccount() : undefined,
-          setActiveIndex: vi.fn(),
-        }}
-      >
-        <AgentChatPanel
-          conversationHistory={conversationHistory}
-          setConversationHistory={setConversationHistory}
-          setProposalHistory={setProposalHistory}
-        />
-        {/* script tags are excluded from Testing Library's getByText by default (unlike a
-            plain div), so this JSON dump can never collide with a getByText query elsewhere
-            in the suite just because it happens to contain the same substring as a real
-            message bubble. */}
-        <script type="application/json" data-testid="debug-proposal-history">
-          {JSON.stringify(proposalHistory)}
-        </script>
-        <script type="application/json" data-testid="debug-conversation-history">
-          {JSON.stringify(conversationHistory)}
-        </script>
-      </ActiveAccountContext.Provider>
+      {/* AgentChatPanel now reads its "sending" flag from AgentSessionProvider (per-account,
+          survives unmount — see that provider's pendingByAccount docs) instead of local
+          state. The real provider is used as-is here rather than a stub: it needs no props
+          and its history/proposal state is irrelevant to this harness, which still feeds
+          AgentChatPanel its own conversationHistory/proposalHistory directly via props. */}
+      <AgentSessionProvider>
+        <ActiveAccountContext.Provider
+          value={{
+            activeIndex: 0,
+            activeAccount: withAccount ? makeAccount() : undefined,
+            setActiveIndex: vi.fn(),
+          }}
+        >
+          <AgentChatPanel
+            conversationHistory={conversationHistory}
+            setConversationHistory={setConversationHistory}
+            setProposalHistory={setProposalHistory}
+          />
+          {/* script tags are excluded from Testing Library's getByText by default (unlike a
+              plain div), so this JSON dump can never collide with a getByText query elsewhere
+              in the suite just because it happens to contain the same substring as a real
+              message bubble. */}
+          <script type="application/json" data-testid="debug-proposal-history">
+            {JSON.stringify(proposalHistory)}
+          </script>
+          <script type="application/json" data-testid="debug-conversation-history">
+            {JSON.stringify(conversationHistory)}
+          </script>
+        </ActiveAccountContext.Provider>
+      </AgentSessionProvider>
     </WalletContext.Provider>
   );
 }

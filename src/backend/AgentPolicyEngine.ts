@@ -7,11 +7,14 @@
  * direct contract calls — every tool call it wants to make is routed through `evaluate()`
  * first, which runs entirely in the user's browser against locally-held wallet state.
  *
- * Three tool tiers:
+ * Four tool tiers:
  *  - READ_ONLY_TOOLS   — pure data reads (balances, history, simulation). Always allowed.
  *  - PROPOSAL_TOOLS     — state-changing actions (send, shield, approve...). The agent may
  *                          only *propose* these; the wallet UI still requires the user to
  *                          review and confirm before anything is signed or broadcast.
+ *  - IMMEDIATE_TOOLS     — local, non-financial wallet actions (create_account) that execute
+ *                          right away, with no confirmation card — see that constant's own
+ *                          docs for the bar an action has to clear to belong here.
  *  - FORBIDDEN_TOOLS     — never exposed to the agent, proposal or otherwise. These grant or
  *                          spend the confidential balance in ways a single bad proposal
  *                          can't undo (delegating the whole encrypted balance, releasing a
@@ -45,6 +48,8 @@ export const READ_ONLY_TOOLS = [
   "get_shielded_portfolio",
   "get_pending_claims",
   "get_faucet_info",
+  "get_token_approvals",
+  "get_connected_sites",
 ] as const;
 
 /**
@@ -59,6 +64,8 @@ export const PROPOSAL_TOOLS = [
   "propose_send",
   "propose_shield",
   "propose_unshield",
+  "propose_confidential_transfer",
+  "propose_revoke_approval",
 ] as const;
 
 /**
@@ -90,11 +97,28 @@ export const FORBIDDEN_TOOLS = [
  */
 export const X402_TOOLS = ["pay_for_resource"] as const;
 
+/**
+ * Tools that execute immediately, with no confirmation card and no evaluate() call at all —
+ * a third category alongside READ_ONLY_TOOLS (always allowed) and PROPOSAL_TOOLS (always needs
+ * a human's Approve click). Reserved for actions that are local to the wallet itself: nothing
+ * here ever touches a private key's signing capability, broadcasts to a network, or moves
+ * anything of value, so there is no balance/risk for a confirmation card to summarize and no
+ * ratio for evaluate() to check against. create_account is the first example — it derives a new
+ * local keypair the same way the wallet's own "Create New Account" button does, which is why
+ * asking a person to click Approve on it would be confirmation-fatigue theater, not safety.
+ *
+ * A tool belongs here only if getting it wrong costs the user nothing more than an extra local
+ * account they didn't want — anything that could move funds, sign a message, leak a key, or
+ * reach the network belongs in PROPOSAL_TOOLS (or FORBIDDEN_TOOLS) instead, never here.
+ */
+export const IMMEDIATE_TOOLS = ["create_account"] as const;
+
 export type ReadOnlyTool = (typeof READ_ONLY_TOOLS)[number];
 export type ProposalTool = (typeof PROPOSAL_TOOLS)[number];
 export type ForbiddenTool = (typeof FORBIDDEN_TOOLS)[number];
 export type X402Tool = (typeof X402_TOOLS)[number];
-export type KnownTool = ReadOnlyTool | ProposalTool | ForbiddenTool | X402Tool;
+export type ImmediateTool = (typeof IMMEDIATE_TOOLS)[number];
+export type KnownTool = ReadOnlyTool | ProposalTool | ForbiddenTool | X402Tool | ImmediateTool;
 
 export interface AgentPolicyConfig {
   /** Max fraction of the relevant balance a single proposal may move. Default 0.5 (50%). */

@@ -395,17 +395,24 @@ const RevokeAlchemyPage = () => {
   // Sites connected through the injected provider. A grant made there is exactly the kind
   // of standing access this page exists to take back, so it belongs next to the
   // WalletConnect sessions rather than only in Settings.
+  //
+  // Scoped to the account in front of the user. A grant is per origin *and* per account,
+  // and listing every grant regardless meant switching accounts changed the address at the
+  // top of the wallet while the connections underneath stayed the same — inviting someone
+  // to revoke access they were not looking at, on behalf of an account they had left.
   const fetchSites = useCallback(async () => {
-    if (!sitePermissions) {
+    const address = activeAccount?.GetAddress()?.toLowerCase();
+    if (!sitePermissions || !address) {
       setSites([]);
       return;
     }
     try {
-      setSites(await sitePermissions.getAll());
+      const all = await sitePermissions.getAll();
+      setSites(all.filter((p) => p.accounts.some((a) => a.toLowerCase() === address)));
     } catch {
       setSites([]);
     }
-  }, [sitePermissions]);
+  }, [sitePermissions, activeAccount]);
 
   /** Tell the worker so connected pages get `accountsChanged: []` without a reload. */
   const notifyPermissionChange = () => {
@@ -418,9 +425,12 @@ const RevokeAlchemyPage = () => {
   };
 
   const handleDisconnectSite = async (origin: string) => {
-    if (!sitePermissions) return;
+    const address = activeAccount?.GetAddress();
+    if (!sitePermissions || !address) return;
     try {
-      await sitePermissions.revoke(origin);
+      // Only this account's access. The site may be connected to others, and they are not
+      // what the user is looking at or asking about.
+      await sitePermissions.revokeAccount(origin, address);
       notifyPermissionChange();
       setSuccess(`${origin} disconnected`);
       await fetchSites();
@@ -430,11 +440,15 @@ const RevokeAlchemyPage = () => {
   };
 
   const handleDisconnectAllSites = async () => {
-    if (!sitePermissions) return;
+    const address = activeAccount?.GetAddress();
+    if (!sitePermissions || !address) return;
     try {
-      await sitePermissions.revokeAll();
+      // "All" means all of *this account's*, matching the list it sits under. Wiping
+      // every account's grants from a screen showing one account's would be a much
+      // larger action than the button appears to offer.
+      await sitePermissions.revokeAccountEverywhere(address);
       notifyPermissionChange();
-      setSuccess('All site connections removed');
+      setSuccess('All site connections removed for this account');
       await fetchSites();
     } catch (err) {
       setError('Failed to disconnect all: ' + (err instanceof Error ? err.message : String(err)));
@@ -704,9 +718,24 @@ const RevokeAlchemyPage = () => {
         {sites.length > 0 && (
           <Box sx={{ mb: 2.5 }}>
             <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
-              <Typography variant="body2" fontWeight={700} color="text.secondary" letterSpacing="0.03em" sx={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>
-                Connected Sites ({sites.length})
-              </Typography>
+              <Box>
+                <Typography variant="body2" fontWeight={700} color="text.secondary" letterSpacing="0.03em" sx={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                  Connected Sites ({sites.length})
+                </Typography>
+                {/* Whose connections these are. The list is scoped to one account, and a
+                    page that revokes access should say which account it is revoking for
+                    rather than leaving it to be inferred from the header. */}
+                <Typography
+                  variant="caption"
+                  color="text.disabled"
+                  sx={{ display: 'block', fontFamily: 'monospace', textTransform: 'none', fontSize: '0.65rem' }}
+                >
+                  {(() => {
+                    const a = activeAccount?.GetAddress() ?? '';
+                    return a ? `${a.slice(0, 8)}…${a.slice(-6)}` : '';
+                  })()}
+                </Typography>
+              </Box>
               {sites.length > 1 && (
                 <Button
                   size="small"

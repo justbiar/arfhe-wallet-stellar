@@ -30,6 +30,108 @@ export function getCoinGeckoBase(): string {
   // Vite dev server proxy
   return "/api/coingecko";
 }
+
+// ─── ERC-20 approval scanning (shared by Revoke.tsx and the agent's revoke tools) ───────
+//
+// Originally lived only in Revoke.tsx as a page-local `RevokeService` class — moved here,
+// unchanged in behavior, so AgentToolRunner's get_token_approvals/propose_revoke_approval
+// tools can reuse the exact same on-chain scan instead of duplicating it. This is pure
+// ethers.js + eth_getLogs; it has never depended on React or TokenCache.
+
+/** Well-known DeFi router/protocol addresses — used only to label a spender and, as a
+ *  smaller factor, to nudge its risk score down slightly relative to a totally unknown
+ *  contract. Absence from this list is not itself a red flag — most legitimate contracts
+ *  aren't on it — so it does not gate anything, only labels and lightly scores it. */
+export const COMMON_SPENDERS = [
+  { address: '0x7a250d5630b4cF539739dF2C5dAcb4c659F2488D', name: 'Uniswap V2 Router' },
+  { address: '0xE592427A0AEce92De3Edee1F18E0157C05861564', name: 'Uniswap V3 Router' },
+  { address: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45', name: 'Uniswap Universal Router' },
+  { address: '0xC532a74256D3Db42D0Bf7a0400fEFDbad7694008', name: 'Uniswap Sepolia Router' },
+  { address: '0x1111111254EEB25477B68fb85Ed929f73A960582', name: '1inch V5 Router' },
+  { address: '0xDef1C0ded9bec7F1a1670819833240f027b25EfF', name: '0x Exchange Proxy' },
+  { address: '0x000000000022D473030F116dDEE9F6B43aC78BA3', name: 'Permit2' },
+];
+
+export interface TokenApproval {
+  tokenAddress: string;
+  tokenName: string;
+  tokenSymbol: string;
+  tokenDecimals: number;
+  spenderAddress: string;
+  spenderName: string;
+  allowance: string;
+  allowanceRaw: bigint;
+  isUnlimited: boolean;
+  riskScore: number; // 0-100
+  riskLevel: 'critical' | 'high' | 'medium' | 'low';
+  riskReasons: string[];
+}
+
+/**
+ * Scores one (token, spender) approval 0-100 from three factors: how much it grants, how
+ * well-known the spender is, and a flat base for any active grant at all. Purely a heuristic
+ * for sorting/flagging in the UI — never blocks a revoke, an agent proposal, or anything else.
+ */
+export function calculateApprovalRisk(
+  allowanceRaw: bigint,
+  isUnlimited: boolean,
+  spenderAddress: string,
+  tokenDecimals: number,
+  /** False when the token would not report `decimals()`, so the size is unverified. */
+  decimalsKnown: boolean = true,
+): { score: number; level: 'critical' | 'high' | 'medium' | 'low'; reasons: string[] } {
+  let score = 0;
+  const reasons: string[] = [];
+
+  if (isUnlimited) {
+    score += 50;
+    reasons.push('Unlimited approval — spender can drain all tokens');
+  } else if (!decimalsKnown) {
+    // Scoring an amount whose scale is unknown would be guessing, and guessing low is the
+    // dangerous direction. An unsized allowance is treated as significant until the token
+    // says otherwise.
+    score += 35;
+    reasons.push('Token does not report its decimals — the allowance size cannot be verified');
+  } else {
+    const allowanceFloat = Number(allowanceRaw) / Math.pow(10, tokenDecimals);
+    if (allowanceFloat > 1_000_000) {
+      score += 35;
+      reasons.push(`Very large allowance (${allowanceFloat.toLocaleString()} tokens)`);
+    } else if (allowanceFloat > 10_000) {
+      score += 20;
+      reasons.push(`Significant allowance (${allowanceFloat.toLocaleString()} tokens)`);
+    } else if (allowanceFloat > 100) {
+      score += 10;
+      reasons.push('Moderate allowance');
+    } else {
+      score += 5;
+      reasons.push('Small allowance');
+    }
+  }
+
+  const isKnownSpender = COMMON_SPENDERS.some(
+    s => s.address.toLowerCase() === spenderAddress.toLowerCase()
+  );
+  if (!isKnownSpender) {
+    score += 30;
+    reasons.push('Unknown/unverified spender contract');
+  } else {
+    score += 5;
+    reasons.push('Known protocol spender');
+  }
+
+  score += 10; // base risk for any active approval
+  score = Math.min(score, 100);
+
+  let level: 'critical' | 'high' | 'medium' | 'low';
+  if (score >= 75) level = 'critical';
+  else if (score >= 50) level = 'high';
+  else if (score >= 30) level = 'medium';
+  else level = 'low';
+
+  return { score, level, reasons };
+}
+
 class Network {
   network_id: NetworkId;
   network_name: string;
@@ -44,6 +146,31 @@ class Network {
    * user's escape hatch, set from the network editor.
    */
   fallbackRpcUrl?: string;
+  /**
+   * Endpoints to try, in order, when the primary one cannot answer.
+   *
+   * The wallet ships with one Alchemy key per chain, compiled into a bundle every user
+   * downloads. That makes the key a shared resource: one quota for the whole userbase, and
+   * extractable by anyone who installs the extension. Exhausting it — by accident at scale,
+   * or on purpose — used to take the wallet down entirely, because a single endpoint that
+   * stops answering is a single point of failure with nothing behind it.
+   *
+   * With a chain behind it the key becomes an accelerator rather than a dependency. The
+   * indexer-backed features degrade (see {@link isAlchemyOnly}), but balances, sends and
+   * everything else keep working on public infrastructure.
+   */
+  fallbackRpcUrls: string[] = [];
+
+  /** Epoch ms until which the primary endpoint is skipped after it failed. */
+  private primaryUnhealthyUntil = 0;
+
+  /**
+   * How long a failing primary is left alone.
+   *
+   * Long enough that a rate limit has a chance to reset, short enough that a user who
+   * opens the wallet a minute later is back on the endpoint that can answer history.
+   */
+  private static readonly PRIMARY_COOLDOWN_MS = 60_000;
   explorer_url?: string;
   currency_symbol: string = "ETH";
   alchemy?: Alchemy;
@@ -81,6 +208,13 @@ class Network {
         this.rpc_url = baseUrl + this.api_key;
       }
     }
+
+    // Public endpoints stand behind whatever the primary is, including when the primary is
+    // the shared Alchemy key. The primary itself is filtered out so a failover never
+    // retries the endpoint that just failed.
+    this.fallbackRpcUrls = (Network.PUBLIC_FALLBACKS[network_id] ?? []).filter(
+      (url) => url !== this.rpc_url
+    );
 
     // Alchemy only for networks that have Alchemy support
     const noAlchemyNetworks = new Set([NetworkId.Sei, NetworkId.Monad_Testnet]);
@@ -204,6 +338,43 @@ class Network {
     return net;
   }
 
+  /**
+   * Public endpoints for the chains the wallet ships with, most reliable first.
+   *
+   * Verified against the live networks rather than copied from a list: `rpc.sepolia.org`
+   * answers with an HTML error page and `sepolia.drpc.org` reports no chain id at all, so
+   * neither is here. An endpoint that is in this table but broken is worse than no table,
+   * because it turns one failure into two.
+   */
+  private static readonly PUBLIC_FALLBACKS: Partial<Record<NetworkId, string[]>> = {
+    [NetworkId.Ethereum_Sepolia]: [
+      "https://ethereum-sepolia-rpc.publicnode.com",
+      "https://1rpc.io/sepolia",
+    ],
+    [NetworkId.Base_Sepolia]: [
+      "https://sepolia.base.org",
+      "https://base-sepolia-rpc.publicnode.com",
+      "https://base-sepolia.drpc.org",
+    ],
+    [NetworkId.Arbitrum_Sepolia]: [
+      "https://sepolia-rollup.arbitrum.io/rpc",
+      "https://arbitrum-sepolia-rpc.publicnode.com",
+      "https://arbitrum-sepolia.drpc.org",
+    ],
+  };
+
+  /**
+   * Whether a method only the indexer implements.
+   *
+   * Sending one of these to a public node produces "method not found" — a *different*
+   * failure from the one that triggered the failover, and one the caller cannot tell apart
+   * from a real answer. The callers of these already have non-indexed paths to fall back
+   * to; letting the request fail cleanly is what lets them take those.
+   */
+  private isAlchemyOnly(method: string): boolean {
+    return method.startsWith("alchemy_");
+  }
+
   isAlchemyConfigured(): boolean {
     return !!this.api_key && this.api_key !== "CUSTOM_URL";
   }
@@ -248,9 +419,19 @@ class Network {
       return json.result;
     };
 
-    return rpcClient.request(rpcUrl, method, params, async () => {
+    // While the primary is cooling off, go straight to a fallback — unless the method is
+    // one only the primary implements, in which case the attempt is still worth making:
+    // failing there lets the caller take its non-indexed path, and it is how the wallet
+    // notices the primary is back.
+    const inCooldown = Date.now() < this.primaryUnhealthyUntil;
+    const firstChoice =
+      inCooldown && !this.isAlchemyOnly(method) && this.fallbackRpcUrls.length > 0
+        ? this.fallbackRpcUrls[0]
+        : rpcUrl;
+
+    return rpcClient.request(firstChoice, method, params, async () => {
       try {
-        return await withRetry(() => post(rpcUrl), {
+        return await withRetry(() => post(firstChoice), {
           maxRetries: 2,
           initialDelayMs: 800,
           onRetry: (_attempt, _max, err) => {
@@ -270,8 +451,36 @@ class Network {
           classified.type !== NetworkErrorType.RpcError &&
           classified.type !== NetworkErrorType.UserError;
 
-        if (!this.fallbackRpcUrl || !worthFailover) throw err;
-        return post(this.fallbackRpcUrl);
+        // An indexer method has no equivalent on a public node. Failing over would swap a
+        // rate-limit error for a "method not found" one and tell the caller nothing useful.
+        if (!worthFailover || this.isAlchemyOnly(method)) throw err;
+
+        // The user's own fallback first — they chose it — then the shipped public chain,
+        // minus whichever endpoint just failed.
+        const chain = [
+          ...(this.fallbackRpcUrl ? [this.fallbackRpcUrl] : []),
+          ...this.fallbackRpcUrls,
+        ].filter((url) => url !== firstChoice);
+        if (chain.length === 0) throw err;
+
+        // Stop asking the primary for a while. Without this every request pays the full
+        // retry budget against a dead endpoint before reaching a live one, which is slower
+        // than having no primary at all.
+        //
+        // A cooldown rather than a permanent switch: the primary is the only endpoint that
+        // can answer the indexer methods, and demoting the user to a public node for the
+        // rest of the session over one bad minute costs them their transaction history.
+        this.primaryUnhealthyUntil = Date.now() + Network.PRIMARY_COOLDOWN_MS;
+
+        let lastError: unknown = err;
+        for (const url of chain) {
+          try {
+            return await post(url);
+          } catch (e) {
+            lastError = e;
+          }
+        }
+        throw lastError;
       }
     });
   }
@@ -1109,6 +1318,7 @@ class Network {
                 explorerUrl: `${explorerBase}/tx/${tx.hash}`,
                 isShielded: false,
                 methodLabel: txTo === address.toLowerCase() ? "Receive" : "Transfer",
+                assetSymbol: this.currency_symbol,
               });
             }
           } catch { /* skip bad block */ }
@@ -1122,16 +1332,21 @@ class Network {
 
           const fromAddr = log.topics[1] ? "0x" + log.topics[1].slice(26) : "0x";
           const toAddr = log.topics[2] ? "0x" + log.topics[2].slice(26) : "0x";
+          const contractLower = (log.address || "").toLowerCase();
+
+          // A chain with no indexer behind it gives us the raw log and nothing else, so
+          // the token has to be asked what it is. Reading it once and caching costs three
+          // eth_calls the first time an unfamiliar token appears; skipping it prints the
+          // amount at the wrong scale and with no ticker beside it.
+          let meta = tokenCacheObj?.getToken(this.network_id, contractLower);
+          if (!meta) {
+            meta = await this.getTokenMetadata(tokenCacheObj, contractLower).catch(() => undefined);
+          }
+
           let valueStr = "0";
           try {
             const raw = BigInt(log.data);
-            // Try to get decimals from tokenCache
-            const contractLower = (log.address || "").toLowerCase();
-            let decimals = 18;
-            if (tokenCacheObj?.hasToken(this.network_id, contractLower)) {
-              decimals = tokenCacheObj.getToken(this.network_id, contractLower)?.decimals ?? 18;
-            }
-            valueStr = this.formatTokenAmount(raw, decimals);
+            valueStr = this.formatTokenAmount(raw, meta?.decimals ?? 18);
           } catch { /* leave 0 */ }
 
           // Get block timestamp
@@ -1154,6 +1369,7 @@ class Network {
             explorerUrl: `${explorerBase}/tx/${log.transactionHash}`,
             isShielded: false,
             methodLabel: toAddr.toLowerCase() === address.toLowerCase() ? "Receive" : "Transfer",
+            assetSymbol: meta?.symbol,
           });
         }
 
@@ -1197,8 +1413,12 @@ class Network {
         promises.push(this.alchemy.core.getAssetTransfers({ ...optionsBase, toAddress: address }).catch(e => { return { transfers: [] }; }));
       } else {
         // Fallback to raw call if SDK isn't happy but URL works
-        promises.push(this.call("alchemy_getAssetTransfers", [{ ...optionsBase, fromAddress: address }]).catch(e => { return { transfers: [] }; }));
-        promises.push(this.call("alchemy_getAssetTransfers", [{ ...optionsBase, toAddress: address }]).catch(e => { return { transfers: [] }; }));
+        // The SDK converts `maxCount` to hex on the way out; a raw JSON-RPC call does not,
+        // and Alchemy answers a decimal with "Invalid hex string: 100" — which the catch
+        // below turned into an empty history rather than an error anyone could see.
+        const rawOptions = { ...optionsBase, maxCount: "0x" + optionsBase.maxCount.toString(16) };
+        promises.push(this.call("alchemy_getAssetTransfers", [{ ...rawOptions, fromAddress: address }]).then(r => (r as { transfers?: unknown[] }) ?? { transfers: [] }).catch(() => { return { transfers: [] }; }));
+        promises.push(this.call("alchemy_getAssetTransfers", [{ ...rawOptions, toAddress: address }]).then(r => (r as { transfers?: unknown[] }) ?? { transfers: [] }).catch(() => { return { transfers: [] }; }));
       }
 
       // 2. Direct eth_getLogs for incoming FHE ConfidentialTransfers
@@ -1301,14 +1521,23 @@ class Network {
           contractAddress = isNative ? (tx.to?.toLowerCase() ?? "ETH") : "ETH";
         }
 
-        if (!isNative && contractAddress !== "eth" && !tokenCacheObj.hasToken(this.network_id, contractAddress)) {
+        // A token someone sends us has never been held before, so it is not in the cache
+        // the row is named from. The transfer already carries the symbol and the decimals
+        // the indexer resolved, so record them: without this the arrival rendered as a
+        // number with no asset next to it, and read as nothing having arrived.
+        //
+        // `rawContract.decimal` is authoritative here — assuming 18 would misstate a
+        // 6-decimal token by a factor of a trillion in every later balance read.
+        if (!isNative && contractAddress !== "eth" && tx.asset && !tokenCacheObj.hasToken(this.network_id, contractAddress)) {
+          const decimals = Number.parseInt(tx.rawContract?.decimal ?? "0x12", 16);
           const basicItem: TokenCacheItem = {
-            name: tx.asset || "Unknown",
-            symbol: tx.asset || "???",
-            decimals: 18,
+            name: tx.asset,
+            symbol: tx.asset,
+            decimals: Number.isFinite(decimals) && decimals >= 0 && decimals <= 36 ? decimals : 18,
             logoSrc: "",
             contractAddress
           };
+          tokenCacheObj.setToken(this.network_id, basicItem);
         }
 
         const isShielded = !!contractAddress && shieldedContracts.has(contractAddress);
@@ -1354,7 +1583,8 @@ class Network {
           status: "Success",
           explorerUrl: `${explorerBase}/tx/${tx.hash}`,
           isShielded: isShielded,
-          methodLabel: methodLabel
+          methodLabel: methodLabel,
+          assetSymbol: typeof tx.asset === "string" ? tx.asset : undefined
         });
       }
 
@@ -2108,6 +2338,26 @@ class Network {
   }
 
   /** Registry wrappers plus the ones configured in .env, lowercased. */
+  /**
+   * Every confidential wrapper on this network, for callers outside this class.
+   *
+   * The service worker needs it to keep a confidential arrival confidential: the wrapper
+   * emits a standard ERC-20 `Transfer` carrying a fixed activity indicator rather than the
+   * amount, and a notification reading "7984.0001 aeETH received" would be both wrong and
+   * a claim about a balance that is supposed to be secret. Knowing which contracts those
+   * are is what lets it say "a confidential transfer arrived" and stop there.
+   *
+   * Lower-cased, matching how the addresses are compared everywhere else.
+   */
+  async getConfidentialWrapperAddresses(): Promise<string[]> {
+    if (!this.isFheCapable()) return [];
+    try {
+      return [...(await this.getKnownWrapperSet())].map((a) => a.toLowerCase());
+    } catch {
+      return [];
+    }
+  }
+
   private async getKnownWrapperSet(): Promise<Set<string>> {
     const { native, extra } = this.configuredWrappers();
     const registry = await this.listRegistryWrappers();
@@ -2925,6 +3175,142 @@ class Network {
         encrypted.proof,
       ]),
     });
+  }
+
+  /**
+   * Scans this account's ERC-20 approval history and returns every still-active one (current
+   * allowance > 0), with a risk score for each. Ported unchanged from Revoke.tsx's page-local
+   * RevokeService — see this file's COMMON_SPENDERS/calculateApprovalRisk docs — so the manual
+   * Revoke screen and the agent's get_token_approvals/propose_revoke_approval tools always see
+   * the exact same scan, never two drifting copies of the same ~150 lines.
+   *
+   * Read-only and can be slow (a real chain scan, chunked for free-tier RPC limits) — this is
+   * NOT a fast-path candidate, and callers should expect it to take real time.
+   *
+   * @param scanDepth How many blocks back to look for Approval events. Default 10,000.
+   */
+  async getTokenApprovals(
+    ownerAddress: string,
+    scanDepth = 10000,
+    onProgress?: (progress: number, message: string) => void
+  ): Promise<TokenApproval[]> {
+    const { JsonRpcProvider, Contract, formatUnits, MaxUint256 } = await import("ethers");
+    const provider = new JsonRpcProvider(this.rpc_url);
+
+    const ERC20_ABI = [
+      "function approve(address spender, uint256 amount) returns (bool)",
+      "function allowance(address owner, address spender) view returns (uint256)",
+      "function decimals() view returns (uint8)",
+      "function symbol() view returns (string)",
+      "function name() view returns (string)",
+    ];
+    const approvalTopic = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925"; // keccak256("Approval(address,address,uint256)")
+
+    const latestBlock = await provider.getBlockNumber();
+    const startBlock = Math.max(0, latestBlock - scanDepth);
+    const endBlock = latestBlock;
+    const ownerTopic = "0x" + ownerAddress.slice(2).toLowerCase().padStart(64, "0");
+
+    // Chunked for free-tier RPC block-range limits (Alchemy's free tier caps at 10 blocks
+    // per eth_getLogs call) — a chunk that fails is skipped rather than aborting the whole
+    // scan, so one flaky range costs missed history in that window, not the entire result.
+    const CHUNK_SIZE = 10;
+    type LogEntry = { address: string; topics: readonly string[]; blockNumber: number };
+    const allLogs: LogEntry[] = [];
+    const totalChunks = Math.ceil((endBlock - startBlock) / CHUNK_SIZE);
+    let processedChunks = 0;
+
+    for (let currentBlock = startBlock; currentBlock <= endBlock; currentBlock += CHUNK_SIZE) {
+      const chunkEnd = Math.min(currentBlock + CHUNK_SIZE - 1, endBlock);
+      try {
+        const chunkLogs = await provider.getLogs({
+          topics: [approvalTopic, ownerTopic],
+          fromBlock: currentBlock,
+          toBlock: chunkEnd,
+        });
+        allLogs.push(...(chunkLogs as unknown as LogEntry[]));
+        processedChunks++;
+        onProgress?.(Math.round((processedChunks / totalChunks) * 100), `Scanning blocks... ${processedChunks}/${totalChunks} chunks`);
+      } catch {
+        // Continue with next chunk.
+      }
+    }
+
+    if (allLogs.length === 0) return [];
+
+    const tokenAddresses = new Set<string>();
+    for (const log of allLogs) {
+      if (log.address) tokenAddresses.add(log.address.toLowerCase());
+    }
+
+    // Latest log per (token, spender) — a spender re-approved more than once only needs its
+    // most recent grant checked, since allowance() already reflects the current total anyway.
+    const latestPerSpender = (logs: LogEntry[]): Map<string, LogEntry> => {
+      const map = new Map<string, LogEntry>();
+      for (const log of logs) {
+        if (!log.topics || log.topics.length < 3) continue;
+        const spender = ("0x" + log.topics[2].slice(-40)).toLowerCase();
+        const existing = map.get(spender);
+        if (!existing || log.blockNumber > existing.blockNumber) map.set(spender, log);
+      }
+      return map;
+    };
+
+    const approvals: TokenApproval[] = [];
+    for (const tokenAddress of tokenAddresses) {
+      try {
+        const tokenContract = new Contract(tokenAddress, ERC20_ABI, provider);
+        const [symbol, rawDecimals, name] = await Promise.all([
+          tokenContract.symbol().catch(() => "UNKNOWN"),
+          tokenContract.decimals().catch(() => null),
+          tokenContract.name().catch(() => "Unknown Token"),
+        ]);
+        const decimalsKnown = rawDecimals !== null && rawDecimals !== undefined;
+        const decimals = decimalsKnown ? Number(rawDecimals) : 18;
+
+        const tokenLogs = allLogs.filter((log) => log.address.toLowerCase() === tokenAddress);
+        const latestApprovals = latestPerSpender(tokenLogs);
+
+        for (const [spenderAddress] of latestApprovals.entries()) {
+          try {
+            const currentAllowance: bigint = await tokenContract.allowance(ownerAddress, spenderAddress);
+            if (currentAllowance === 0n) continue; // already revoked/spent down
+
+            const isUnlimited = currentAllowance >= MaxUint256 / 2n;
+            const allowanceFormatted = isUnlimited
+              ? "∞ UNLIMITED"
+              : decimalsKnown
+              ? formatUnits(currentAllowance, decimals)
+              : `${currentAllowance.toString()} (raw)`;
+
+            const spenderInfo = COMMON_SPENDERS.find((s) => s.address.toLowerCase() === spenderAddress.toLowerCase());
+            const spenderName = spenderInfo?.name || `Contract ${spenderAddress.slice(0, 6)}...`;
+            const risk = calculateApprovalRisk(currentAllowance, isUnlimited, spenderAddress, decimals, decimalsKnown);
+
+            approvals.push({
+              tokenAddress,
+              tokenName: name,
+              tokenSymbol: symbol,
+              tokenDecimals: decimals,
+              spenderAddress,
+              spenderName,
+              allowance: `${allowanceFormatted} ${symbol}`,
+              allowanceRaw: currentAllowance,
+              isUnlimited,
+              riskScore: risk.score,
+              riskLevel: risk.level,
+              riskReasons: risk.reasons,
+            });
+          } catch {
+            // One spender's allowance() call failing shouldn't drop the rest of the token's.
+          }
+        }
+      } catch {
+        // One token's metadata/logs failing shouldn't abort the whole scan.
+      }
+    }
+
+    return approvals;
   }
 }
 

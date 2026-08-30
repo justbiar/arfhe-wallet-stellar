@@ -188,6 +188,8 @@ describe('AgentToolRunner', () => {
         version: '2',
         chainId: 84532,
       })),
+      getConnectedSites: vi.fn().mockResolvedValue({ injectedSites: [], walletConnectSessions: [] }),
+      createAccount: vi.fn((name?: string) => ({ index: 1, address: '0xNEWACCOUNT', name: name ?? 'Account 2' })),
     };
     configureAgentToolRunner(deps);
   });

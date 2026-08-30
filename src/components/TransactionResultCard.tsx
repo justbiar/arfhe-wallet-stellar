@@ -22,7 +22,13 @@ import { getExplorerBaseForNetwork } from "./panels/shared.js";
 export type TransactionResultPhase = "pending" | "success" | "failed";
 
 /** The proposal tools this card can render a receipt for — mirrors AgentToolRunner's PROPOSAL_TOOLS. */
-export type TransactionResultToolName = "propose_send" | "propose_shield" | "propose_unshield" | "pay_for_resource";
+export type TransactionResultToolName =
+  | "propose_send"
+  | "propose_shield"
+  | "propose_unshield"
+  | "propose_confidential_transfer"
+  | "propose_revoke_approval"
+  | "pay_for_resource";
 
 export interface TransactionResultCardProps {
   phase: TransactionResultPhase;
@@ -38,7 +44,7 @@ export interface TransactionResultCardProps {
   amount?: string;
   /** Token symbol for `amount`. */
   symbol?: string;
-  /** Recipient address — only meaningful for propose_send (shield/unshield move funds within the same account). */
+  /** Recipient address — only meaningful for propose_send/propose_confidential_transfer (shield/unshield move funds within the same account). */
   recipient?: string;
   /**
    * Optional finer-grained sub-status for the "pending" phase (e.g. "Waiting for signature...",
@@ -66,6 +72,10 @@ function toolNoun(toolName: TransactionResultToolName | undefined, t: (key: stri
       return t("agent.txResultActionShield");
     case "propose_unshield":
       return t("agent.txResultActionUnshield");
+    case "propose_confidential_transfer":
+      return t("agent.txResultActionConfidentialTransfer");
+    case "propose_revoke_approval":
+      return t("agent.txResultActionRevoke");
     case "pay_for_resource":
       return t("agent.txResultActionX402");
     case "propose_send":

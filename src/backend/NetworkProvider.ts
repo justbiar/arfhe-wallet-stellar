@@ -132,16 +132,24 @@ class NetworkProvider {
   // --- Custom Network Management ---
 
   /** Load custom networks from localStorage */
+  /**
+   * Drop any custom networks a previous build stored.
+   *
+   * Refusing to add new ones is not enough on its own: a user who added a chain before
+   * this release would still be carrying it, still be able to select it, and still get a
+   * wallet that cannot shield on it. Clearing on load is what makes the guarantee true for
+   * everyone rather than only for new installs.
+   */
   private loadCustomNetworks(): void {
     try {
-      const raw = localStorage.getItem(CUSTOM_NETWORKS_STORAGE_KEY);
-      if (!raw) return;
-      const configs: CustomNetworkConfig[] = JSON.parse(raw);
-      for (const config of configs) {
-        const net = Network.fromCustomConfig(config);
-        this.customNetworks.set(config.chainId, net);
+      if (localStorage.getItem(CUSTOM_NETWORKS_STORAGE_KEY)) {
+        localStorage.removeItem(CUSTOM_NETWORKS_STORAGE_KEY);
       }
-    } catch (e) {
+      this.customNetworks.clear();
+      return;
+    } catch {
+      this.customNetworks.clear();
+      return;
     }
   }
 
@@ -164,23 +172,22 @@ class NetworkProvider {
   }
 
   /** Add a custom network and persist */
-  addCustomNetwork(config: CustomNetworkConfig): void {
-    // Prevent overriding built-in networks
-    // A built-in cannot be shadowed by a custom entry with the same chain id: two
-    // Networks answering for one chain would disagree about FHE support and wrappers.
-    // Editing the built-in is the supported route, which is what the network editor does.
-    // Guard on both forms: a user pasting Sepolia's real chain id (11155111) and one
-    // pasting the wallet's internal id must both be refused.
-    const reserved = new Set<number>(NetworkProvider.BUILT_IN_NETWORKS.map((id) => Number(id)));
-    for (const id of NetworkProvider.BUILT_IN_NETWORKS) reserved.add(toChainId(id));
-    if (reserved.has(config.chainId)) {
-      throw new Error(`Chain ID ${config.chainId} is a built-in network and cannot be overridden.`);
-    }
-
-    const net = Network.fromCustomConfig(config);
-    this.customNetworks.set(config.chainId, net);
-    this.saveCustomNetworks();
-    this.notifyListeners();
+  /**
+   * Refused for this release.
+   *
+   * Confidential balances exist only on the chains the CoFHE coprocessor is deployed to,
+   * which are the three the wallet ships with. A user-added network produced a wallet that
+   * looked complete — balances, sends, history all worked — and silently could not do the
+   * one thing it exists for. Answering "not supported" is the honest version of that.
+   *
+   * The method is kept, rather than deleted, so an old stored config or a caller from
+   * another branch gets a clear refusal instead of a missing-function crash.
+   */
+  addCustomNetwork(_config: CustomNetworkConfig): void {
+    throw new Error(
+      "This build supports Sepolia, Base Sepolia and Arbitrum Sepolia only. Confidential " +
+      "balances do not exist on other chains."
+    );
   }
 
   /** Remove a custom network by chainId */

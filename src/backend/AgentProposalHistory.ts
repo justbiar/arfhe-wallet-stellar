@@ -71,7 +71,7 @@ export interface ProposalRecord {
   toolName: string;
   amount?: string;
   tokenSymbol?: string;
-  /** Only set for propose_send. */
+  /** Only set for propose_send / propose_confidential_transfer — the tools that carry a `to`. */
   recipient?: string;
   status: ProposalRecordStatus;
   /**
@@ -262,6 +262,10 @@ export function toolNameLabelKey(toolName: string): string {
       return "agent.historyToolShield";
     case "propose_unshield":
       return "agent.historyToolUnshield";
+    case "propose_confidential_transfer":
+      return "agent.historyToolConfidentialTransfer";
+    case "propose_revoke_approval":
+      return "agent.historyToolRevoke";
     case "pay_for_resource":
       return "agent.historyToolPayForResource";
     default:

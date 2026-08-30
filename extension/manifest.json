@@ -2,14 +2,15 @@
     "manifest_version": 3,
     "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0LejGv/xk5O9TQWTfUnfg97q4+1I8Q6KpxR1YZEuZ5uKAzbYse8MlsXPLf4rXZBR9mjbIP8E0gsBWdLjOBr2+MJxUmP7hjaGnn/TVzSd3vnEq+r0wfwqCibvyZ4ZmwHCdDqS1IsV+eMEgazQfq3cgRDCRYR+0qj1iid5Eli8VshA+McG3OAGZ3fj2tGM/gwJkKWNm6/gAGrhOYV03Y+ZXXcEE9KDhnjlcL5Oix8plDh5gV2c55qKAfWH1G5zbjYEU0DpQcZ0xXG7q3XvSsXZl4CM5kbofXudOEd7ZsKXDraKE+2irTgq7Djbno9ENFYDe1vOBmb5r9S2hQX6xgfBvQIDAQAB",
     "name": "Arfhe Wallet",
-    "version": "0.9.0",
-    "description": "Privacy-first FHE-powered crypto wallet with encrypted on-chain transactions",
+    "version": "1.0.0",
+    "version_name": "1.0.0 (public testnet)",
+    "description": "Privacy-first FHE wallet with encrypted on-chain balances. Public testnet release — Sepolia, Base Sepolia and Arbitrum Sepolia. Do not use with mainnet funds.",
     "background": {
         "service_worker": "service-worker.js",
         "type": "module"
     },
     "content_security_policy": {
-        "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https: http: wss: ws: data: blob:"
+        "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; media-src 'self'; img-src 'self' data: https:; connect-src 'self' https: http: wss: ws: data: blob:"
     },
     "action": {
         "default_popup": "index.html",

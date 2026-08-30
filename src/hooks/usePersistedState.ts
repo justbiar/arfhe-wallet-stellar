@@ -101,6 +101,11 @@ export function usePersistedState<T>(
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  // The latest value a debounced write hasn't landed yet, plus whether one is actually
+  // pending — a separate flag rather than testing the value for null/undefined, since T
+  // itself may legitimately be null or undefined for some callers.
+  const pendingWriteRef = useRef<T | undefined>(undefined);
+  const hasPendingWriteRef = useRef(false);
 
   // On mount: async read from chrome.storage.session (may override sync value)
   useEffect(() => {
@@ -112,7 +117,18 @@ export function usePersistedState<T>(
     });
     return () => {
       mountedRef.current = false;
-      if (debounceRef.current) clearTimeout(debounceRef.current);
+      // A pending debounced write must be FLUSHED here, not just cancelled. Cancelling was
+      // silently dropping the most recent update whenever the owning component unmounted
+      // inside the 300ms window — e.g. the Agent page's chat history the instant a reply
+      // landed just before the user switched tabs or closed the popup — so the update never
+      // reached chrome.storage.session and reopening showed stale state, indistinguishable
+      // from "the operation was cancelled" even though the in-memory update had happened.
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+        if (hasPendingWriteRef.current) {
+          void write(key, pendingWriteRef.current as T);
+        }
+      }
     };
   }, [key]);
 
@@ -126,8 +142,11 @@ export function usePersistedState<T>(
 
         // Debounce the write
         if (debounceRef.current) clearTimeout(debounceRef.current);
+        pendingWriteRef.current = next;
+        hasPendingWriteRef.current = true;
         debounceRef.current = setTimeout(() => {
           write(key, next);
+          hasPendingWriteRef.current = false;
         }, DEBOUNCE_MS);
 
         return next;

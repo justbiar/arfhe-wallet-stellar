@@ -6,11 +6,11 @@
  * networks become the user's own — a dozen entries, each with an endpoint that can be
  * edited, tested and removed, buried under theme and language toggles.
  *
- * The three shipped networks are the chains the CoFHE coprocessor runs on, so they are the
- * only ones where confidential balances exist at all. Everything else is added by the user
- * and is not second-class: the same balance discovery, history scan and send path serve it.
- * What a custom chain does not get is the indexer — NFTs and fast history — and that is
- * stated here rather than left to be discovered as missing data.
+ * The three shipped networks are the chains the CoFHE coprocessor runs on, and for this
+ * release they are the only ones the wallet will talk to at all. Adding your own is gone:
+ * confidential balances do not exist off these chains, so a user-added network produced a
+ * wallet that looked complete and quietly could not do the one thing it is for. The RPC
+ * endpoint of each remains editable, which is the part people actually need.
  */
 
 import React, { useCallback, useContext, useMemo, useState } from "react";
@@ -34,9 +34,7 @@ import {
   useTheme,
 } from "@mui/material";
 import {
-  AddCircleOutline,
   ArrowBack,
-  Delete,
   Edit,
   Search,
   Shield,
@@ -44,10 +42,9 @@ import {
 
 import { WalletContext } from "../AppContext";
 import { useToast } from "../components/ToastProvider";
-import AddNetworkModal from "../components/AddNetworkModal";
 import EditNetworkModal, { type EditableNetwork } from "../components/EditNetworkModal";
 import { isFheNetwork } from "../backend/NetworkTypes";
-import type { CustomNetworkConfig, NetworkOverride } from "../backend/NetworkTypes";
+import type { NetworkOverride } from "../backend/NetworkTypes";
 
 export default function SettingsNetworks() {
   const navigate = useNavigate();
@@ -56,7 +53,6 @@ export default function SettingsNetworks() {
   const { showToast } = useToast();
   const walletContext = useContext(WalletContext);
 
-  const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<EditableNetwork | null>(null);
   const [query, setQuery] = useState("");
   /** Bumped after any change so the list re-reads the provider rather than a stale copy. */
@@ -76,16 +72,6 @@ export default function SettingsNetworks() {
     );
   }, [networks, query]);
 
-  const handleAdd = useCallback((config: CustomNetworkConfig) => {
-    try {
-      walletContext?.networkProvider?.addCustomNetwork(config);
-      setRevision((r) => r + 1);
-      showToast(`${config.networkName} ${t("settings.networkAdded")}`, "success");
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : String(err), "error");
-    }
-  }, [walletContext?.networkProvider, showToast, t]);
-
   const handleSave = useCallback((networkId: number, override: NetworkOverride) => {
     try {
       walletContext?.networkProvider?.setNetworkOverride(networkId, override);
@@ -100,12 +86,6 @@ export default function SettingsNetworks() {
     walletContext?.networkProvider?.clearNetworkOverride(networkId);
     setRevision((r) => r + 1);
     showToast(t("settings.networkReset"), "info");
-  }, [walletContext?.networkProvider, showToast, t]);
-
-  const handleRemove = useCallback((chainId: number, name: string) => {
-    walletContext?.networkProvider?.removeCustomNetwork(chainId);
-    setRevision((r) => r + 1);
-    showToast(`${name} ${t("settings.networkRemoved")}`, "info");
   }, [walletContext?.networkProvider, showToast, t]);
 
   return (
@@ -149,21 +129,6 @@ export default function SettingsNetworks() {
             borderColor: "divider",
           }}
         >
-          <ListItemButton
-            onClick={() => setAddOpen(true)}
-            sx={{ py: 1.5, gap: 1.5, borderBottom: `1px solid ${alpha(theme.palette.divider, 0.5)}` }}
-          >
-            <ListItemIcon sx={{ minWidth: 0 }}>
-              <AddCircleOutline sx={{ color: "primary.main", fontSize: 22 }} />
-            </ListItemIcon>
-            <ListItemText
-              primary={t("settings.addCustomNetwork")}
-              secondary={t("settings.connectEvmChain")}
-              primaryTypographyProps={{ fontWeight: 600, color: "primary.main" }}
-              secondaryTypographyProps={{ fontSize: 12 }}
-            />
-          </ListItemButton>
-
           {filtered.map((net, index) => (
             <Box
               key={net.id}
@@ -180,7 +145,7 @@ export default function SettingsNetworks() {
                   width: 10,
                   height: 10,
                   borderRadius: "50%",
-                  bgcolor: net.isCustom ? "#1e40af" : theme.palette.primary.main,
+                  bgcolor: theme.palette.primary.main,
                   mr: 1.5,
                   flexShrink: 0,
                 }}
@@ -199,9 +164,6 @@ export default function SettingsNetworks() {
                 <Stack direction="row" spacing={0.5} alignItems="center" mt={0.3} flexWrap="wrap" useFlexGap>
                   <Chip label={`Chain ${net.chainId}`} size="small" variant="outlined" sx={{ height: 18, fontSize: 10, fontWeight: 600 }} />
                   <Chip label={net.currencySymbol} size="small" color="primary" variant="outlined" sx={{ height: 18, fontSize: 10, fontWeight: 600 }} />
-                  {net.isCustom && (
-                    <Chip label={t("network.customBadge")} size="small" variant="outlined" sx={{ height: 18, fontSize: 10, fontWeight: 600 }} />
-                  )}
                   {net.isOverridden && (
                     <Chip label={t("network.editedBadge")} size="small" color="warning" variant="outlined" sx={{ height: 18, fontSize: 10, fontWeight: 600 }} />
                   )}
@@ -214,16 +176,6 @@ export default function SettingsNetworks() {
               <IconButton size="small" aria-label={`${t("network.edit")} ${net.name}`} onClick={() => setEditing(net)} sx={{ ml: 1 }}>
                 <Edit sx={{ fontSize: 18 }} />
               </IconButton>
-              {net.isCustom && (
-                <IconButton
-                  size="small"
-                  aria-label={`Remove ${net.name}`}
-                  onClick={() => handleRemove(net.id, net.name)}
-                  sx={{ color: "error.main" }}
-                >
-                  <Delete sx={{ fontSize: 18 }} />
-                </IconButton>
-              )}
             </Box>
           ))}
 
@@ -237,17 +189,16 @@ export default function SettingsNetworks() {
         </Paper>
 
         <Alert severity="info" sx={{ borderRadius: "0px", fontSize: "0.75rem" }}>
-          {t("network.customCapabilities")}
+          {t("network.onlyThreeChains")}
         </Alert>
       </Container>
 
-      <AddNetworkModal open={addOpen} onClose={() => setAddOpen(false)} onAdd={handleAdd} />
       <EditNetworkModal
         open={!!editing}
         network={editing}
         onClose={() => setEditing(null)}
         onSave={handleSave}
-        onReset={editing?.isCustom ? undefined : handleReset}
+        onReset={handleReset}
       />
     </Box>
   );

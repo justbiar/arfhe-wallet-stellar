@@ -6,6 +6,7 @@ import '../../i18n.js';
 import Agent from '../Agent';
 import { WalletContext } from '../../AppContext';
 import { ActiveAccountContext } from '../../ActiveAccountProvider';
+import { AgentSessionProvider } from '../../AgentSessionProvider';
 import type { AppContext } from '../../AppContext';
 import type Account from '../../backend/Account';
 import type { AgentChatPanelProps } from '../../components/AgentChatPanel';
@@ -87,9 +88,11 @@ function makePendingProposalHistory(toolCallId: string, preview: ProposalPreview
 function renderAgent(account: Account | undefined) {
   const result = render(
     <WalletContext.Provider value={makeWallet()}>
-      <ActiveAccountContext.Provider value={{ activeIndex: 0, activeAccount: account, setActiveIndex: vi.fn() }}>
-        <Agent />
-      </ActiveAccountContext.Provider>
+      <AgentSessionProvider>
+        <ActiveAccountContext.Provider value={{ activeIndex: 0, activeAccount: account, setActiveIndex: vi.fn() }}>
+          <Agent />
+        </ActiveAccountContext.Provider>
+      </AgentSessionProvider>
     </WalletContext.Provider>
   );
   return {
@@ -97,9 +100,11 @@ function renderAgent(account: Account | undefined) {
     rerenderWithAccount: (acc: Account | undefined) =>
       result.rerender(
         <WalletContext.Provider value={makeWallet()}>
-          <ActiveAccountContext.Provider value={{ activeIndex: 0, activeAccount: acc, setActiveIndex: vi.fn() }}>
-            <Agent />
-          </ActiveAccountContext.Provider>
+          <AgentSessionProvider>
+            <ActiveAccountContext.Provider value={{ activeIndex: 0, activeAccount: acc, setActiveIndex: vi.fn() }}>
+              <Agent />
+            </ActiveAccountContext.Provider>
+          </AgentSessionProvider>
         </WalletContext.Provider>
       ),
   };

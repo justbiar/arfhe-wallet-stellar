@@ -24,16 +24,19 @@
  *
  * The only user-facing settings are which agent BACKEND to talk to (the built-in Arfio, via
  * AgentOrchestrator.ts/backend-proxy — no provider/model/API key to configure, the proxy +
- * OpenRouter picks the model) or the user's own self-hosted agent (VpsAgentOrchestrator.ts/
- * VpsAgentService.ts — a VPS URL, with auth done by signing a login message with the active
- * account's key instead of pasting an API key). That toggle + the VPS URL live in localStorage
- * (getAgentSource/getVpsAgentUrl), edited via the header gear icon's dialog. Everything else
- * about the chat (conversationHistory shape, rendering, tool_calls/ConfirmationCard handling,
- * per-account scoping) is IDENTICAL either way — runVpsAgentTurn is a structural mirror of
- * runAgentTurn that executes tools through the exact same AgentToolRunner locally, just asking a
- * different LLM host (the user's own Ollama VPS instead of OpenRouter) which tool to call. See
- * VpsAgentOrchestrator.ts's own header for why that split (tool execution always local,
- * regardless of backend) is what makes this parity possible instead of VPS mode being a
+ * OpenRouter picks the model) or the user's own OpenRouter API key (OwnKeyAgentOrchestrator.ts/
+ * OwnKeyAgentService.ts — the extension calls OpenRouter directly with the pasted key, no
+ * server in between). That toggle + the API key live in localStorage (getAgentSource/
+ * getOwnApiKey), edited via the header gear icon's dialog. A third backend
+ * (VpsAgentOrchestrator.ts/VpsAgentService.ts, pointing at a VPS the team itself hosts) existed
+ * before this and is no longer offered here — see VpsAgentService.ts's AgentSource docs for why.
+ * Everything else about the chat (conversationHistory shape, rendering, tool_calls/
+ * ConfirmationCard handling, per-account scoping) is IDENTICAL either way — runOwnKeyAgentTurn
+ * is a structural mirror of runAgentTurn that executes tools through the exact same
+ * AgentToolRunner locally, just asking a different LLM host (OpenRouter directly, with the
+ * user's own key, instead of Arfio's backend-proxy) which tool to call. See
+ * OwnKeyAgentOrchestrator.ts's own header for why that split (tool execution always local,
+ * regardless of backend) is what makes this parity possible instead of own-key mode being a
  * second, cut-down code path.
  */
 
@@ -54,25 +57,23 @@ import {
   RadioGroup,
   Radio,
   FormControlLabel,
+  SvgIcon,
+  type SvgIconProps,
 } from "@mui/material";
-import { Send, Person, SupportAgent, AddComment, CheckCircle, Cancel, ErrorOutline, Settings } from "@mui/icons-material";
+import { Send, Person, AddComment, CheckCircle, Cancel, ErrorOutline, Settings, ContentCopy } from "@mui/icons-material";
 import { useTranslation } from "react-i18next";
 import { WalletContext } from "../AppContext.js";
 import { useActiveAccount } from "../ActiveAccountProvider.js";
+import { useAgentSession } from "../AgentSessionProvider.js";
 import { runAgentTurn, type ChatMessage } from "../backend/AgentOrchestrator.js";
-import { runVpsAgentTurn } from "../backend/VpsAgentOrchestrator.js";
+import { runOwnKeyAgentTurn } from "../backend/OwnKeyAgentOrchestrator.js";
+import { getAgentSource, setAgentSource, getMcpAccessToken, VpsAgentError, type AgentSource } from "../backend/VpsAgentService.js";
 import {
-  getAgentSource,
-  setAgentSource,
-  getVpsAgentUrl,
-  setVpsAgentUrl,
-  resetVpsAgentSession,
-  getVpsCredits,
-  verifyVpsOnchainCredits,
-  VpsAgentError,
-  type AgentSource,
-  type CreditInfo,
-} from "../backend/VpsAgentService.js";
+  isOwnKeyConfigured,
+  getOwnApiKey,
+  setOwnApiKey,
+  OwnKeyAgentError,
+} from "../backend/OwnKeyAgentService.js";
 import { executeToolCall, type ProposalPreview } from "../backend/AgentToolRunner.js";
 import {
   buildRecordFromOutcome,
@@ -98,8 +99,37 @@ const QUICK_ACTIONS = [
   "agent.quickActionShield",
 ] as const;
 
-/** Arfio's avatar icon — a human support-agent silhouette rather than a literal robot. */
-const AgentAvatarIcon = SupportAgent;
+/**
+ * Arfio's avatar icon — a squared-off chat bubble around an arrow bending through a gold
+ * core, rather than a literal robot. Strokes use `currentColor` so the mark follows whatever
+ * `color` each call site sets (see the 26x26 square Avatars below); the gold core is a fixed
+ * brand accent, not a theme token, the same way a logo's mark doesn't repaint with the page.
+ */
+function AgentAvatarIcon(props: SvgIconProps) {
+  return (
+    <SvgIcon {...props} viewBox="0 0 160 160">
+      <path
+        d="M20 27H140V107H107L80 140L80 107H53L20 73V27Z"
+        stroke="currentColor"
+        strokeWidth="4"
+        strokeLinecap="square"
+        strokeLinejoin="miter"
+        fill="none"
+      />
+      <g transform="translate(44,31) scale(0.6)">
+        <path
+          d="M96 24 L24 24 L76 60 L24 96 L96 96"
+          stroke="currentColor"
+          strokeWidth="8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          fill="none"
+        />
+        <circle cx="100" cy="60" r="10" fill="#FFD700" />
+      </g>
+    </SvgIcon>
+  );
+}
 
 /**
  * Amount/symbol/recipient for a "result" item's TransactionResultCard — derived straight from
@@ -118,6 +148,9 @@ function resultDisplayFields(
     return { amount, symbol: nativeSymbol, recipient: typeof originalArgs.to === "string" ? originalArgs.to : undefined };
   }
   const symbol = typeof originalArgs.tokenSymbol === "string" ? originalArgs.tokenSymbol : nativeSymbol;
+  if (toolName === "propose_confidential_transfer") {
+    return { amount, symbol, recipient: typeof originalArgs.to === "string" ? originalArgs.to : undefined };
+  }
   return { amount, symbol };
 }
 
@@ -407,37 +440,32 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
   const { activeAccount } = useActiveAccount();
 
   const [input, setInput] = React.useState("");
-  const [sending, setSending] = React.useState(false);
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
-  // Agent backend selection (Arfio vs. the user's own VPS) — see file header. Read once at
-  // mount; both are only ever changed through handleSaveSettings below, which keeps this state
-  // and localStorage in sync itself, so there's no need to re-read on every render.
+  // Owned by AgentSessionProvider, keyed per account, rather than a local useState here — see
+  // that provider's pendingByAccount docs for why: a local `sending` flag reset to false the
+  // instant this component unmounted (switching tabs mid-request), making a still-running turn
+  // look cancelled even though the reply would still land correctly once it arrived.
+  const { pendingByAccount, setPendingByAccount } = useAgentSession();
+
+  // Agent backend selection (Arfio vs. the user's own OpenRouter API key) — see file header.
+  // Read once at mount; both are only ever changed through handleSaveSettings below, which keeps
+  // this state and localStorage in sync itself, so there's no need to re-read on every render.
   const [agentSource, setAgentSourceState] = React.useState<AgentSource>(() => getAgentSource());
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [draftSource, setDraftSource] = React.useState<AgentSource>(agentSource);
-  const [draftUrl, setDraftUrl] = React.useState(() => getVpsAgentUrl());
+  const [draftApiKey, setDraftApiKey] = React.useState(() => getOwnApiKey());
   const [settingsError, setSettingsError] = React.useState<string | null>(null);
-  const [relogged, setRelogged] = React.useState(false);
 
-  // Credit/quota display (VPS mode only) — see VpsAgentService.ts's CreditInfo docs.
-  const [creditInfo, setCreditInfo] = React.useState<CreditInfo | null>(null);
-  const [creditLoading, setCreditLoading] = React.useState(false);
-  const [creditError, setCreditError] = React.useState<string | null>(null);
-
-  // Refreshes the credit panel whenever the settings dialog opens on an already-saved VPS
-  // connection — not on every draftSource toggle, so switching the radio in the dialog before
-  // saving can't trigger a surprise sign-in prompt for a connection that isn't committed yet.
-  React.useEffect(() => {
-    if (!settingsOpen || agentSource !== "vps" || !activeAccount) return;
-    setCreditLoading(true);
-    setCreditError(null);
-    getVpsCredits(activeAccount)
-      .then(setCreditInfo)
-      .catch((err) => setCreditError(t(err instanceof VpsAgentError ? err.reasonKey : "agent.vpsErrorRequestFailed")))
-      .finally(() => setCreditLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-fetch on dialog open/source change, not on every t()/activeAccount identity churn
-  }, [settingsOpen, agentSource]);
+  // "Get a Claude/MCP token" — see OwnKeyAgentService.ts's counterpart for the API-key mode;
+  // this is the equivalent for connecting an external MCP client (Claude Desktop/Code) to this
+  // wallet's own read-only + propose-preview MCP server on the VPS (mcp.js there). Not tied to
+  // draftSource/agentSource at all — a user can want this regardless of which chat backend they
+  // use day to day, so it's its own always-visible section in the settings dialog.
+  const [mcpToken, setMcpToken] = React.useState<string | null>(null);
+  const [mcpTokenLoading, setMcpTokenLoading] = React.useState(false);
+  const [mcpTokenError, setMcpTokenError] = React.useState<string | null>(null);
+  const [mcpTokenCopied, setMcpTokenCopied] = React.useState(false);
 
   const address = activeAccount?.GetAddress();
   const networkId = wallet?.networkProvider.getActiveNetworkId();
@@ -445,6 +473,15 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
   // For "result" items' TransactionResultCard — same object ConfirmationCard itself reads,
   // needed for the Explorer link and (for propose_send) the native currency symbol fallback.
   const network = wallet?.networkProvider.getActiveNetwork();
+
+  const sending = !!(address && pendingByAccount[address]);
+  const setSending = React.useCallback(
+    (value: boolean) => {
+      if (!address) return;
+      setPendingByAccount((prev) => (prev[address] === value ? prev : { ...prev, [address]: value }));
+    },
+    [address, setPendingByAccount]
+  );
 
   React.useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -478,22 +515,19 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
     setSending(true);
 
     try {
-      if (agentSource === "vps") {
-        if (!activeAccount) return;
+      if (agentSource === "ownkey") {
         try {
-          const { updatedHistory } = await runVpsAgentTurn(
-            text,
-            conversationHistory,
-            { account: address, networkId: String(networkId) },
-            activeAccount
-          );
+          const { updatedHistory } = await runOwnKeyAgentTurn(text, conversationHistory, {
+            account: address,
+            networkId: String(networkId),
+          });
           setConversationHistory(updatedHistory);
           recordPolicyDenials(conversationHistory, updatedHistory, address);
         } catch (err) {
-          // Unlike runAgentTurn, runVpsAgentTurn CAN throw — specifically VpsAgentError from
-          // its upfront quota check (see that file's docs) — so it needs its own translation
-          // step here, same reasonKey→t() pattern the settings dialog's credit panel uses.
-          const reasonKey = err instanceof VpsAgentError ? err.reasonKey : "agent.vpsErrorRequestFailed";
+          // Unlike runAgentTurn, runOwnKeyAgentTurn CAN throw — a missing/invalid key or a rate
+          // limit from OpenRouter (see OwnKeyAgentService.ts) — so it needs its own translation
+          // step here, same reasonKey→t() pattern the old VPS credit panel used.
+          const reasonKey = err instanceof OwnKeyAgentError ? err.reasonKey : "agent.ownKeyErrorRequestFailed";
           setConversationHistory((prev) => [
             ...prev,
             { role: "user", content: text },
@@ -524,40 +558,44 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
 
   const openSettings = () => {
     setDraftSource(agentSource);
-    setDraftUrl(getVpsAgentUrl());
+    setDraftApiKey(getOwnApiKey());
     setSettingsError(null);
-    setRelogged(false);
+    setMcpToken(null);
+    setMcpTokenError(null);
     setSettingsOpen(true);
   };
 
   const handleSaveSettings = () => {
-    if (draftSource === "vps" && !draftUrl.trim()) {
-      setSettingsError(t("agent.vpsUrlRequired"));
+    if (draftSource === "ownkey" && !draftApiKey.trim()) {
+      setSettingsError(t("agent.ownKeyRequired"));
       return;
     }
-    setVpsAgentUrl(draftUrl);
+    setOwnApiKey(draftApiKey);
     setAgentSource(draftSource);
     setAgentSourceState(draftSource);
     setSettingsOpen(false);
   };
 
-  const handleRelogin = () => {
-    if (!address) return;
-    resetVpsAgentSession(address);
-    setRelogged(true);
+  const handleGetMcpToken = async () => {
+    if (!activeAccount) return;
+    setMcpTokenLoading(true);
+    setMcpTokenError(null);
+    setMcpTokenCopied(false);
+    try {
+      setMcpToken(await getMcpAccessToken(activeAccount));
+    } catch (err) {
+      setMcpTokenError(t(err instanceof VpsAgentError ? err.reasonKey : "agent.vpsErrorRequestFailed"));
+    } finally {
+      setMcpTokenLoading(false);
+    }
   };
 
-  const handleVerifyOnchain = async () => {
-    if (!activeAccount) return;
-    setCreditLoading(true);
-    setCreditError(null);
-    try {
-      setCreditInfo(await verifyVpsOnchainCredits(activeAccount));
-    } catch (err) {
-      setCreditError(t(err instanceof VpsAgentError ? err.reasonKey : "agent.vpsErrorRequestFailed"));
-    } finally {
-      setCreditLoading(false);
-    }
+  const handleCopyMcpToken = () => {
+    if (!mcpToken) return;
+    navigator.clipboard.writeText(mcpToken).then(() => {
+      setMcpTokenCopied(true);
+      setTimeout(() => setMcpTokenCopied(false), 2000);
+    });
   };
 
   /**
@@ -690,7 +728,7 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
           variant="subtitle1"
           sx={{ fontFamily: "var(--font-mono)", textTransform: "uppercase", color: "text.primary" }}
         >
-          {t(agentSource === "vps" ? "agent.vpsPanelTitle" : "agent.panelTitle")}
+          {t(agentSource === "ownkey" ? "agent.vpsPanelTitle" : "agent.panelTitle")}
         </Typography>
         <Stack direction="row" spacing={0.5}>
           <IconButton onClick={openSettings} aria-label={t("agent.vpsSettingsAria")}>
@@ -707,18 +745,23 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
       </Box>
 
       {/* Messages */}
-      <Box sx={{ flex: 1, overflowY: "auto", px: 2, py: 2 }}>
+      {/* minHeight: 0 is load-bearing here — without it a flex:1 child defaults to
+          min-height:auto, refusing to shrink below its content's natural size. That means
+          overflowY:auto never actually triggers: the box just grows to fit every message
+          instead of scrolling, pushing the input bar and tabs below it out past the popup's
+          fixed viewport ("agent sayfası extension dışına çıkıyor" — Ömer, 30.08.2026). */}
+      <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 2, py: 2 }}>
         {chatItems.length === 0 && (
           <Box sx={{ textAlign: "center", mt: 6 }}>
             <AgentAvatarIcon sx={{ fontSize: 40, mb: 1, opacity: 0.5, color: "text.secondary" }} />
             <Typography variant="body2" color="text.secondary" sx={{ mb: hasContext ? 2 : 0 }}>
               {hasContext
-                ? t(agentSource === "vps" ? "agent.vpsPanelEmptyState" : "agent.panelEmptyState")
-                : t(agentSource === "vps" ? "agent.vpsPanelNoAccount" : "agent.panelNoAccount")}
+                ? t(agentSource === "ownkey" ? "agent.vpsPanelEmptyState" : "agent.panelEmptyState")
+                : t(agentSource === "ownkey" ? "agent.vpsPanelNoAccount" : "agent.panelNoAccount")}
             </Typography>
-            {hasContext && agentSource === "vps" && !getVpsAgentUrl() && (
+            {hasContext && agentSource === "ownkey" && !isOwnKeyConfigured() && (
               <Typography variant="caption" color="warning.main" sx={{ display: "block", mb: 2 }}>
-                {t("agent.vpsErrorNotConfigured")}
+                {t("agent.ownKeyErrorNotConfigured")}
               </Typography>
             )}
             {hasContext && (
@@ -924,7 +967,7 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
             <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
               <CircularProgress size={16} />
               <Typography variant="caption" color="text.secondary">
-                {t(agentSource === "vps" ? "agent.vpsPanelThinking" : "agent.panelThinking")}
+                {t(agentSource === "ownkey" ? "agent.vpsPanelThinking" : "agent.panelThinking")}
               </Typography>
             </Box>
           )}
@@ -965,58 +1008,25 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
         <DialogContent>
           <RadioGroup value={draftSource} onChange={(e) => setDraftSource(e.target.value as AgentSource)}>
             <FormControlLabel value="arfio" control={<Radio size="small" />} label={t("agent.vpsSourceArfio")} />
-            <FormControlLabel value="vps" control={<Radio size="small" />} label={t("agent.vpsSourceOwn")} />
+            <FormControlLabel value="ownkey" control={<Radio size="small" />} label={t("agent.ownKeySourceLabel")} />
           </RadioGroup>
 
-          {draftSource === "vps" && (
-            <>
-              {/* No VPS address field shown here on purpose — draftUrl already carries the
-                  team's default (getVpsAgentUrl()'s DEFAULT_VPS_AGENT_URL fallback, see
-                  VpsAgentService.ts) and is saved as-is below. Picking "My own VPS" is meant
-                  to be a plain selection, not something that hands a raw IP:port to every
-                  tester — nobody should have to type or even see that address to use it. */}
-              {address && (
-                <Button
-                  size="small"
-                  onClick={handleRelogin}
-                  disabled={relogged}
-                  sx={{ mt: 1.5, textTransform: "none", pl: 0 }}
-                >
-                  {relogged ? t("agent.vpsReloginDone") : t("agent.vpsRelogin")}
-                </Button>
-              )}
-
-              {agentSource === "vps" && (
-                <Box sx={{ mt: 2, pt: 2, borderTop: "1px solid", borderColor: "divider" }}>
-                  <Typography variant="caption" sx={{ fontWeight: 700, display: "block", mb: 0.5 }}>
-                    {t("agent.vpsCreditsTitle")}
-                  </Typography>
-                  {creditLoading && !creditInfo ? (
-                    <CircularProgress size={14} />
-                  ) : creditInfo ? (
-                    <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
-                      {t("agent.vpsCreditsSummary", {
-                        credits: creditInfo.credits,
-                        used: creditInfo.dailyUsed,
-                        limit: creditInfo.dailyLimit,
-                      })}
-                    </Typography>
-                  ) : creditError ? (
-                    <Typography variant="caption" color="error" sx={{ display: "block" }}>
-                      {creditError}
-                    </Typography>
-                  ) : null}
-                  <Button
-                    size="small"
-                    onClick={handleVerifyOnchain}
-                    disabled={creditLoading}
-                    sx={{ mt: 1, textTransform: "none", pl: 0 }}
-                  >
-                    {t("agent.vpsVerifyOnchain")}
-                  </Button>
-                </Box>
-              )}
-            </>
+          {draftSource === "ownkey" && (
+            <Box sx={{ mt: 1.5 }}>
+              <TextField
+                fullWidth
+                size="small"
+                type="password"
+                autoComplete="off"
+                label={t("agent.ownKeyApiKeyLabel")}
+                placeholder={t("agent.ownKeyApiKeyPlaceholder")}
+                value={draftApiKey}
+                onChange={(e) => setDraftApiKey(e.target.value)}
+              />
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.75 }}>
+                {t("agent.ownKeyApiKeyHelp")}
+              </Typography>
+            </Box>
           )}
 
           {settingsError && (
@@ -1024,6 +1034,77 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
               {settingsError}
             </Typography>
           )}
+
+          <Box sx={{ mt: 2.5, pt: 2, borderTop: "1px solid", borderColor: "divider" }}>
+            <Typography variant="caption" sx={{ fontWeight: 700, display: "block", mb: 0.5 }}>
+              {t("agent.mcpTitle")}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+              {t("agent.mcpHelp")}
+            </Typography>
+
+            {!mcpToken && (
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={handleGetMcpToken}
+                disabled={mcpTokenLoading || !activeAccount}
+                sx={{ textTransform: "none" }}
+              >
+                {mcpTokenLoading ? <CircularProgress size={14} /> : t("agent.mcpGenerateToken")}
+              </Button>
+            )}
+
+            {mcpTokenError && (
+              <Typography variant="caption" color="error" sx={{ display: "block", mt: 1 }}>
+                {mcpTokenError}
+              </Typography>
+            )}
+
+            {mcpToken && (
+              <Stack spacing={1}>
+                <Stack direction="row" spacing={0.5} alignItems="center">
+                  <TextField
+                    fullWidth
+                    size="small"
+                    value={mcpToken}
+                    slotProps={{ htmlInput: { readOnly: true, sx: { fontFamily: "var(--font-mono)", fontSize: "0.7rem" } } }}
+                    onFocus={(e) => e.target.select()}
+                  />
+                  <IconButton size="small" onClick={handleCopyMcpToken} aria-label={t("agent.mcpCopyAria")}>
+                    <ContentCopy fontSize="small" />
+                  </IconButton>
+                </Stack>
+                {mcpTokenCopied && (
+                  <Typography variant="caption" color="success.main">
+                    {t("agent.mcpCopied")}
+                  </Typography>
+                )}
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                  {t("agent.mcpConfigHelp")}
+                </Typography>
+                <Box
+                  component="pre"
+                  sx={{
+                    m: 0,
+                    p: 1,
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "0.65rem",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-all",
+                    bgcolor: "action.hover",
+                    border: "1px solid",
+                    borderColor: "divider",
+                  }}
+                >
+                  {`claude mcp add --transport http arfhe-wallet http://83.229.86.69:3000/mcp --header "Authorization: Bearer ${mcpToken}"`}
+                </Box>
+                <Typography variant="caption" color="warning.main" sx={{ display: "block" }}>
+                  {t("agent.mcpTokenWarning")}
+                </Typography>
+              </Stack>
+            )}
+          </Box>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setSettingsOpen(false)} sx={{ textTransform: "none" }}>

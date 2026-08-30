@@ -12,6 +12,10 @@
  *  - X402_TOOLS       — `pay_for_resource`. Executes for real (possibly with no confirmation
  *                        at all, if within budget) — see AgentPolicyEngine.evaluateX402Payment()
  *                        and AgentToolRunner.handlePayForResource().
+ *  - IMMEDIATE_TOOLS  — `create_account`. Executes for real, no confirmation card at all —
+ *                        see AgentPolicyEngine.IMMEDIATE_TOOLS's own docs for why this one
+ *                        specific action qualifies (purely local, never touches a key's
+ *                        signing capability or the network).
  * FORBIDDEN_TOOLS are never defined here — they're excluded at the AgentPolicyEngine level
  * and must never be offered to the model at all.
  *
@@ -31,9 +35,9 @@
  * here or on any backend; execution happens locally against Network.ts / FheCofheService.ts.
  */
 
-import type { ReadOnlyTool, ProposalTool, X402Tool } from "./AgentPolicyEngine.js";
+import type { ReadOnlyTool, ProposalTool, X402Tool, ImmediateTool } from "./AgentPolicyEngine.js";
 
-type AllowedToolName = ReadOnlyTool | ProposalTool | X402Tool;
+type AllowedToolName = ReadOnlyTool | ProposalTool | X402Tool | ImmediateTool;
 
 /** A JSON Schema object, restricted to what OpenAI-style tool parameters actually use. */
 interface ToolParameterSchema {
@@ -182,6 +186,73 @@ export const AGENT_TOOLS: AgentToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "get_token_approvals",
+      description:
+        "Kullanıcının aktif hesabının verdiği, hâlâ AKTİF (0'a düşürülmemiş) ERC-20 approval'larını " +
+        "zincirden tarayıp listeler — hangi token'a, hangi kontrata (spender) ne kadar yetki " +
+        "verilmiş, ve her biri için bir risk seviyesi (critical/high/medium/low, ör. sınırsız " +
+        "onay veya bilinmeyen bir kontrat daha riskli sayılır). Kullanıcı 'onaylarımı göster', " +
+        "'kimlere yetki vermişim', 'revoke edilecek bir şey var mı' gibi bir şey sorduğunda ya da " +
+        "revoke etmeden önce hangi token/spender çiftini kastettiğini netleştirmek için kullan. " +
+        "GERÇEK bir zincir taraması yaptığı için birkaç saniye sürebilir, bunu kullanıcıya " +
+        "beklerken söyleyebilirsin. Revoke etmek için buradan aldığın tokenAddress/spenderAddress " +
+        "çiftini propose_revoke_approval'a aynen geçir — kullanıcının kendi yazdığı bir adrese " +
+        "değil, buradan gelen gerçek değerlere güven.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_connected_sites",
+      description:
+        "Aktif hesabın bağlı olduğu web sitelerini/dApp'leri listeler — hem tarayıcıya enjekte " +
+        "edilen provider üzerinden bağlanmış siteleri (ör. bir DEX'e 'Connect Wallet' ile bağlanmak) " +
+        "hem de WalletConnect ile açılmış oturumları. Kullanıcı 'hangi sitelere bağlıyım', 'nerelere " +
+        "izin vermişim', 'bağlı dApp'lerim neler' gibi bir şey sorduğunda kullan. Bu, ERC-20 token " +
+        "approval'larından (get_token_approvals) TAMAMEN FARKLI bir şey — biri 'hangi siteler " +
+        "cüzdanımı görebiliyor', diğeri 'hangi kontratlar tokenlarımı harcayabiliyor'. Kullanıcı " +
+        "hangisini kastettiği belirsizse ikisini de kontrol et.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_account",
+      description:
+        "Cüzdana YENİ bir hesap (yeni bir adres/keypair) ekler ve onu aktif hesap yapar. " +
+        "Kullanıcı 'yeni cüzdan/hesap oluştur', 'yeni bir adres aç' gibi bir şey söylediğinde " +
+        "DİREKT bu aracı çağır — bu tamamen local bir işlemdir (cüzdanın kendi 'Create New " +
+        "Account' butonuyla aynı şeyi yapar), hiçbir fon veya özel anahtar riske girmez, " +
+        "zincire hiçbir şey gönderilmez. Bu yüzden önizleme/onay GEREKMEZ — açıklama istemeden, " +
+        "adım adım yönerge vermeden hemen çağır ve sonucu bildir.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            description: "Opsiyonel. Yeni hesaba verilecek isim. Belirtilmezse otomatik bir isim atanır.",
+          },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "propose_send",
       description:
         "Açık (şifrelenmemiş) bir token transferi ÖNERİSİ oluşturur. ÖNEMLİ: Bu tool hiçbir " +
@@ -204,8 +275,8 @@ export const AGENT_TOOLS: AgentToolDefinition[] = [
             type: "string",
             description:
               "Gönderilecek token'ın sembolü, ör. 'USDC'. Belirtilmezse native token (ör. ETH) " +
-              "kullanılır. Bu, şifreli (shielded) bir token değildir — gizli transfer için " +
-              "kullanıcıyı ilgili ekrana yönlendir, bu tool'u kullanma.",
+              "kullanılır. Bu, şifreli (shielded) bir token değildir — kullanıcı şifreli/gizli " +
+              "bakiyesini (ör. 'aeUSDC') göndermek isterse propose_confidential_transfer'ı kullan.",
           },
         },
         required: ["to", "amount"],
@@ -271,6 +342,69 @@ export const AGENT_TOOLS: AgentToolDefinition[] = [
           },
         },
         required: ["amount", "tokenSymbol"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "propose_confidential_transfer",
+      description:
+        "Şifreli (shielded) bir bakiyeyi, miktarı zincirde AÇIĞA ÇIKMADAN başka bir adrese " +
+        "göndermek için bir ÖNERİ oluşturur — gerçek işlemi göndermez, yalnızca kullanıcının " +
+        "onaylayacağı bir önizleme üretir. Bu tool unshield DEĞİLDİR: tokenlar açığa çıkmaz, " +
+        "şifreli haliyle alıcıya geçer (alıcının da bu token için shielded bir cüzdanı/kaydı " +
+        "olması gerekir). Miktar önizlemede bile ŞİFRELİ kalır — TransactionSimulator bunu " +
+        "gösteremez, kullanıcıya sadece 'X şifreli birim gönderilecek' de, gerçek bir eth_call " +
+        "sonucu değil. Kullanıcı 'gizli/şifreli gönder', 'aeUSDC gönder' gibi normal (native) " +
+        "olmayan bir transfer isterse bu tool'u kullan, propose_send'i DEĞİL.",
+      parameters: {
+        type: "object",
+        properties: {
+          to: {
+            type: "string",
+            description: "Alıcının adresi (0x... formatında) veya bilinen bir ENS/UD alan adı.",
+          },
+          amount: {
+            type: "string",
+            description: "Gönderilecek miktar, gizli (confidential) birimde, ondalıklı string olarak (ör. '1.5').",
+          },
+          tokenSymbol: {
+            type: "string",
+            description:
+              "Gönderilecek shielded token'ın sembolü — confidential wrapper sembolü (ör. 'aeETH') " +
+              "veya açık (public) sembolü (ör. 'ETH', 'USDC') olabilir, ikisi de kabul edilir.",
+          },
+        },
+        required: ["to", "amount", "tokenSymbol"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "propose_revoke_approval",
+      description:
+        "Daha önce verilmiş bir ERC-20 approval'ını geri almak (allowance'ı 0'a düşürmek) için " +
+        "bir ÖNERİ oluşturur — gerçek işlemi göndermez, yalnızca kullanıcının onaylayacağı bir " +
+        "önizleme üretir. tokenAddress ve spenderAddress MUTLAKA get_token_approvals'ın az önce " +
+        "döndürdüğü gerçek değerler olmalı — kullanıcının sözlü olarak söylediği bir adrese asla " +
+        "güvenme, önce get_token_approvals'ı çağırıp doğru çifti oradan al.",
+      parameters: {
+        type: "object",
+        properties: {
+          tokenAddress: {
+            type: "string",
+            description: "Yetkinin verildiği token'ın kontrat adresi (0x...) — get_token_approvals'tan.",
+          },
+          spenderAddress: {
+            type: "string",
+            description: "Yetkinin geri alınacağı kontratın adresi (0x...) — get_token_approvals'tan.",
+          },
+        },
+        required: ["tokenAddress", "spenderAddress"],
         additionalProperties: false,
       },
     },

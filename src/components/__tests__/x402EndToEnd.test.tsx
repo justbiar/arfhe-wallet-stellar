@@ -7,6 +7,7 @@ import '../../i18n.js';
 import AgentChatPanel from '../AgentChatPanel';
 import { WalletContext } from '../../AppContext';
 import { ActiveAccountContext } from '../../ActiveAccountProvider';
+import { AgentSessionProvider } from '../../AgentSessionProvider';
 import { configureAgentOrchestrator, type ChatMessage } from '../../backend/AgentOrchestrator';
 import { configureAgentToolRunner, resetAgentToolRunner } from '../../backend/AgentToolRunner';
 import { configureX402ProxyClient } from '../../backend/X402ProxyClient';
@@ -121,13 +122,15 @@ describe('x402 uçtan uca entegrasyon (gerçek modüller, yalnızca fetch mock)'
     const [, setProposalHistory] = React.useState<ProposalRecord[]>([]);
     return (
       <WalletContext.Provider value={makeWallet()}>
-        <ActiveAccountContext.Provider value={{ activeIndex: 0, activeAccount: mockAccount, setActiveIndex: vi.fn() }}>
-          <AgentChatPanel
-            conversationHistory={conversationHistory}
-            setConversationHistory={setConversationHistory}
-            setProposalHistory={setProposalHistory}
-          />
-        </ActiveAccountContext.Provider>
+        <AgentSessionProvider>
+          <ActiveAccountContext.Provider value={{ activeIndex: 0, activeAccount: mockAccount, setActiveIndex: vi.fn() }}>
+            <AgentChatPanel
+              conversationHistory={conversationHistory}
+              setConversationHistory={setConversationHistory}
+              setProposalHistory={setProposalHistory}
+            />
+          </ActiveAccountContext.Provider>
+        </AgentSessionProvider>
       </WalletContext.Provider>
     );
   }
@@ -144,6 +147,8 @@ describe('x402 uçtan uca entegrasyon (gerçek modüller, yalnızca fetch mock)'
         Number(networkId) === NetworkId.Base_Sepolia
           ? { address: USDC_BASE_SEPOLIA, name: 'USD Coin', version: '2', chainId: NetworkId.Base_Sepolia }
           : undefined,
+      getConnectedSites: async () => ({ injectedSites: [], walletConnectSessions: [] }),
+      createAccount: () => ({ index: 1, address: '0xNEWACCOUNT', name: 'Account 2' }),
     });
     await new X402SpendingLedger().clearAll();
   });

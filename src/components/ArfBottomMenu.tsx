@@ -8,12 +8,14 @@ import {
 import {
   Send as SendIcon,
   CallReceived,
-  SwapVert,
 } from "@mui/icons-material";
-import SwapPanel from "./SwapPanel.js";
 import { CustomTabPanel } from "./panels/shared.js";
 import SendPanel from "./panels/SendPanel.js";
 import ReceivePanel from "./panels/ReceivePanel.js";
+
+/** Tabs this drawer has. Anything asking for a higher index is asking for a tab that
+ *  no longer exists — swap was removed rather than hidden, so it must not be reachable. */
+const TAB_COUNT = 2;
 
 export default function ArfBottomMenu() {
   const [value, setValue] = React.useState(0);
@@ -22,9 +24,11 @@ export default function ArfBottomMenu() {
     const handleSetTab = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.tab !== undefined) {
-        // Map old tab indices to new ones (0=Send, 1=Receive, 2=Swap)
-        const tab = detail.tab;
-        if (tab <= 2) setValue(tab);
+        // Callers still pass the old indices (0=Send, 1=Receive, 2=Swap). Clamping rather
+        // than ignoring keeps an old "open swap" request landing on a real tab instead of
+        // leaving the drawer blank.
+        const tab = Number(detail.tab);
+        if (Number.isFinite(tab) && tab >= 0) setValue(Math.min(tab, TAB_COUNT - 1));
       }
       // Prefill send token if provided, along with whether it is a confidential one.
       if (detail?.token) {
@@ -51,7 +55,7 @@ export default function ArfBottomMenu() {
         }} />
       </Stack>
 
-      {/* Tabs — only Send, Receive, Swap */}
+      {/* Tabs — Send and Receive */}
       <Tabs
         value={value}
         onChange={handleChange}
@@ -78,7 +82,6 @@ export default function ArfBottomMenu() {
       >
         <Tab icon={<SendIcon sx={{ fontSize: 14 }} />} iconPosition="start" label="Send" />
         <Tab icon={<CallReceived sx={{ fontSize: 14 }} />} iconPosition="start" label="Receive" />
-        <Tab icon={<SwapVert sx={{ fontSize: 14 }} />} iconPosition="start" label="Swap" />
       </Tabs>
 
       <CustomTabPanel value={value} index={0}>
@@ -86,9 +89,6 @@ export default function ArfBottomMenu() {
       </CustomTabPanel>
       <CustomTabPanel value={value} index={1}>
         <ReceivePanel />
-      </CustomTabPanel>
-      <CustomTabPanel value={value} index={2}>
-        <SwapPanel />
       </CustomTabPanel>
     </Box>
   );

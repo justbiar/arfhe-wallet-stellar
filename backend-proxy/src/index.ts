@@ -358,16 +358,17 @@ async function handleX402Settle(request: Request, env: Env, cors: HeadersInit): 
 
 // ─── Users / activity tracking ──────────────────────────────────────
 //
-// Pseudonymous by design, not anonymous: wallet_address is a public on-chain identifier,
-// and email (when present, from Web3Auth's Google login) links it to a real identity. What
-// is deliberately never accepted or stored here is an amount — action_type only records
-// that a send/shield/unshield happened, never how much, so this table can't leak the
-// FHE-shielded balances the rest of the wallet exists to protect.
+// Pseudonymous by design, not anonymous: wallet_address is a public on-chain identifier.
+// What is deliberately never accepted or stored here is an amount — action_type only
+// records that a send/shield/unshield happened, never how much, so this table can't leak
+// the FHE-shielded balances the rest of the wallet exists to protect.
+
+const USER_SOURCES = ["google", "created", "mnemonic", "private_key"] as const;
+type UserSource = (typeof USER_SOURCES)[number];
 
 interface UsersRegisterRequestBody {
   wallet_address: string;
-  email?: string;
-  source: "google" | "password";
+  source: UserSource;
 }
 
 function parseUsersRegisterBody(raw: unknown): UsersRegisterRequestBody {
@@ -379,26 +380,20 @@ function parseUsersRegisterBody(raw: unknown): UsersRegisterRequestBody {
   if (typeof body.wallet_address !== "string" || !body.wallet_address.trim()) {
     throw new Error('"wallet_address" must be a non-empty string.');
   }
-  if (body.source !== "google" && body.source !== "password") {
-    throw new Error('"source" must be "google" or "password".');
-  }
-  if (body.email !== undefined && body.email !== null && typeof body.email !== "string") {
-    throw new Error('"email", when present, must be a string.');
+  if (typeof body.source !== "string" || !USER_SOURCES.includes(body.source as UserSource)) {
+    throw new Error(`"source" must be one of: ${USER_SOURCES.join(", ")}.`);
   }
 
   return {
     wallet_address: body.wallet_address,
-    email: (body.email as string | null | undefined) ?? undefined,
-    source: body.source,
+    source: body.source as UserSource,
   };
 }
 
 /**
- * Upserts one row into `users`. `first_seen` is only ever written on the initial insert
- * (the `ON CONFLICT` clause never touches it); `last_seen` is bumped on every call, and
- * `email` prefers whatever the caller just sent but falls back to the existing value so a
- * later password-flow re-register (which sends no email) doesn't blank out one already on
- * file from an earlier Google login.
+ * Upserts one row into `users`. `first_seen` and `source` are only ever written on the
+ * initial insert (the `ON CONFLICT` clause never touches them); `last_seen` is bumped on
+ * every call.
  */
 async function handleUsersRegister(request: Request, env: Env, cors: HeadersInit): Promise<Response> {
   let body: UsersRegisterRequestBody;
@@ -410,13 +405,12 @@ async function handleUsersRegister(request: Request, env: Env, cors: HeadersInit
 
   const now = new Date().toISOString();
   await env.USERS_DB.prepare(
-    `INSERT INTO users (wallet_address, email, source, first_seen, last_seen)
-     VALUES (?1, ?2, ?3, ?4, ?4)
+    `INSERT INTO users (wallet_address, source, first_seen, last_seen)
+     VALUES (?1, ?2, ?3, ?3)
      ON CONFLICT(wallet_address) DO UPDATE SET
-       last_seen = ?4,
-       email = COALESCE(?2, users.email)`
+       last_seen = ?3`
   )
-    .bind(body.wallet_address, body.email ?? null, body.source, now)
+    .bind(body.wallet_address, body.source, now)
     .run();
 
   return jsonResponse({ ok: true }, 200, cors);
@@ -473,7 +467,7 @@ function isAuthorizedAdmin(request: Request, env: Env): boolean {
 
 async function handleAdminUsers(env: Env): Promise<Response> {
   const { results } = await env.USERS_DB.prepare(
-    `SELECT wallet_address, email, source, first_seen, last_seen FROM users ORDER BY last_seen DESC`
+    `SELECT wallet_address, source, first_seen, last_seen FROM users ORDER BY last_seen DESC`
   ).all();
   return jsonResponse(results ?? [], 200);
 }
@@ -597,14 +591,13 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
     <div class="tab active" data-panel="users">Kullanıcılar</div>
     <div class="tab" data-panel="activity">Aktivite</div>
   </div>
-  <input id="search" type="text" placeholder="wallet_address veya email içinde ara..." />
+  <input id="search" type="text" placeholder="wallet_address içinde ara..." />
 
   <div class="panel active" id="panel-users">
     <table>
       <thead>
         <tr>
           <th data-key="wallet_address">wallet_address<span class="arrow"></span></th>
-          <th data-key="email">email<span class="arrow"></span></th>
           <th data-key="source">source<span class="arrow"></span></th>
           <th data-key="first_seen">first_seen<span class="arrow"></span></th>
           <th data-key="last_seen">last_seen<span class="arrow"></span></th>
@@ -705,8 +698,7 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
     if (!query) return true;
     var q = query.toLowerCase();
     var addr = (row.wallet_address || "").toLowerCase();
-    var email = (row.email || "").toLowerCase();
-    return addr.indexOf(q) !== -1 || email.indexOf(q) !== -1;
+    return addr.indexOf(q) !== -1;
   }
 
   function sortRows(rows, key, dir) {
@@ -759,7 +751,7 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
 
     var filteredUsers = usersData.filter(function (r) { return matchesSearch(r, query); });
     filteredUsers = sortRows(filteredUsers, sortState.users.key, sortState.users.dir);
-    renderTable("usersBody", "usersEmpty", filteredUsers, ["wallet_address", "email", "source", "first_seen", "last_seen"]);
+    renderTable("usersBody", "usersEmpty", filteredUsers, ["wallet_address", "source", "first_seen", "last_seen"]);
     updateSortArrows("users");
 
     var filteredActivity = activityData.filter(function (r) { return matchesSearch(r, query); });

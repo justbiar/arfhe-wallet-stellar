@@ -24,10 +24,12 @@ import {
 import { WalletContext } from "../AppContext";
 import { formatEther, JsonRpcProvider } from "ethers";
 import type { WalletConnectRequest, WalletConnectProposal } from "../backend/WalletConnectService";
+import { SUPPORTED_CHAINS } from "../backend/WalletConnectService";
 import type { Network } from "../backend/Network";
 import type Account from "../backend/Account";
 import { analyzeFheRisk, checkRequestMatchesWallet } from "../backend/DAppConnectionService";
 import { toChainId } from "../backend/NetworkTypes";
+import { useTranslation } from "react-i18next";
 
 // Icons
 import LinkIcon from '@mui/icons-material/Link';
@@ -41,7 +43,6 @@ import GppBadIcon from '@mui/icons-material/GppBad';
 import GppGoodIcon from '@mui/icons-material/GppGood';
 import SendIcon from '@mui/icons-material/Send';
 import DrawIcon from '@mui/icons-material/Draw';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import LanguageIcon from '@mui/icons-material/Language';
 
 // --- Helpers ---
@@ -81,13 +82,17 @@ const CHAIN_NAMES: Record<string, { name: string; color: string }> = {
     "eip155:143": { name: "Unichain Sepolia", color: "#FF007A" },
 };
 
-const METHOD_INFO: Record<string, { label: string; icon: React.ReactNode; risk: "safe" | "warning" | "danger" }> = {
-    "eth_sendTransaction": { label: "Send Transaction", icon: <SendIcon fontSize="small" />, risk: "warning" },
-    "eth_signTransaction": { label: "Sign Transaction", icon: <DrawIcon fontSize="small" />, risk: "warning" },
-    "eth_sign": { label: "Sign Arbitrary Data", icon: <GppBadIcon fontSize="small" />, risk: "danger" },
-    "personal_sign": { label: "Sign Message", icon: <DrawIcon fontSize="small" />, risk: "warning" },
-    "eth_signTypedData": { label: "Sign Typed Data", icon: <DrawIcon fontSize="small" />, risk: "warning" },
-    "eth_signTypedData_v4": { label: "Sign Typed Data v4", icon: <DrawIcon fontSize="small" />, risk: "warning" },
+// Keys rather than text: this table is module-level, where no hook can run. The label is
+// resolved with t() at each render site instead, so switching language re-renders it like
+// everything else. A method with no entry falls back to its own RPC name, which is not
+// translatable text and is deliberately shown raw.
+const METHOD_INFO: Record<string, { labelKey: string; icon: React.ReactNode; risk: "safe" | "warning" | "danger" }> = {
+    "eth_sendTransaction": { labelKey: "walletconnect.methodSendTransaction", icon: <SendIcon fontSize="small" />, risk: "warning" },
+    "eth_signTransaction": { labelKey: "walletconnect.methodSignTransaction", icon: <DrawIcon fontSize="small" />, risk: "warning" },
+    "eth_sign": { labelKey: "walletconnect.methodSignArbitrary", icon: <GppBadIcon fontSize="small" />, risk: "danger" },
+    "personal_sign": { labelKey: "walletconnect.methodSignMessage", icon: <DrawIcon fontSize="small" />, risk: "warning" },
+    "eth_signTypedData": { labelKey: "walletconnect.methodSignTypedData", icon: <DrawIcon fontSize="small" />, risk: "warning" },
+    "eth_signTypedData_v4": { labelKey: "walletconnect.methodSignTypedDataV4", icon: <DrawIcon fontSize="small" />, risk: "warning" },
 };
 
 const RISK_COLORS = {
@@ -123,6 +128,7 @@ function decodeHexMessage(hex: string): string {
 }
 
 export default function WalletConnectManager() {
+    const { t } = useTranslation();
     const context = useContext(WalletContext);
     const service = context?.walletConnectService;
     const account = context?.accountManager?.GetActive();
@@ -136,7 +142,13 @@ export default function WalletConnectManager() {
     useEffect(() => {
         if (!service) return;
 
-        service.init();
+        // Not awaited (an effect cannot be async), but the rejection MUST land somewhere.
+        // It used to be dropped entirely: a failed init showed the user nothing at all, and
+        // the only symptom was that scanning a QR later did nothing — with the actual cause
+        // sitting in the console as an unhandled rejection nobody was looking at.
+        service.init().catch((e: unknown) => {
+            setError(e instanceof Error ? e.message : String(e));
+        });
 
         service.setOnProposal((prop: WalletConnectProposal) => {
             setProposal(prop);
@@ -167,9 +179,9 @@ export default function WalletConnectManager() {
             setProposal(null);
         } catch (e) {
             if (e instanceof Error && e.message === "SESSION_SYNC_FAILED") {
-                setError("Session synchronization failed. Please try again.");
+                setError(t("walletconnect.sessionSyncFailed"));
             } else {
-                setError(e instanceof Error ? e.message : "Connection Failed");
+                setError(e instanceof Error ? e.message : t("walletconnect.connectionFailed"));
             }
         } finally {
             setLoading(false);
@@ -360,6 +372,7 @@ function ProposalDialog({
     onApprove: () => void;
     onReject: () => void;
 }) {
+    const { t } = useTranslation();
     const { dApp, requiredChains = [], optionalChains = [], requiredMethods = [], unsupportedChains = [], isValid, phishingResult } = proposal;
 
     const allChains = [...new Set([...requiredChains, ...optionalChains])];
@@ -439,7 +452,7 @@ function ProposalDialog({
                         <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
                             <GppBadIcon sx={{ color: '#dc2626', fontSize: 22 }} />
                             <Typography variant="subtitle2" sx={{ color: '#dc2626', fontWeight: 800, fontSize: '0.85rem' }}>
-                                🚨 PHİSHİNG TESPİT EDİLDİ
+                                {t("walletconnect.phishingTitle")}
                             </Typography>
                         </Stack>
                         <Stack spacing={0.5}>
@@ -450,7 +463,7 @@ function ProposalDialog({
                             ))}
                         </Stack>
                         <Typography variant="caption" sx={{ display: 'block', mt: 1, color: '#dc2626', fontWeight: 700, fontSize: '0.7rem' }}>
-                            Bu bağlantıyı ONAYLAMAYIN — Fonlarınız çalınabilir!
+                            {t("walletconnect.phishingBody")}
                         </Typography>
                     </Paper>
                 )}
@@ -463,7 +476,7 @@ function ProposalDialog({
                         sx={{ mb: 2, borderRadius: 2 }}
                     >
                         <Typography variant="body2" fontWeight={700} sx={{ fontSize: '0.8rem' }}>
-                            ⚠️ Şüpheli Domain Tespit Edildi
+                            {t("walletconnect.suspiciousTitle")}
                         </Typography>
                         {phishingResult?.warnings.map((w: string, i: number) => (
                             <Typography key={i} variant="caption" sx={{ display: 'block', lineHeight: 1.5, mt: 0.5 }}>
@@ -476,9 +489,9 @@ function ProposalDialog({
                 {/* Unsupported chains warning */}
                 {unsupportedChains.length > 0 && (
                     <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>
-                        <Typography variant="body2" fontWeight={600}>Unsupported chains required</Typography>
+                        <Typography variant="body2" fontWeight={600}>{t("walletconnect.unsupportedChainsTitle")}</Typography>
                         <Typography variant="caption">
-                            {unsupportedChains.map(getChainName).join(", ")} — connection may not work fully.
+                            {t("walletconnect.unsupportedChainsBody", { chains: unsupportedChains.map(getChainName).join(", ") })}
                         </Typography>
                     </Alert>
                 )}
@@ -486,47 +499,62 @@ function ProposalDialog({
                 {/* Networks */}
                 <Box sx={{ mb: 2 }}>
                     <Typography variant="caption" color="text.secondary" fontWeight={700} sx={{ textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', mb: 1 }}>
-                        Networks
+                        {t("walletconnect.networks")}
                     </Typography>
                     {(() => {
                         const requiredSet = new Set(requiredChains);
-                        // Only show chains we know the name of
-                        const knownChains = allChains.filter((c: string) => CHAIN_NAMES[c]);
-                        const unknownOptionalCount = allChains.filter(
-                            (c: string) => !CHAIN_NAMES[c] && !requiredSet.has(c)
-                        ).length;
+
+                        // Only the chains this wallet can actually be used on.
+                        //
+                        // A dApp's optionalNamespaces routinely lists a dozen chains it merely
+                        // knows about — Superbridge asks for fourteen — and rendering all of
+                        // them made the approval screen a wall of names, most of which this
+                        // wallet will refuse anyway. What the user is being asked to approve is
+                        // the intersection, so that is what gets shown.
+                        const supportedSet = new Set<string>(SUPPORTED_CHAINS);
+                        const grantedChains = allChains.filter((c: string) => supportedSet.has(c));
+
+                        // The remainder is counted, never silently dropped: the site did ask for
+                        // them, and a screen that hides part of a request is not an approval
+                        // screen. Required-but-unsupported chains additionally raise the alert
+                        // above — those are the ones that break the connection outright.
+                        const notGrantedCount = allChains.length - grantedChains.length;
                         return (
                             <Stack direction="row" gap={0.75} flexWrap="wrap" alignItems="center">
-                                {knownChains.map((chain: string) => {
+                                {grantedChains.map((chain: string) => {
+                                    // Every chip here is a chain the wallet supports, so the
+                                    // old supported/unsupported styling split has nothing left
+                                    // to distinguish — required vs optional is the only
+                                    // difference worth showing now.
                                     const isRequired = requiredSet.has(chain);
-                                    const supported = !unsupportedChains.includes(chain);
                                     const color = getChainColor(chain);
                                     return (
                                         <Chip
                                             key={chain}
                                             size="small"
                                             label={getChainName(chain)}
-                                            icon={supported
-                                                ? <CheckCircleOutlineIcon sx={{ fontSize: 14 }} />
-                                                : <ErrorOutlineIcon sx={{ fontSize: 14 }} />
-                                            }
+                                            icon={<CheckCircleOutlineIcon sx={{ fontSize: 14 }} />}
                                             sx={{
                                                 fontWeight: isRequired ? 700 : 500,
                                                 fontSize: '0.72rem',
                                                 opacity: isRequired ? 1 : 0.55,
-                                                borderColor: supported ? color : '#ef4444',
-                                                color: supported ? color : '#ef4444',
-                                                bgcolor: supported ? `${color}12` : 'rgba(239,68,68,0.08)',
+                                                borderColor: color,
+                                                color,
+                                                bgcolor: `${color}12`,
                                                 border: '1px solid',
                                                 '& .MuiChip-icon': { color: 'inherit' }
                                             }}
                                         />
                                     );
                                 })}
-                                {unknownOptionalCount > 0 && (
+                                {notGrantedCount > 0 && (
                                     <Chip
                                         size="small"
-                                        label={`+${unknownOptionalCount} more optional`}
+                                        // English to match every other string in this dialog,
+                                        // which carries no i18n at all (no useTranslation here).
+                                        // A lone translated label reads as a bug, which is
+                                        // exactly how this one was reported.
+                                        label={t("walletconnect.unsupportedNetworkCount", { count: notGrantedCount })}
                                         sx={{
                                             fontSize: '0.68rem',
                                             fontWeight: 500,
@@ -546,11 +574,12 @@ function ProposalDialog({
                 {/* Permissions */}
                 <Box sx={{ mb: 2 }}>
                     <Typography variant="caption" color="text.secondary" fontWeight={700} sx={{ textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', mb: 1 }}>
-                        Permissions Requested
+                        {t("walletconnect.permissionsRequested")}
                     </Typography>
                     <Stack spacing={0.75}>
                         {requiredMethods.length > 0 ? requiredMethods.map((method: string) => {
-                            const info = METHOD_INFO[method] || { label: method, icon: <LinkIcon fontSize="small" />, risk: "safe" as const };
+                            const info = METHOD_INFO[method] ?? { labelKey: "", icon: <LinkIcon fontSize="small" />, risk: "safe" as const };
+                            const infoLabel = info.labelKey ? t(info.labelKey) : method;
                             const colors = RISK_COLORS[info.risk];
                             return (
                                 <Paper
@@ -569,15 +598,15 @@ function ProposalDialog({
                                 >
                                     <Box sx={{ color: colors.text, display: 'flex' }}>{info.icon}</Box>
                                     <Typography variant="body2" fontWeight={600} sx={{ flex: 1, fontSize: '0.8rem', color: colors.text }}>
-                                        {info.label}
+                                        {infoLabel}
                                     </Typography>
                                     {info.risk === "danger" && (
-                                        <Tooltip title="This method can sign arbitrary data. Use with extreme caution." arrow>
+                                        <Tooltip title={t("walletconnect.tooltipArbitraryData")} arrow>
                                             <WarningAmberIcon sx={{ fontSize: 18, color: '#dc2626' }} />
                                         </Tooltip>
                                     )}
                                     {info.risk === "warning" && (
-                                        <Tooltip title="Requires your explicit approval each time" arrow>
+                                        <Tooltip title={t("walletconnect.tooltipExplicitApproval")} arrow>
                                             <WarningAmberIcon sx={{ fontSize: 16, color: '#d97706' }} />
                                         </Tooltip>
                                     )}
@@ -587,7 +616,7 @@ function ProposalDialog({
                             <Paper elevation={0} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 1, borderRadius: 2, bgcolor: RISK_COLORS.safe.bg, border: '1px solid', borderColor: RISK_COLORS.safe.border }}>
                                 <GppGoodIcon sx={{ fontSize: 18, color: RISK_COLORS.safe.text }} />
                                 <Typography variant="body2" fontWeight={600} sx={{ fontSize: '0.8rem', color: RISK_COLORS.safe.text }}>
-                                    Standard permissions
+                                    {t("walletconnect.standardPermissions")}
                                 </Typography>
                             </Paper>
                         )}
@@ -605,7 +634,7 @@ function ProposalDialog({
                 }}>
                     <AccountBalanceWalletIcon sx={{ fontSize: 20, color: 'primary.main' }} />
                     <Box sx={{ flex: 1 }}>
-                        <Typography variant="caption" color="text.secondary" fontWeight={600}>Your Wallet</Typography>
+                        <Typography variant="caption" color="text.secondary" fontWeight={600}>{t("walletconnect.yourWallet")}</Typography>
                         <Typography variant="body2" fontFamily="monospace" fontWeight={600} sx={{ fontSize: '0.8rem' }}>
                             {truncateAddress(walletAddress)}
                         </Typography>
@@ -619,7 +648,7 @@ function ProposalDialog({
                     sx={{ display: 'block', textAlign: 'center', mt: 2, fontSize: '0.7rem', lineHeight: 1.4 }}
                 >
                     <SecurityIcon sx={{ fontSize: 12, verticalAlign: 'middle', mr: 0.5 }} />
-                    Each transaction will require your separate approval.
+                    {t("walletconnect.eachTxSeparateApproval")}
                 </Typography>
 
                 {error && <Alert severity="error" sx={{ mt: 2, borderRadius: 2 }}>{error}</Alert>}
@@ -658,9 +687,9 @@ function ProposalDialog({
                     }}
                 >
                     {loading ? <CircularProgress size={24} color="inherit" /> :
-                        isPhishingDangerous ? "🚫 Blocked — Phishing Detected" :
-                            isPhishingSuspicious ? "⚠️ Connect Anyway" :
-                                "Connect"}
+                        isPhishingDangerous ? t("walletconnect.blockedPhishing") :
+                            isPhishingSuspicious ? t("walletconnect.connectAnyway") :
+                                t("walletconnect.connect")}
                 </Button>
                 <Button
                     fullWidth
@@ -674,7 +703,7 @@ function ProposalDialog({
                         color: 'text.secondary',
                     }}
                 >
-                    Reject
+                    {t("walletconnect.reject")}
                 </Button>
             </DialogActions>
         </Dialog>
@@ -701,6 +730,7 @@ function RequestDialog({
     onApprove: () => void;
     onReject: () => void;
 }) {
+    const { t } = useTranslation();
     const { dApp, params } = request;
     const { request: rpcReq, chainId } = params;
 
@@ -724,7 +754,8 @@ function RequestDialog({
     const isPersonalSign = rpcReq.method === "personal_sign";
     const isTypedData = rpcReq.method === "eth_signTypedData" || rpcReq.method === "eth_signTypedData_v4";
 
-    const methodInfo = METHOD_INFO[rpcReq.method] || { label: rpcReq.method, icon: <DrawIcon fontSize="small" />, risk: "warning" as const };
+    const methodInfo = METHOD_INFO[rpcReq.method] ?? { labelKey: "", icon: <DrawIcon fontSize="small" />, risk: "warning" as const };
+    const methodLabel = methodInfo.labelKey ? t(methodInfo.labelKey) : rpcReq.method;
 
     // Tx values
     const txValue = isTransaction && rpcReq.params[0].value ? formatEther(rpcReq.params[0].value) : "0";
@@ -831,7 +862,7 @@ function RequestDialog({
             open={true}
             maxWidth="sm"
             fullWidth
-            aria-label="Transaction approval request"
+            aria-label={t("walletconnect.requestAriaLabel")}
             PaperProps={{
                 sx: {
                     borderRadius: 4,
@@ -918,7 +949,7 @@ function RequestDialog({
                 >
                     <Box sx={{ color: RISK_COLORS[methodInfo.risk].text, display: 'flex' }}>{methodInfo.icon}</Box>
                     <Typography variant="body1" fontWeight={700} sx={{ flex: 1, color: RISK_COLORS[methodInfo.risk].text }}>
-                        {methodInfo.label}
+                        {methodLabel}
                     </Typography>
                     {methodInfo.risk === "danger" && (
                         <GppBadIcon sx={{ color: '#dc2626' }} />
@@ -941,8 +972,7 @@ function RequestDialog({
                             ⚠️ Dangerous Signing Method
                         </Typography>
                         <Typography variant="caption" sx={{ display: 'block', mb: 1.5, lineHeight: 1.5 }}>
-                            This method can sign arbitrary data and may be used to authorize
-                            malicious actions. Only proceed if you fully trust this application.
+                            {t("walletconnect.dangerousSignWarning")}
                         </Typography>
                         <FormControlLabel
                             control={
@@ -955,7 +985,7 @@ function RequestDialog({
                             }
                             label={
                                 <Typography variant="caption" fontWeight={700} color="#dc2626">
-                                    I understand the risks
+                                    {t("walletconnect.understandRisks")}
                                 </Typography>
                             }
                         />
@@ -967,7 +997,7 @@ function RequestDialog({
                     <Paper elevation={0} sx={{ bgcolor: 'action.hover', p: 2, borderRadius: 2.5, mb: 2 }}>
                         {/* Value */}
                         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
-                            <Typography variant="body2" color="text.secondary" fontWeight={600}>Value</Typography>
+                            <Typography variant="body2" color="text.secondary" fontWeight={600}>{t("walletconnect.value")}</Typography>
                             <Typography variant="body1" fontWeight={800} sx={{ fontSize: '1.1rem' }}>
                                 {parseFloat(txValue).toFixed(6)} ETH
                             </Typography>
@@ -1019,7 +1049,7 @@ function RequestDialog({
                 {/* Insufficient Balance Warning */}
                 {balanceCheck && !balanceCheck.sufficient && (
                     <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>
-                        <Typography variant="body2" fontWeight={700}>Insufficient Balance</Typography>
+                        <Typography variant="body2" fontWeight={700}>{t("walletconnect.insufficientBalanceTitle")}</Typography>
                         <Typography variant="caption">
                             Balance: {parseFloat(balanceCheck.balance).toFixed(6)} ETH — Need: {parseFloat(balanceCheck.totalCost).toFixed(6)} ETH
                         </Typography>
@@ -1030,7 +1060,7 @@ function RequestDialog({
                 {isPersonalSign && decodedMessage && (
                     <Paper elevation={0} sx={{ bgcolor: 'action.hover', p: 2, borderRadius: 2, mb: 2 }}>
                         <Typography variant="caption" color="text.secondary" fontWeight={700} sx={{ textTransform: 'uppercase', display: 'block', mb: 1 }}>
-                            Message
+                            {t("walletconnect.message")}
                         </Typography>
                         <Typography
                             variant="body2"
@@ -1052,11 +1082,11 @@ function RequestDialog({
                 {isTypedData && typedDataPreview && (
                     <Paper elevation={0} sx={{ bgcolor: 'action.hover', p: 2, borderRadius: 2, mb: 2 }}>
                         <Typography variant="caption" color="text.secondary" fontWeight={700} sx={{ textTransform: 'uppercase', display: 'block', mb: 1 }}>
-                            Typed Data
+                            {t("walletconnect.typedData")}
                         </Typography>
                         {typedDataPreview.domain && (
                             <Box sx={{ mb: 1 }}>
-                                <Typography variant="caption" color="text.secondary">Domain: {typedDataPreview.domain.name || "Unknown"}</Typography>
+                                <Typography variant="caption" color="text.secondary">{t("walletconnect.domainLabel")}: {typedDataPreview.domain.name || t("walletconnect.unknown")}</Typography>
                             </Box>
                         )}
                         <pre style={{
@@ -1081,7 +1111,7 @@ function RequestDialog({
                         endIcon={showRawData ? <ExpandLessIcon /> : <ExpandMoreIcon />}
                         sx={{ fontSize: '0.75rem', color: 'text.secondary', textTransform: 'none', fontWeight: 600 }}
                     >
-                        Raw Data
+                        {t("walletconnect.rawData")}
                     </Button>
                     <Collapse in={showRawData}>
                         <Paper elevation={0} sx={{ p: 1.5, borderRadius: 2, bgcolor: '#f5f5f5', mt: 0.5 }}>
@@ -1117,14 +1147,14 @@ function RequestDialog({
                         textTransform: 'none',
                     }}
                 >
-                    Reject
+                    {t("walletconnect.reject")}
                 </Button>
                 <Tooltip
                     title={
-                        !isChainSupported ? "Unsupported chain" :
-                            (isDangerousSign && !riskAccepted) ? "Accept risks first" :
+                        !isChainSupported ? t("walletconnect.unsupportedChain") :
+                            (isDangerousSign && !riskAccepted) ? t("walletconnect.acceptRisksFirst") :
                                 (isDangerousSign && countdown > 0) ? `Wait ${countdown}s` :
-                                    (balanceCheck && !balanceCheck.sufficient) ? "Insufficient balance" :
+                                    (balanceCheck && !balanceCheck.sufficient) ? t("walletconnect.insufficientBalance") :
                                         ""
                     }
                     arrow

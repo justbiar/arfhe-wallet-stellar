@@ -198,6 +198,7 @@ export default function Settings() {
                         Arfhe Wallet {t('settings.version')} {APP_VERSION}
                     </Typography>
                 </Box>
+
             </Container>
 
 

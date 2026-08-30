@@ -48,6 +48,7 @@ import {
 } from "@mui/icons-material";
 
 import { WalletContext } from "../AppContext.js";
+import HuntMark from '../components/HuntMark';
 import { ActiveAccountContext } from "../ActiveAccountProvider.js";
 import ShieldPanel, { type ShieldFocusRequest } from "../components/panels/ShieldPanel.js";
 import { getExplorerBaseForNetwork } from "../components/panels/shared.js";
@@ -611,6 +612,12 @@ export default function Privacy() {
           </Paper>
         </>
       )}
+
+      {/* Treasure hunt — 3 of 3. */}
+      <Box sx={{ display: "flex", justifyContent: "center", mt: 3 }}>
+        <HuntMark reveal="5. clog   6. armor" hint="Arfhe" onlyIn="dark" />
+      </Box>
+
     </Box>
   );
 }

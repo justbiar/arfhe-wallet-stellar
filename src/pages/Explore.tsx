@@ -288,6 +288,7 @@ const Explore = () => {
                         </Typography>
                     </Box>
                 )}
+            
             </Container>
 
             {/* ── WalletConnect Dialog ── */}

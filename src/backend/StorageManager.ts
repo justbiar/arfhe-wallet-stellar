@@ -56,6 +56,19 @@ function generateIV(): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(12));
 }
 
+/**
+ * The salt is handed to WebCrypto as the Uint8Array VIEW, never as `salt.buffer`.
+ *
+ * `.buffer` throws away byteOffset and byteLength, so a view over part of a larger buffer
+ * would derive from the wrong bytes — silently, and with a key that still looks valid until
+ * a decrypt somewhere else fails. Today's salts are always whole freshly-allocated arrays,
+ * which is why nothing has broken; that is a property of the callers, not a guarantee.
+ *
+ * It also crossed a realm boundary under the test environment: jsdom's ArrayBuffer is not
+ * Node's, so `salt.buffer` failed the WebCrypto BufferSource check with "not instance of
+ * ArrayBuffer, Buffer, TypedArray, or DataView" and took every encryption test down with it.
+ * A TypedArray view passes that check in both realms.
+ */
 /** Derive an AES-GCM CryptoKey from a password + salt using PBKDF2 */
 async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
   const encoder = new TextEncoder();
@@ -70,7 +83,7 @@ async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey>
   return crypto.subtle.deriveKey(
     {
       name: "PBKDF2",
-      salt: salt.buffer as ArrayBuffer,
+      salt: salt as BufferSource,
       iterations: PBKDF2_ITERATIONS,
       hash: "SHA-256",
     },
@@ -95,7 +108,7 @@ async function hashPassword(password: string, salt: Uint8Array): Promise<string>
   const bits = await crypto.subtle.deriveBits(
     {
       name: "PBKDF2",
-      salt: salt.buffer as ArrayBuffer,
+      salt: salt as BufferSource,
       iterations: PBKDF2_ITERATIONS,
       hash: "SHA-256",
     },

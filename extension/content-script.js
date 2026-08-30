@@ -129,6 +129,12 @@ function connect() {
     });
 
     port.onDisconnect.addListener(() => {
+        // Reading this — even to discard it — marks the error as handled. Otherwise Chrome
+        // logs "Unchecked runtime.lastError" on every disconnect this listener didn't
+        // explicitly acknowledge, including the routine one where the tab this port lived on
+        // is moved into the back/forward cache. That disconnect is expected (see connect()'s
+        // docs) and carries no information the reconnect logic below needs.
+        void chrome.runtime.lastError;
         port = null;
         // The worker was torn down (extension reload, update, idle shutdown). Anything
         // still waiting will never be answered, and a promise that never settles leaves

@@ -39,19 +39,31 @@ import {
     DeleteSweep,
     Close,
     Circle,
+    Shield,
+    Settings as SettingsIcon,
 } from "@mui/icons-material";
 import { useTranslation } from "react-i18next";
 import { NotificationService, WalletNotification, NotificationPreferences } from "../backend/NotificationService.js";
 
 // ─── Notification Icon Map ──────────────────────────────────────────
+//
+// Flat glyphs in the wallet's own accent/error/warning tokens, not stock Material colors —
+// a hardcoded #4caf50 stays the same shade of green in both themes, which clashes with the
+// neon-mint dark palette and reads as a foreign design system next to it. Confidential
+// transfers get their own Shield glyph (the wallet used to lean on a 🛡️ emoji embedded in
+// the title string for that distinction; an emoji in a monospace/bordered UI looks like a
+// different app pasted a sticker in, so the distinction now lives here instead).
 
-function getNotifIcon(type: WalletNotification["type"]) {
-    switch (type) {
-        case "incoming_tx": return <CallReceived sx={{ color: "#4caf50" }} />;
-        case "tx_confirmed": return <CheckCircle sx={{ color: "#4caf50" }} />;
-        case "tx_failed": return <ErrorIcon sx={{ color: "#f44336" }} />;
-        case "approval_warning": return <Warning sx={{ color: "#ff9800" }} />;
-        case "security": return <Warning sx={{ color: "#f44336" }} />;
+function getNotifIcon(notif: WalletNotification) {
+    switch (notif.type) {
+        case "incoming_tx":
+            return notif.title.includes("Confidential")
+                ? <Shield sx={{ color: "primary.main" }} />
+                : <CallReceived sx={{ color: "primary.main" }} />;
+        case "tx_confirmed": return <CheckCircle sx={{ color: "primary.main" }} />;
+        case "tx_failed": return <ErrorIcon sx={{ color: "error.main" }} />;
+        case "approval_warning": return <Warning sx={{ color: "warning.main" }} />;
+        case "security": return <Warning sx={{ color: "error.main" }} />;
         default: return <Notifications sx={{ color: "text.secondary" }} />;
     }
 }
@@ -188,10 +200,11 @@ function NotificationPanel() {
                     <Button
                         size="small"
                         variant="text"
+                        startIcon={<SettingsIcon sx={{ fontSize: 16 }} />}
                         onClick={() => setShowSettings(!showSettings)}
                         sx={{ textTransform: "none", fontSize: "0.75rem", color: "text.secondary" }}
                     >
-                        ⚙️ {showSettings ? "Hide Settings" : "Settings"}
+                        {showSettings ? "Hide Settings" : "Settings"}
                     </Button>
                 </Box>
 
@@ -238,7 +251,7 @@ function NotificationPanel() {
                                 }}
                             >
                                 <ListItemIcon sx={{ minWidth: 36 }}>
-                                    {getNotifIcon(notif.type)}
+                                    {getNotifIcon(notif)}
                                 </ListItemIcon>
                                 <ListItemText
                                     primary={

@@ -262,14 +262,16 @@ const Explore = () => {
                     </Box>
                 )}
 
-                {/* ── dApp Grid ── */}
+                {/* ── dApp Grid ──
+                    `auto-fill` against a minimum, not xs/sm/md breakpoints. Those read the
+                    *window* width, while this content is capped at 400px by `#root` — so
+                    opening the wallet in a tab made MUI report `md` and lay out three
+                    columns inside 400px, squeezing each card's text to about 100px. The
+                    name and description were clipped to a couple of letters.
+                    A track minimum answers to the space the cards actually have. */}
                 <Box sx={{
                     display: 'grid',
-                    gridTemplateColumns: {
-                        xs: 'repeat(1, 1fr)',
-                        sm: 'repeat(2, 1fr)',
-                        md: 'repeat(3, 1fr)',
-                    },
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
                     gap: 2,
                 }}>
                     {filteredDApps.map(dApp => (

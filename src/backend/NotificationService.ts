@@ -174,7 +174,12 @@ export class NotificationService {
             if (typeof chrome !== "undefined" && chrome.notifications) {
                 chrome.notifications.create(`arfhe_${Date.now()}`, {
                     type: "basic",
-                    iconUrl: iconUrl || "images/icon48.png",
+                    // Extension root, not `images/` — icon48.png is copied to the top level
+                    // by the manifest's own icon set. Chrome resolves a notification's
+                    // iconUrl against the extension root, and a path that resolves to
+                    // nothing rejects the whole call with "Unable to download all
+                    // specified images", so the notification never appears at all.
+                    iconUrl: iconUrl || "icon48.png",
                     title,
                     message,
                     priority: 1,

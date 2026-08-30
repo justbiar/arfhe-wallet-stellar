@@ -109,6 +109,28 @@ document.addEventListener('visibilitychange', () => {
     }
 });
 
+/**
+ * Restored from the back/forward cache.
+ *
+ * Freezing a page for bfcache tears down its extension port. `onDisconnect` already calls
+ * scheduleReconnect, but that attempt gives up without rescheduling while the document is
+ * hidden and waits on `visibilitychange` instead — so the reconnect depends on that event
+ * firing on restore. It normally does. This covers the case where it does not, at the cost
+ * of one redundant call, because the failure it guards against is silent: a page that came
+ * back looking connected while holding a dead channel would miss `accountsChanged` and
+ * `chainChanged` entirely and only find out when a request of its own failed.
+ *
+ * Belt and braces rather than a proven fix — a harness driving the disconnect could not
+ * distinguish this from the existing path, because it could not reproduce a hidden
+ * document. Kept because pressing Back is common and the guard costs nothing.
+ */
+window.addEventListener('pageshow', (e) => {
+    if (e.persisted && !port) {
+        reconnectDelay = 500;
+        scheduleReconnect();
+    }
+});
+
 function connect() {
     try {
         port = chrome.runtime.connect({ name: 'arfhe-provider' });

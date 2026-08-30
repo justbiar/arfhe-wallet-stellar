@@ -478,7 +478,7 @@ async function notifyTxConfirmed(tx, receipt) {
   try {
     chrome.notifications.create(`arfhe_tx_ok_${Date.now()}`, {
       type: "basic",
-      iconUrl: "images/icon48.png",
+      iconUrl: "icon48.png",
       title: "Transaction Confirmed",
       message: `${tx.value} ${tx.symbol} — ${shortHash(tx.hash)}`,
       priority: 2,
@@ -503,7 +503,7 @@ async function notifyTxFailed(tx) {
   try {
     chrome.notifications.create(`arfhe_tx_fail_${Date.now()}`, {
       type: "basic",
-      iconUrl: "images/icon48.png",
+      iconUrl: "icon48.png",
       title: "Transaction Failed",
       message: `${tx.value} ${tx.symbol} — ${shortHash(tx.hash)}`,
       priority: 2,
@@ -655,7 +655,7 @@ async function scanForIncomingTransfers() {
     try {
       chrome.notifications.create(`arfhe_in_batch_${Date.now()}`, {
         type: "basic",
-        iconUrl: "images/icon48.png",
+        iconUrl: "icon48.png",
         title: "Funds Received",
         message: `${arrivals.length} incoming transfers`,
         priority: 2,
@@ -732,7 +732,7 @@ async function notifyIncomingTransfer(transfer, chainId, isConfidential = false)
   try {
     chrome.notifications.create(`arfhe_in_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, {
       type: "basic",
-      iconUrl: "images/icon48.png",
+      iconUrl: "icon48.png",
       title: isConfidential ? "Confidential Transfer Received" : "Funds Received",
       message,
       priority: 2,
@@ -1209,7 +1209,7 @@ async function handleMessage(message) {
       try {
         chrome.notifications.create(`arfhe_${Date.now()}`, {
           type: "basic",
-          iconUrl: message.iconUrl || "images/icon48.png",
+          iconUrl: message.iconUrl || "icon48.png",
           title: message.title || "Arfhe Wallet",
           message: message.message || "",
           priority: message.priority || 1,
@@ -1224,7 +1224,7 @@ async function handleMessage(message) {
       try {
         chrome.notifications.create(`arfhe_tx_${Date.now()}`, {
           type: "basic",
-          iconUrl: "images/icon48.png",
+          iconUrl: "icon48.png",
           title: "Transaction Confirmed",
           message: `TX ${sh} confirmed on-chain`,
           priority: 2,
@@ -1237,7 +1237,7 @@ async function handleMessage(message) {
       try {
         chrome.notifications.create(`arfhe_txfail_${Date.now()}`, {
           type: "basic",
-          iconUrl: "images/icon48.png",
+          iconUrl: "icon48.png",
           title: "Transaction Failed",
           message: message.reason || "Transaction failed",
           priority: 2,
@@ -1611,11 +1611,8 @@ chrome.runtime.onConnect.addListener((port) => {
             response = { error: { code: RPC_ERR_REJECTED, message: e?.message ?? "Request failed" } };
         }
 
-        try {
-            port.postMessage({ id, ...response });
-        } catch {
-            // Page navigated away mid-request; the port is already gone.
-        }
+        // Page may have navigated away or been frozen mid-request; postToPort absorbs it.
+        postToPort(port, { id, ...response });
     });
 });
 
@@ -1659,22 +1656,49 @@ async function announceAccounts(origin, tabId) {
   }
 }
 
+/**
+ * Send on a provider port, tolerating a page that is no longer there to receive it.
+ *
+ * `postMessage` on a dead port does not reliably throw: when the page has been moved into
+ * the back/forward cache the failure surfaces asynchronously as `chrome.runtime.lastError`
+ * instead, which a try/catch cannot see. Left unread, Chrome logs
+ * "Unchecked runtime.lastError: The page keeping the extension port is moved into
+ * back/forward cache" on the extension's error page for every such send.
+ *
+ * That disconnect is routine — a user pressing Back freezes the page rather than closing
+ * it — so this reads the error to acknowledge it and drops the port. The page reconnects
+ * on restore (see content-script.js's `pageshow` handler), and a port kept in the set
+ * meanwhile is one every later broadcast would fail against again.
+ *
+ * @returns {boolean} whether the message was handed off.
+ */
+function postToPort(port, payload) {
+    try {
+        port.postMessage(payload);
+    } catch {
+        providerPorts.delete(port);
+        return false;
+    }
+    if (chrome.runtime.lastError) {
+        providerPorts.delete(port);
+        return false;
+    }
+    return true;
+}
+
 /** Push an EIP-1193 event to every connected page. */
 function broadcastEvent(event, data) {
-    for (const port of providerPorts) {
-        try {
-            port.postMessage({ event, data });
-        } catch { /* dropped port */ }
+    // Snapshot: postToPort may drop a port from the set as we walk it.
+    for (const port of [...providerPorts]) {
+        postToPort(port, { event, data });
     }
 }
 
 /** Push an event to the pages of one origin only. */
 function broadcastToOrigin(origin, event, data) {
-    for (const port of providerPorts) {
+    for (const port of [...providerPorts]) {
         if (port.__arfheOrigin !== origin) continue;
-        try {
-            port.postMessage({ event, data });
-        } catch { /* dropped port */ }
+        postToPort(port, { event, data });
     }
 }
 

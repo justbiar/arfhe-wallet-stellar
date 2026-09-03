@@ -30,7 +30,11 @@ const PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID ?? "";
 const METADATA = {
     name: "Arfhe Wallet",
     description: "Secure, Self-Custodial Arfhe Wallet",
-    url: "https://arfhewallet.com",
+    // arfhewallet.dev, not .com — the .com's nameservers have lapsed to a registrar park
+    // (NS1/NS2.DNS-EXPIRED.COM) and it serves nothing. This URL is the wallet's identity as
+    // shown to every dApp during a WalletConnect session, so pointing it at a dead domain
+    // asks users to trust a name that does not resolve.
+    url: "https://arfhewallet.dev",
     icons: ["https://avatars.githubusercontent.com/u/37784886"]
 };
 

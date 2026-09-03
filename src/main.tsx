@@ -5,7 +5,7 @@ if (typeof window !== 'undefined') {
   window.Buffer = window.Buffer || Buffer;
 }
 
-// WalletConnect's SDK compares our fixed brand `metadata.url` (https://arfhewallet.com, shown
+// WalletConnect's SDK compares our fixed brand `metadata.url` (https://arfhewallet.dev, shown
 // to dApps as the wallet's identity) against the page's actual URL and warns when they differ.
 // Inside a Chrome extension the page URL is always chrome-extension://<random-id>/... — it can
 // never match a real https:// domain, so this warning is guaranteed to fire on every session

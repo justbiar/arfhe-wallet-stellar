@@ -108,7 +108,7 @@ const TRUSTED_DOMAINS: Set<string> = new Set([
     "ens.domains",
     "app.ens.domains",
     "gnosis-safe.io",
-    "arfhewallet.com",
+    "arfhewallet.dev",
     "localhost",
     "127.0.0.1",
 ]);

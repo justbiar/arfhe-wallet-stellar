@@ -4,7 +4,7 @@
     "name": "Arfhe Wallet",
     "version": "1.0.0",
     "version_name": "1.0.0 (public testnet)",
-    "description": "Privacy-first FHE wallet with encrypted on-chain balances. Public testnet release — Sepolia, Base Sepolia and Arbitrum Sepolia. Do not use with mainnet funds.",
+    "description": "Privacy-first FHE wallet with encrypted on-chain balances. Public testnet build — do not use with mainnet funds.",
     "background": {
         "service_worker": "service-worker.js",
         "type": "module"

@@ -1,0 +1,257 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — Arfhe Wallet</title>
+<meta name="description" content="What Arfhe Wallet collects, what it does not, and where the data goes.">
+<style>
+  :root { --bone:#EFECE4; --ink:#242424; --muted:#78766F; --line:#D6D2C8; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bone); color:var(--ink);
+         font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif; }
+  main { max-width:760px; margin:0 auto; padding:56px 24px 96px; }
+  h1 { font-size:2rem; letter-spacing:.02em; margin:0 0 .3em; }
+  h2 { font-size:1.15rem; margin:2.4em 0 .6em; padding-top:.4em; border-top:1px solid var(--line); }
+  h3 { font-size:1rem; margin:1.6em 0 .4em; }
+  p,li { color:#33322F; }
+  strong { color:var(--ink); }
+  a { color:var(--ink); text-underline-offset:3px; }
+  hr { border:0; border-top:1px solid var(--line); margin:2em 0; }
+  table { border-collapse:collapse; width:100%; margin:1em 0; font-size:.94rem; display:block; overflow-x:auto; }
+  th,td { border:1px solid var(--line); padding:.55em .7em; text-align:left; vertical-align:top; }
+  th { background:rgba(0,0,0,.035); font-weight:700; }
+  code { background:rgba(0,0,0,.055); padding:.12em .38em; border-radius:3px; font-size:.9em; }
+  blockquote { margin:1em 0; padding:.2em 1em; border-left:3px solid var(--line); color:var(--muted); }
+  footer { margin-top:4em; padding-top:1.4em; border-top:1px solid var(--line); color:var(--muted); font-size:.87rem; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bone:#111214; --ink:#ECEAE4; --muted:#8C8A84; --line:#2A2C30; }
+    p,li { color:#C9C7C1; }
+    th { background:rgba(255,255,255,.04); }
+    code { background:rgba(255,255,255,.07); }
+  }
+</style>
+<main>
+<h1>Privacy Policy</h1>
+<p><strong>Arfhe Wallet</strong> — Privacy-first FHE-powered Crypto Wallet<br />
+<strong>Effective Date:</strong> March 8, 2026<br />
+<strong>Last Updated:</strong> September 2, 2026</p>
+<hr />
+<h2>1. Introduction</h2>
+<p>Arfhe Wallet ("we", "our", "the Extension") is an open-source Chrome browser extension that provides a self-custodial cryptocurrency wallet with Fully Homomorphic Encryption (FHE) privacy features.</p>
+<p>This Privacy Policy explains what data Arfhe Wallet collects, how it is used, and your rights regarding your information.</p>
+<h2>2. Data We Do NOT Collect</h2>
+<ul>
+<li>❌ <strong>No names, emails or phone numbers</strong> — We never ask for them, and social sign-in does not pass your email address to us.</li>
+<li>❌ <strong>No private keys or recovery phrases</strong> — These never leave your device in any form.</li>
+<li>❌ <strong>No analytics or tracking SDK</strong> — No Google Analytics, Mixpanel, PostHog, Sentry or similar. There is no session recording and no advertising network.</li>
+<li>❌ <strong>No cookies</strong> — The Extension does not set or read browser cookies.</li>
+<li>❌ <strong>No browsing history</strong> — We do not monitor, collect, or transmit the pages you visit.</li>
+<li>❌ <strong>No transaction amounts</strong> — Our servers never receive how much you sent, shielded or unshielded, nor who you sent it to.</li>
+</ul>
+<h2>2a. Data We DO Collect</h2>
+<p>We collect a small amount of pseudonymous data on infrastructure operated by ArfDAO. This
+section is deliberately specific, because a privacy policy that claims to collect nothing
+while the software collects something is worse than one that collects more and says so.</p>
+<table>
+<thead>
+<tr>
+<th>What</th>
+<th>When</th>
+<th>Sent to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Your wallet address</td>
+<td>Once, when a wallet is created or imported</td>
+<td><code>/users/register</code></td>
+</tr>
+<tr>
+<td>How that wallet was created — one of <code>google</code>, <code>created</code>, <code>mnemonic</code>, <code>private_key</code></td>
+<td>Same request</td>
+<td><code>/users/register</code></td>
+</tr>
+<tr>
+<td>That an action of type <code>send</code>, <code>shield</code> or <code>unshield</code> occurred, and when</td>
+<td>Each time you complete one</td>
+<td><code>/activity/log</code></td>
+</tr>
+</tbody>
+</table>
+<p>That is the whole record. <strong>No amount, no recipient, no token, no transaction hash and no
+balance</strong> is accepted or stored by either endpoint. The purpose is to understand how many
+wallets exist and roughly how actively the product is used.</p>
+<p>A wallet address is a public identifier, but it is persistent and unique to you, and our
+servers necessarily see the IP address any request arrives from. We therefore treat this as
+personally identifiable information rather than pretending it is anonymous.</p>
+<p>If you use the built-in AI assistant, the messages you type — and the wallet context needed
+to answer them, such as balances and account addresses — are sent to our proxy and from
+there to OpenRouter, which routes them to a language model. Do not type anything into the
+assistant that you would not want a third-party model provider to process. The assistant
+never receives your private key or recovery phrase.</p>
+<h2>3. Data Stored Locally</h2>
+<p>Wallet data — keys, accounts, settings, caches — is stored <strong>on your device</strong> using the Chrome <code>storage.local</code> API. None of the following is transmitted anywhere:</p>
+<table>
+<thead>
+<tr>
+<th>Data</th>
+<th>Purpose</th>
+<th>Storage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Encrypted private keys &amp; mnemonics</td>
+<td>Wallet access</td>
+<td>AES-256-GCM encrypted, local only</td>
+</tr>
+<tr>
+<td>Account addresses</td>
+<td>Display &amp; transaction building</td>
+<td>Local only</td>
+</tr>
+<tr>
+<td>Token balances &amp; transaction history</td>
+<td>UI display</td>
+<td>Local cache, fetched from public blockchains</td>
+</tr>
+<tr>
+<td>User preferences (theme, language, networks)</td>
+<td>UI customization</td>
+<td>Local only</td>
+</tr>
+<tr>
+<td>Contact book entries</td>
+<td>Address book</td>
+<td>Local only</td>
+</tr>
+<tr>
+<td>Auto-lock timer settings</td>
+<td>Security</td>
+<td>Local only</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Important:</strong> Your private keys and recovery phrases are encrypted with AES-256-GCM using a key derived from your password via PBKDF2 (100,000 iterations, SHA-256). They never leave your device in unencrypted form.</p>
+<h2>4. Network Communications</h2>
+<p>Arfhe Wallet communicates with the following external services <strong>only to provide wallet functionality</strong>:</p>
+<h3>4.1 Blockchain RPC Providers</h3>
+<ul>
+<li><strong>Alchemy</strong> (<code>*.alchemy.com</code>) — To read blockchain state and broadcast transactions</li>
+<li><strong>Public RPC endpoints</strong> — For custom networks added by the user</li>
+</ul>
+<p><strong>Data sent:</strong> Wallet addresses, transaction data (when you initiate a transaction)<br />
+<strong>Purpose:</strong> Core wallet operations (balance queries, transaction broadcasting)</p>
+<h3>4.2 Price &amp; Token Data</h3>
+<ul>
+<li><strong>CoinGecko API</strong> — Token price data</li>
+<li><strong>Alchemy NFT API</strong> — NFT metadata</li>
+</ul>
+<p><strong>Data sent:</strong> Token contract addresses, wallet addresses<br />
+<strong>Purpose:</strong> Displaying portfolio values and NFT collections</p>
+<h3>4.3 WalletConnect (Optional)</h3>
+<ul>
+<li><strong>WalletConnect relay servers</strong> — Only when the user explicitly connects to a dApp</li>
+</ul>
+<p><strong>Data sent:</strong> Session metadata, transaction requests<br />
+<strong>Purpose:</strong> dApp connectivity (user-initiated only)</p>
+<h3>4.4 ArfDAO Backend (Usage Record)</h3>
+<ul>
+<li><strong>ArfDAO backend</strong> — Receives the pseudonymous record described in Section 2a</li>
+</ul>
+<p><strong>Data sent:</strong> Wallet address; how the wallet was created; that a send/shield/unshield happened, and when
+<strong>Purpose:</strong> Counting wallets and measuring how actively the product is used
+<strong>Never sent:</strong> Amounts, recipients, token identities, transaction hashes, balances</p>
+<h3>4.5 AI Assistant (Optional, user-initiated)</h3>
+<ul>
+<li><strong>ArfDAO agent proxy → OpenRouter</strong> — Only when you send a message to the assistant</li>
+</ul>
+<p><strong>Data sent:</strong> Your message, the conversation, and wallet context needed to answer it (balances, account addresses, network)
+<strong>Purpose:</strong> Generating the assistant's reply
+<strong>Never sent:</strong> Private keys, recovery phrases. The assistant cannot sign or broadcast anything; it can only propose an action for you to approve.</p>
+<h3>4.6 Fhenix FHE Network (Optional)</h3>
+<ul>
+<li><strong>Fhenix Sepolia RPC</strong> — For FHE shield/unshield operations</li>
+</ul>
+<p><strong>Data sent:</strong> Encrypted transaction data<br />
+<strong>Purpose:</strong> Fully Homomorphic Encryption operations</p>
+<h3>4.5 Phishing Protection</h3>
+<ul>
+<li><strong>MetaMask phishing list</strong> (fetched from GitHub) — Domain blocklist</li>
+</ul>
+<p><strong>Data sent:</strong> None (the list is downloaded, not your browsing data)<br />
+<strong>Purpose:</strong> Protecting users from known phishing sites</p>
+<h2>5. Permissions</h2>
+<p>The Extension requests the following Chrome permissions:</p>
+<table>
+<thead>
+<tr>
+<th>Permission</th>
+<th>Reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>storage</code></td>
+<td>Store encrypted wallet data locally</td>
+</tr>
+<tr>
+<td><code>notifications</code></td>
+<td>Transaction confirmations and security alerts</td>
+</tr>
+<tr>
+<td><code>alarms</code></td>
+<td>Auto-lock timer functionality</td>
+</tr>
+<tr>
+<td><code>scripting</code></td>
+<td>DApp interaction via content scripts</td>
+</tr>
+<tr>
+<td><code>host_permissions (http/https)</code></td>
+<td>Communicate with blockchain RPC providers</td>
+</tr>
+</tbody>
+</table>
+<h2>6. Third-Party Services</h2>
+<p>We do not sell or rent your data, and we do not share it for advertising or profiling. Data reaches the service providers listed below only as needed to operate the wallet — including OpenRouter, which processes assistant messages (Section 4.5). The blockchain RPC providers listed in Section 4 may have their own privacy policies:</p>
+<ul>
+<li><a href="https://www.alchemy.com/policies/privacy-policy">Alchemy Privacy Policy</a></li>
+<li><a href="https://www.coingecko.com/en/privacy">CoinGecko Privacy Policy</a></li>
+<li><a href="https://walletconnect.com/privacy">WalletConnect Privacy Policy</a></li>
+</ul>
+<h2>7. Data Retention &amp; Deletion</h2>
+<p><strong>On your device.</strong> You can delete everything the Extension stores at any time by removing
+it from Chrome, or by clearing its data from <code>chrome://extensions</code>. This erases the encrypted
+vault along with it — if you have no backup of your recovery phrase, the wallet is gone with
+it, and we cannot restore it for you.</p>
+<p><strong>On our servers.</strong> The pseudonymous record described in Section 2a is retained while the
+product is operated. To have the rows for your wallet address deleted, write to the contact
+address in Section 12 with the address in question. Because the record contains no name or
+email, the wallet address is the only way we can identify what to delete.</p>
+<h2>8. Children's Privacy</h2>
+<p>Arfhe Wallet is not intended for use by individuals under the age of 18. We do not knowingly collect data from minors.</p>
+<h2>9. Security</h2>
+<ul>
+<li>Private keys are encrypted with <strong>AES-256-GCM</strong> (PBKDF2-derived key, 600,000 iterations)</li>
+<li>All sensitive operations require password authentication</li>
+<li>Auto-lock functionality secures the wallet after inactivity</li>
+<li>Open-source codebase for community audit</li>
+<li>See our <a href="SECURITY.md">Security Policy</a> for vulnerability reporting</li>
+</ul>
+<h2>10. Open Source</h2>
+<p>Arfhe Wallet is licensed under the MIT License. The repository is at
+<strong>https://github.com/ArfDAO/ArfheWallet</strong>.</p>
+<p>It is private at the time of writing, so this link will not open for everyone yet. This
+section will be updated when the source is published, rather than describing the software as
+publicly auditable before it actually is.</p>
+<h2>11. Changes to This Policy</h2>
+<p>We may update this Privacy Policy from time to time. Changes will be reflected in the "Last Updated" date above and published in the GitHub repository.</p>
+<h2>12. Contact</h2>
+<p>For privacy-related questions or concerns:</p>
+<ul>
+<li><strong>GitHub:</strong> <a href="https://github.com/ArfDAO/ArfheWallet">github.com/ArfDAO/ArfheWallet</a></li>
+<li><strong>Email:</strong> privacy@arfdao.dev</li>
+</ul>
+<footer>Arfhe Wallet is built by ArfDAO. This page is the canonical version of the policy;
+the same text is kept in <code>PRIVACY_POLICY.md</code> in the repository.</footer>
+</main>

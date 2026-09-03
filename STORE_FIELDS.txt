@@ -1,0 +1,69 @@
+======================================================================
+Host permission justification  [989/1000]
+======================================================================
+
+Arfhe Wallet is an Ethereum wallet, and host access is what makes it one.
+
+Two uses:
+
+1. Blockchain nodes. The wallet reads balances and submits signed transactions over JSON-RPC to Ethereum node providers, and connects to the WalletConnect relay over a WebSocket (wss://relay.walletconnect.org). Users may also point the wallet at their own node, whose address cannot be known in advance, so the pattern cannot be reduced to a fixed list.
+
+2. Announcing the wallet to pages. A content script runs on web pages so a dApp can discover the wallet via the EIP-6963 standard and request a connection. Any site may be a dApp, so it must be able to run anywhere. It injects only a provider object: it does not read page content, does not modify pages, and transmits nothing until the user explicitly approves a connection for that specific site.
+
+No data is collected from visited pages. A site receives only the addresses the user approves for it, and that grant is revocable inside the wallet.
+
+======================================================================
+Remote code justification (if you answer Yes)  [838/1000]
+======================================================================
+
+The extension ships all of its own code: every JavaScript file and the FHE WebAssembly module are inside the package, and the manifest CSP is script-src 'self' 'wasm-unsafe-eval', which permits no remote script origin.
+
+This is declared as Yes only because two bundled third-party libraries contain eval-style constructs, which we do not want to under-report:
+- wasm-bindgen glue exposes new Function() so the local .wasm module can create a callback (assets/fhe-*.js, tfhe-*.js);
+- a Node-compatibility shim in a hashing dependency contains eval("require('crypto')"), a branch not taken in a browser (assets/unstoppable-*.js);
+- vm-browserify, pulled in by the Node polyfill layer, defines runInThisContext.
+
+None of these fetch or evaluate code from a server. Network access is used for data only: RPC responses, token prices and icons.
+
+======================================================================
+Storage justification  [760/1000]
+======================================================================
+
+Used to store the wallet itself: the encrypted key vault, account names, network and language preferences, cached token metadata, and the list of sites the user has granted access to.
+
+chrome.storage.local holds the encrypted vault and settings. chrome.storage.session holds the derived encryption key only while the wallet is unlocked, so it is discarded when the browser session ends rather than persisting to disk.
+
+Private keys are never stored in plaintext: they are encrypted with a key derived from the user's password via PBKDF2 (100,000 iterations, SHA-256) and sealed with AES-GCM. Nothing here is transmitted anywhere.
+
+Without this permission the wallet could not remember an account between popup openings, which is the same as not being a wallet.
+
+======================================================================
+Alarms justification  [572/1000]
+======================================================================
+
+Chrome stops the background service worker when it is idle, and alarms are the supported way to schedule work that must survive that. Four recurring jobs use them:
+
+- watching a transaction the user already submitted, so its confirmation or failure can be reported instead of leaving the user guessing;
+- scanning for incoming transfers to the user's own addresses;
+- keeping the toolbar badge count accurate;
+- retrying a queued request that failed while the browser was offline.
+
+No alarm transmits user data. Each one reads public chain state or updates local UI state.
+
+======================================================================
+Notifications justification  [446/1000]
+======================================================================
+
+Used only to report events about the user's own accounts: a transaction they submitted was confirmed, a transaction they submitted failed, or funds arrived at one of their addresses.
+
+Notifications fire only for accounts held in this wallet and carry no marketing, promotional or third-party content.
+
+A wallet that cannot report the outcome of a transaction the user just signed leaves them refreshing a block explorer to find out what happened.
+
+======================================================================
+Single purpose description  [456/1000]
+======================================================================
+
+Arfhe Wallet is a self-custodial Ethereum wallet. Its single purpose is to let a person hold keys, view balances, and sign transactions on the Ethereum test networks it supports, including confidential FHE-encrypted token balances, which is the feature that distinguishes it from an ordinary wallet.
+
+Every part of the extension serves that one purpose: creating or importing an account, reading balances, connecting to a site, and approving a transaction.

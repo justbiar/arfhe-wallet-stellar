@@ -78,8 +78,8 @@ You agree NOT to use Arfhe Wallet for:
 
 ### 6.1 Open Source License
 
-Arfhe Wallet is open-source software licensed under the **MIT License**. The source code is available at:  
-**https://github.com/ArfDAO/ArfheWallet**
+Arfhe Wallet is licensed under the **MIT License**. The source repository is not public at
+the time of writing; this section will name it once the source is published.
 
 ### 6.2 Trademarks
 
@@ -141,5 +141,4 @@ If any provision of these Terms is found to be unenforceable, the remaining prov
 
 For questions about these Terms:
 
-- **GitHub:** [github.com/ArfDAO/ArfheWallet](https://github.com/ArfDAO/ArfheWallet)
 - **Email:** arfhewallet@protonmail.com

@@ -156,22 +156,26 @@ Arfhe Wallet is not intended for use by individuals under the age of 18. We do n
 - Open-source codebase for community audit
 - See our [Security Policy](SECURITY.md) for vulnerability reporting
 
-## 10. Open Source
+## 10. Licence and Source Availability
 
-Arfhe Wallet is licensed under the MIT License. The repository is at
-**https://github.com/ArfDAO/ArfheWallet**.
+Arfhe Wallet is licensed under the MIT License.
 
-It is private at the time of writing, so this link will not open for everyone yet. This
-section will be updated when the source is published, rather than describing the software as
-publicly auditable before it actually is.
+The source repository is not public at the time of writing, so this policy deliberately links
+to no repository: a link that returns "404" to everyone who clicks it is worse than none, and
+we would rather not imply the software is publicly auditable before it is. This section will
+name the repository once it is published.
 
 ## 11. Changes to This Policy
 
-We may update this Privacy Policy from time to time. Changes will be reflected in the "Last Updated" date above and published in the GitHub repository.
+We may update this Privacy Policy from time to time. The current version is always the one
+published at **https://arfhewallet.dev/privacy**, and the "Last Updated" date above says when
+it last changed. Material changes will also be noted in the extension's Chrome Web Store
+listing.
 
 ## 12. Contact
 
 For privacy-related questions or concerns:
 
-- **GitHub:** [github.com/ArfDAO/ArfheWallet](https://github.com/ArfDAO/ArfheWallet)
 - **Email:** arfhewallet@protonmail.com
+
+This is also the address to write to for the deletion request described in Section 7.

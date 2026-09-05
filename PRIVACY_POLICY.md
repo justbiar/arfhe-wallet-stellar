@@ -174,4 +174,4 @@ We may update this Privacy Policy from time to time. Changes will be reflected i
 For privacy-related questions or concerns:
 
 - **GitHub:** [github.com/ArfDAO/ArfheWallet](https://github.com/ArfDAO/ArfheWallet)
-- **Email:** privacy@arfdao.dev
+- **Email:** arfhewallet@protonmail.com

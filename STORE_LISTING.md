@@ -39,4 +39,4 @@ https://arfhewallet.dev/privacy
 
 ── CONTACT ──
 Arfhe Wallet is built by ArfDAO — https://www.arfdao.dev
-Security reports: security@arfdao.dev
+Contact and security reports: arfhewallet@protonmail.com

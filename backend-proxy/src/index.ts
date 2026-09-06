@@ -41,6 +41,8 @@ export interface Env {
   OPENROUTER_API_KEY: string;
   /** Exact `chrome-extension://<id>` origin allowed to call this proxy. Set in wrangler.toml [vars]. */
   ALLOWED_ORIGIN: string;
+  /** Exact arfhewallet.dev origin allowed to call GET /api/tasks and GET /api/user-tasks/:x_user_id via CORS. Set in wrangler.toml [vars]. */
+  SITE_ORIGIN?: string;
   /** Requests allowed per IP per 60s. Optional; defaults to 20 if unset/unparseable. */
   RATE_LIMIT_PER_MINUTE?: string;
   RATE_LIMIT_KV: KVNamespace;
@@ -58,6 +60,13 @@ export interface Env {
   USERS_DB: D1Database;
   /** Cloudflare Worker secret — set via `wrangler secret put ADMIN_SECRET`, never a var. Gates GET /admin/*. */
   ADMIN_SECRET?: string;
+  /**
+   * Cloudflare Worker secret — set via `wrangler secret put INTERNAL_API_SECRET`, never a var.
+   * Shared secret the arfhewallet.dev site sends as `X-Internal-Secret` on POST /api/x-login
+   * and POST /api/user-tasks, so only our own site's backend (not an arbitrary browser) can
+   * create x_users rows or submit task completions. See isAuthorizedInternal.
+   */
+  INTERNAL_API_SECRET?: string;
 }
 
 const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
@@ -99,6 +108,28 @@ function buildCorsHeaders(origin: string | null, env: Env): HeadersInit | null {
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    Vary: "Origin",
+  };
+}
+
+/**
+ * Same pattern as buildCorsHeaders, but for the arfhewallet.dev site's own origin rather than
+ * the extension's — gates the two public, browser-facing GET routes (GET /api/tasks, GET
+ * /api/user-tasks/:x_user_id). GET-only: unlike the extension's POST-only surface, nothing
+ * behind this CORS check ever mutates data, so there's no method to allow beyond GET/OPTIONS.
+ * POST /api/x-login and POST /api/user-tasks are deliberately NOT covered by this — they're
+ * called server-to-server (the site's Vercel backend, with X-Internal-Secret), never from a
+ * browser, so they carry no CORS headers at all.
+ */
+function buildSiteCorsHeaders(origin: string | null, env: Env): HeadersInit | null {
+  if (!origin || !env.SITE_ORIGIN) return null;
+  const bareOrigin = env.SITE_ORIGIN.replace("https://www.", "https://");
+  const allowedOrigins = new Set([bareOrigin, bareOrigin.replace("https://", "https://www.")]);
+  if (!allowedOrigins.has(origin)) return null;
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
     Vary: "Origin",
   };
@@ -452,6 +483,221 @@ async function handleActivityLog(request: Request, env: Env, cors: HeadersInit):
     .run();
 
   return jsonResponse({ ok: true }, 200, cors);
+}
+
+// ─── X (Twitter) login + task tracking ───────────────────────────────
+//
+// arfhewallet.dev site backend calls these — not the wallet extension — so they are gated by
+// a shared secret (X-Internal-Secret) instead of the extension-origin CORS check, and are not
+// subject to the extension's per-IP rate limiter. See migrations/0004_create_x_tasks.sql.
+
+const USER_TASK_STATUSES = ["pending", "approved", "rejected"] as const;
+type UserTaskStatus = (typeof USER_TASK_STATUSES)[number];
+
+interface XUserRow {
+  id: number;
+  x_username: string;
+  x_user_id: string;
+  created_at: string;
+}
+
+interface TaskRow {
+  id: number;
+  title: string;
+  description: string | null;
+  active: number;
+  created_at: string;
+}
+
+/**
+ * `X-Internal-Secret: <INTERNAL_API_SECRET>` gate for POST /api/x-login and POST
+ * /api/user-tasks. Deliberately a distinct secret from ADMIN_SECRET: this one is held by the
+ * site's own backend (a server-to-server call), not typed in by a human operator.
+ */
+function isAuthorizedInternal(request: Request, env: Env): boolean {
+  if (!env.INTERNAL_API_SECRET) return false;
+  return request.headers.get("X-Internal-Secret") === env.INTERNAL_API_SECRET;
+}
+
+interface XLoginRequestBody {
+  x_username: string;
+  x_user_id: string;
+}
+
+function parseXLoginBody(raw: unknown): XLoginRequestBody {
+  if (typeof raw !== "object" || raw === null) {
+    throw new Error("Request body must be a JSON object.");
+  }
+  const body = raw as Record<string, unknown>;
+
+  if (typeof body.x_username !== "string" || !body.x_username.trim()) {
+    throw new Error('"x_username" must be a non-empty string.');
+  }
+  if (typeof body.x_user_id !== "string" || !body.x_user_id.trim()) {
+    throw new Error('"x_user_id" must be a non-empty string.');
+  }
+
+  return { x_username: body.x_username, x_user_id: body.x_user_id };
+}
+
+/**
+ * Looks up x_users by x_user_id (X's immutable id, not the mutable username) and inserts a
+ * row on first sight. `ON CONFLICT(x_user_id) DO NOTHING` makes this race-safe: two concurrent
+ * logins from the same X account never produce two rows or a thrown error. A UNIQUE violation
+ * can still surface if x_username collides across two *different* x_user_id values — treated
+ * as a 409 rather than a 500 since it's a legitimate (if rare) data conflict, not a bug.
+ */
+async function handleXLogin(request: Request, env: Env, cors: HeadersInit | undefined): Promise<Response> {
+  let body: XLoginRequestBody;
+  try {
+    body = parseXLoginBody(await request.json());
+  } catch (err) {
+    return jsonResponse({ error: err instanceof Error ? err.message : "Invalid request body." }, 400, cors);
+  }
+
+  const now = new Date().toISOString();
+  try {
+    await env.USERS_DB.prepare(
+      `INSERT INTO x_users (x_username, x_user_id, created_at)
+       VALUES (?1, ?2, ?3)
+       ON CONFLICT(x_user_id) DO NOTHING`
+    )
+      .bind(body.x_username, body.x_user_id, now)
+      .run();
+  } catch (err) {
+    return jsonResponse(
+      { error: "x_username is already associated with a different X account." },
+      409,
+      cors
+    );
+  }
+
+  const row = await env.USERS_DB.prepare(
+    `SELECT id, x_username, x_user_id, created_at FROM x_users WHERE x_user_id = ?1`
+  )
+    .bind(body.x_user_id)
+    .first<XUserRow>();
+
+  return jsonResponse(row, 200, cors);
+}
+
+/** GET /api/tasks — public, no secret: the active task list is what the site shows every visitor. */
+async function handleTasksList(env: Env, cors: HeadersInit | undefined): Promise<Response> {
+  const { results } = await env.USERS_DB.prepare(
+    `SELECT id, title, description, active, created_at FROM tasks WHERE active = 1 ORDER BY created_at ASC`
+  ).all<TaskRow>();
+  return jsonResponse(results ?? [], 200, cors);
+}
+
+interface UserTaskSubmitRequestBody {
+  x_user_id: string;
+  task_id: number;
+}
+
+function parseUserTaskSubmitBody(raw: unknown): UserTaskSubmitRequestBody {
+  if (typeof raw !== "object" || raw === null) {
+    throw new Error("Request body must be a JSON object.");
+  }
+  const body = raw as Record<string, unknown>;
+
+  if (typeof body.x_user_id !== "string" || !body.x_user_id.trim()) {
+    throw new Error('"x_user_id" must be a non-empty string.');
+  }
+  if (typeof body.task_id !== "number" || !Number.isInteger(body.task_id)) {
+    throw new Error('"task_id" must be an integer.');
+  }
+
+  return { x_user_id: body.x_user_id, task_id: body.task_id };
+}
+
+/**
+ * Inserts one 'pending' user_tasks row. The (user_id, task_id) UNIQUE constraint (see
+ * migrations/0004_create_x_tasks.sql) is what actually enforces "submit once" — this handler
+ * just translates that constraint violation into a 409 instead of a raw D1 error.
+ */
+async function handleUserTaskSubmit(request: Request, env: Env, cors: HeadersInit | undefined): Promise<Response> {
+  let body: UserTaskSubmitRequestBody;
+  try {
+    body = parseUserTaskSubmitBody(await request.json());
+  } catch (err) {
+    return jsonResponse({ error: err instanceof Error ? err.message : "Invalid request body." }, 400, cors);
+  }
+
+  const user = await env.USERS_DB.prepare(`SELECT id FROM x_users WHERE x_user_id = ?1`)
+    .bind(body.x_user_id)
+    .first<{ id: number }>();
+  if (!user) {
+    return jsonResponse({ error: "Unknown x_user_id. Call /api/x-login first." }, 404, cors);
+  }
+
+  const task = await env.USERS_DB.prepare(`SELECT id FROM tasks WHERE id = ?1`)
+    .bind(body.task_id)
+    .first<{ id: number }>();
+  if (!task) {
+    return jsonResponse({ error: "Unknown task_id." }, 404, cors);
+  }
+
+  const now = new Date().toISOString();
+  try {
+    await env.USERS_DB.prepare(
+      `INSERT INTO user_tasks (user_id, task_id, status, submitted_at) VALUES (?1, ?2, 'pending', ?3)`
+    )
+      .bind(user.id, body.task_id, now)
+      .run();
+  } catch (err) {
+    return jsonResponse({ error: "This task has already been submitted." }, 409, cors);
+  }
+
+  return jsonResponse({ ok: true }, 200, cors);
+}
+
+interface UserTaskSubmissionRow {
+  task_id: number;
+  title: string;
+  status: UserTaskStatus;
+  submitted_at: string;
+  reviewed_at: string | null;
+}
+
+/**
+ * GET /api/user-tasks/:x_user_id — public, no secret: a user checking their own submission
+ * status isn't a privileged operation (x_user_id is not a secret, same as a public handle).
+ * `all_completed` means "submitted to every currently-active task", regardless of
+ * approved/rejected/pending — matching the spec literally rather than gating it on approval.
+ */
+async function handleUserTasksForUser(env: Env, xUserId: string, cors: HeadersInit | undefined): Promise<Response> {
+  const user = await env.USERS_DB.prepare(`SELECT id FROM x_users WHERE x_user_id = ?1`)
+    .bind(xUserId)
+    .first<{ id: number }>();
+  if (!user) {
+    return jsonResponse({ error: "Unknown x_user_id." }, 404, cors);
+  }
+
+  const { results } = await env.USERS_DB.prepare(
+    `SELECT ut.task_id AS task_id, t.title AS title, ut.status AS status,
+            ut.submitted_at AS submitted_at, ut.reviewed_at AS reviewed_at
+     FROM user_tasks ut
+     JOIN tasks t ON t.id = ut.task_id
+     WHERE ut.user_id = ?1
+     ORDER BY ut.submitted_at ASC`
+  )
+    .bind(user.id)
+    .all<UserTaskSubmissionRow>();
+
+  const activeCountRow = await env.USERS_DB.prepare(`SELECT COUNT(*) AS cnt FROM tasks WHERE active = 1`).first<{
+    cnt: number;
+  }>();
+  const submittedActiveCountRow = await env.USERS_DB.prepare(
+    `SELECT COUNT(*) AS cnt FROM user_tasks ut JOIN tasks t ON t.id = ut.task_id WHERE ut.user_id = ?1 AND t.active = 1`
+  )
+    .bind(user.id)
+    .first<{ cnt: number }>();
+
+  const activeCount = activeCountRow?.cnt ?? 0;
+  const submittedActiveCount = submittedActiveCountRow?.cnt ?? 0;
+  const allCompleted = activeCount > 0 && submittedActiveCount >= activeCount;
+
+  return jsonResponse({ submissions: results ?? [], all_completed: allCompleted }, 200, cors);
 }
 
 /**
@@ -848,6 +1094,14 @@ const KNOWN_PATHS = new Set([
 
 const ADMIN_PATHS = new Set(["/admin/users", "/admin/activity"]);
 
+// GET /api/tasks and GET /api/user-tasks/:x_user_id — the only two routes gated by
+// buildSiteCorsHeaders instead of buildCorsHeaders. Shared by the OPTIONS preflight branch and
+// the route dispatch below so the two can't drift out of sync.
+const USER_TASKS_GET_PATTERN = /^\/api\/user-tasks\/[^/]+$/;
+function isSiteCorsPath(pathname: string): boolean {
+  return pathname === "/api/tasks" || USER_TASKS_GET_PATTERN.test(pathname);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -855,6 +1109,10 @@ export default {
     const cors = buildCorsHeaders(origin, env);
 
     if (request.method === "OPTIONS") {
+      if (isSiteCorsPath(url.pathname)) {
+        const siteCors = buildSiteCorsHeaders(origin, env);
+        return new Response(null, { status: siteCors ? 204 : 403, headers: siteCors ?? undefined });
+      }
       // Preflight from a disallowed origin gets no CORS headers, so the browser blocks the
       // actual request itself — no need to leak a distinct error body here.
       return new Response(null, { status: cors ? 204 : 403, headers: cors ?? undefined });
@@ -864,6 +1122,35 @@ export default {
     // above ADMIN_PAGE_HTML. Checked before the Bearer-gated /admin/* data routes below.
     if (url.pathname === "/admin" && request.method === "GET") {
       return handleAdminPage();
+    }
+
+    // X login / task routes: shared-secret or public per-route, not origin/CORS gated or
+    // rate-limited — see the "X (Twitter) login + task tracking" section above.
+    if (url.pathname === "/api/x-login" && request.method === "POST") {
+      if (!isAuthorizedInternal(request, env)) {
+        return jsonResponse({ error: "Unauthorized." }, 401);
+      }
+      return handleXLogin(request, env, undefined);
+    }
+
+    if (url.pathname === "/api/tasks" && request.method === "GET") {
+      return handleTasksList(env, buildSiteCorsHeaders(origin, env) ?? undefined);
+    }
+
+    if (url.pathname === "/api/user-tasks" && request.method === "POST") {
+      if (!isAuthorizedInternal(request, env)) {
+        return jsonResponse({ error: "Unauthorized." }, 401);
+      }
+      return handleUserTaskSubmit(request, env, undefined);
+    }
+
+    const userTasksMatch = url.pathname.match(/^\/api\/user-tasks\/([^/]+)$/);
+    if (userTasksMatch && userTasksMatch[1] && request.method === "GET") {
+      return handleUserTasksForUser(
+        env,
+        decodeURIComponent(userTasksMatch[1]),
+        buildSiteCorsHeaders(origin, env) ?? undefined
+      );
     }
 
     // Admin routes: Bearer-token gated, not origin/CORS gated — see isAuthorizedAdmin.

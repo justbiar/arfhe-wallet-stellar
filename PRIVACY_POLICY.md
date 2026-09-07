@@ -2,7 +2,7 @@
 
 **Arfhe Wallet** — Privacy-first FHE-powered Crypto Wallet  
 **Effective Date:** March 8, 2026  
-**Last Updated:** March 8, 2026
+**Last Updated:** September 2, 2026
 
 ---
 
@@ -14,18 +14,42 @@ This Privacy Policy explains what data Arfhe Wallet collects, how it is used, an
 
 ## 2. Data We Do NOT Collect
 
-Arfhe Wallet is designed with privacy as a core principle:
-
-- ❌ **No personal identification** — We do not collect names, emails, phone numbers, or any personally identifiable information (PII).
-- ❌ **No analytics or tracking** — We do not use Google Analytics, Mixpanel, Sentry, or any third-party analytics service.
-- ❌ **No telemetry** — We do not send usage statistics, crash reports, or behavioral data to any server.
-- ❌ **No advertising** — We do not serve ads or share data with advertising networks.
+- ❌ **No names, emails or phone numbers** — We never ask for them, and social sign-in does not pass your email address to us.
+- ❌ **No private keys or recovery phrases** — These never leave your device in any form.
+- ❌ **No analytics or tracking SDK** — No Google Analytics, Mixpanel, PostHog, Sentry or similar. There is no session recording and no advertising network.
 - ❌ **No cookies** — The Extension does not set or read browser cookies.
-- ❌ **No browsing history** — We do not monitor, collect, or transmit your browsing activity.
+- ❌ **No browsing history** — We do not monitor, collect, or transmit the pages you visit.
+- ❌ **No transaction amounts** — Our servers never receive how much you sent, shielded or unshielded, nor who you sent it to.
+
+## 2a. Data We DO Collect
+
+We collect a small amount of pseudonymous data on infrastructure operated by ArfDAO. This
+section is deliberately specific, because a privacy policy that claims to collect nothing
+while the software collects something is worse than one that collects more and says so.
+
+| What | When | Sent to |
+|------|------|---------|
+| Your wallet address | Once, when a wallet is created or imported | `/users/register` |
+| How that wallet was created — one of `google`, `created`, `mnemonic`, `private_key` | Same request | `/users/register` |
+| That an action of type `send`, `shield` or `unshield` occurred, and when | Each time you complete one | `/activity/log` |
+
+That is the whole record. **No amount, no recipient, no token, no transaction hash and no
+balance** is accepted or stored by either endpoint. The purpose is to understand how many
+wallets exist and roughly how actively the product is used.
+
+A wallet address is a public identifier, but it is persistent and unique to you, and our
+servers necessarily see the IP address any request arrives from. We therefore treat this as
+personally identifiable information rather than pretending it is anonymous.
+
+If you use the built-in AI assistant, the messages you type — and the wallet context needed
+to answer them, such as balances and account addresses — are sent to our proxy and from
+there to OpenRouter, which routes them to a language model. Do not type anything into the
+assistant that you would not want a third-party model provider to process. The assistant
+never receives your private key or recovery phrase.
 
 ## 3. Data Stored Locally
 
-All wallet data is stored **exclusively on your device** using the Chrome `storage.local` API:
+Wallet data — keys, accounts, settings, caches — is stored **on your device** using the Chrome `storage.local` API. None of the following is transmitted anywhere:
 
 | Data | Purpose | Storage |
 |------|---------|---------|
@@ -62,7 +86,21 @@ Arfhe Wallet communicates with the following external services **only to provide
 **Data sent:** Session metadata, transaction requests  
 **Purpose:** dApp connectivity (user-initiated only)
 
-### 4.4 Fhenix FHE Network (Optional)
+### 4.4 ArfDAO Backend (Usage Record)
+- **ArfDAO backend** — Receives the pseudonymous record described in Section 2a
+
+**Data sent:** Wallet address; how the wallet was created; that a send/shield/unshield happened, and when
+**Purpose:** Counting wallets and measuring how actively the product is used
+**Never sent:** Amounts, recipients, token identities, transaction hashes, balances
+
+### 4.5 AI Assistant (Optional, user-initiated)
+- **ArfDAO agent proxy → OpenRouter** — Only when you send a message to the assistant
+
+**Data sent:** Your message, the conversation, and wallet context needed to answer it (balances, account addresses, network)
+**Purpose:** Generating the assistant's reply
+**Never sent:** Private keys, recovery phrases. The assistant cannot sign or broadcast anything; it can only propose an action for you to approve.
+
+### 4.6 Fhenix FHE Network (Optional)
 - **Fhenix Sepolia RPC** — For FHE shield/unshield operations
 
 **Data sent:** Encrypted transaction data  
@@ -88,7 +126,7 @@ The Extension requests the following Chrome permissions:
 
 ## 6. Third-Party Services
 
-We do not sell, rent, or share your data with any third party. The blockchain RPC providers listed in Section 4 may have their own privacy policies:
+We do not sell or rent your data, and we do not share it for advertising or profiling. Data reaches the service providers listed below only as needed to operate the wallet — including OpenRouter, which processes assistant messages (Section 4.5). The blockchain RPC providers listed in Section 4 may have their own privacy policies:
 
 - [Alchemy Privacy Policy](https://www.alchemy.com/policies/privacy-policy)
 - [CoinGecko Privacy Policy](https://www.coingecko.com/en/privacy)
@@ -96,11 +134,15 @@ We do not sell, rent, or share your data with any third party. The blockchain RP
 
 ## 7. Data Retention & Deletion
 
-- All data is stored locally on your device.
-- You can delete all Extension data at any time by:
-  1. Removing the Extension from Chrome, or
-  2. Clearing Extension data from `chrome://extensions`
-- There is no server-side data to delete because we do not collect any.
+**On your device.** You can delete everything the Extension stores at any time by removing
+it from Chrome, or by clearing its data from `chrome://extensions`. This erases the encrypted
+vault along with it — if you have no backup of your recovery phrase, the wallet is gone with
+it, and we cannot restore it for you.
+
+**On our servers.** The pseudonymous record described in Section 2a is retained while the
+product is operated. To have the rows for your wallet address deleted, write to the contact
+address in Section 12 with the address in question. Because the record contains no name or
+email, the wallet address is the only way we can identify what to delete.
 
 ## 8. Children's Privacy
 
@@ -114,18 +156,26 @@ Arfhe Wallet is not intended for use by individuals under the age of 18. We do n
 - Open-source codebase for community audit
 - See our [Security Policy](SECURITY.md) for vulnerability reporting
 
-## 10. Open Source
+## 10. Licence and Source Availability
 
-Arfhe Wallet is open source under the MIT License. You can review the complete source code at:  
-**https://github.com/arfdaodev/ArfheWallet**
+Arfhe Wallet is licensed under the MIT License.
+
+The source repository is not public at the time of writing, so this policy deliberately links
+to no repository: a link that returns "404" to everyone who clicks it is worse than none, and
+we would rather not imply the software is publicly auditable before it is. This section will
+name the repository once it is published.
 
 ## 11. Changes to This Policy
 
-We may update this Privacy Policy from time to time. Changes will be reflected in the "Last Updated" date above and published in the GitHub repository.
+We may update this Privacy Policy from time to time. The current version is always the one
+published at **https://arfhewallet.dev/privacy**, and the "Last Updated" date above says when
+it last changed. Material changes will also be noted in the extension's Chrome Web Store
+listing.
 
 ## 12. Contact
 
 For privacy-related questions or concerns:
 
-- **GitHub:** [github.com/arfdaodev/ArfheWallet](https://github.com/arfdaodev/ArfheWallet)
-- **Email:** privacy@arfdao.dev
+- **Email:** arfhewallet@protonmail.com
+
+This is also the address to write to for the deletion request described in Section 7.

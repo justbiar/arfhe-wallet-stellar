@@ -1,8 +1,16 @@
-import { Wallet, HDNodeWallet, Mnemonic } from "ethers";
+import { Wallet, HDNodeWallet, Mnemonic, randomBytes } from "ethers";
 
 export default class Account {
   name?: string | undefined;
   mnemonic?: Mnemonic | undefined;
+  /**
+   * Set when a stored account could not be rebuilt into a signing wallet.
+   *
+   * Such an account still shows its name and address — the user has funds there and hiding
+   * the row would be worse — but it cannot sign, and must not be used as the parent for a
+   * derived account.
+   */
+  rehydrationFailed?: boolean;
 
   private_key?: string | undefined;
   public_key?: string | undefined;
@@ -17,16 +25,41 @@ export default class Account {
     this.owned_tokens = new Map();
   }
 
-  static Random(name: string): Account {
-    const account = new Account();
+  /**
+   * Word counts this wallet will generate, and the entropy each one encodes.
+   *
+   * BIP-39 defines five lengths, but offering all of them asks the user to weigh a
+   * distinction that does not exist in practice: 15, 18 and 21 words are longer to write
+   * down without reaching a security level anyone can name. Twelve is what every wallet
+   * defaults to; twenty-four is what people who want the larger seed come here asking for.
+   */
+  static readonly WORD_COUNT_ENTROPY: Readonly<Record<number, number>> = { 12: 16, 24: 32 };
 
-    account.ethers_wallet = HDNodeWallet.createRandom();
-    account.mnemonic = account.ethers_wallet.mnemonic!;
-    account.name = name;
-    account.derivationPath = "m/44'/60'/0'/0/0";
+  /**
+   * A fresh recovery phrase, with no account attached to it.
+   *
+   * Separate from {@link Random} because showing someone a phrase and adding a wallet to
+   * the running app are different commitments, and the creation flow needs the first
+   * without the second. An account that exists from the moment the words are displayed is
+   * a usable, password-less wallet for as long as the user is still reading them.
+   *
+   * @param wordCount 12 or 24. Anything else throws rather than quietly falling back — a
+   *        wallet that hands back a shorter phrase than the one the user chose is a weaker
+   *        seed than they believe they have, and they would never find out.
+   */
+  static GeneratePhrase(wordCount: number = 12): string {
+    const entropyBytes = Account.WORD_COUNT_ENTROPY[wordCount];
+    if (!entropyBytes) {
+      throw new Error(`Unsupported recovery phrase length: ${wordCount}. Use 12 or 24.`);
+    }
 
-    account.Init();
-    return account;
+    // Built from entropy rather than HDNodeWallet.createRandom(), which is fixed at 16
+    // bytes and so can only ever produce twelve words.
+    return Mnemonic.fromEntropy(randomBytes(entropyBytes)).phrase;
+  }
+
+  static Random(name: string, wordCount: number = 12): Account {
+    return Account.FromMnemonic(Account.GeneratePhrase(wordCount), name);
   }
 
   static FromMnemonic(phrase: string, name?: string, path: string = "m/44'/60'/0'/0/0"): Account {

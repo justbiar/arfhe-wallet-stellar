@@ -67,6 +67,19 @@ export interface Env {
    * create x_users rows or submit task completions. See isAuthorizedInternal.
    */
   INTERNAL_API_SECRET?: string;
+  /**
+   * Cloudflare Worker secret — set via `wrangler secret put HUNT_REWARD_SEED`, never a var.
+   * The reward payload handed back by POST /api/reveal-reward once a user's hunt submission is
+   * approved. Not yet provisioned; add it before /api/reveal-reward is used in production.
+   */
+  HUNT_REWARD_SEED?: string;
+  /**
+   * Cloudflare Worker secret — set via `wrangler secret put HUNT_ADMIN_SECRET`, never a var.
+   * Gates POST /api/admin/hunt/review and GET /api/admin/hunt/pending. Deliberately a separate
+   * secret from ADMIN_SECRET: hunt reward review is a distinct operator role from the general
+   * /admin/* dashboard. See isAuthorizedHuntAdmin.
+   */
+  HUNT_ADMIN_SECRET?: string;
 }
 
 const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
@@ -700,6 +713,206 @@ async function handleUserTasksForUser(env: Env, xUserId: string, cors: HeadersIn
   return jsonResponse({ submissions: results ?? [], all_completed: allCompleted }, 200, cors);
 }
 
+interface HuntCompleteRequestBody {
+  x_user_id: string;
+}
+
+function parseHuntCompleteBody(raw: unknown): HuntCompleteRequestBody {
+  if (typeof raw !== "object" || raw === null) {
+    throw new Error("Request body must be a JSON object.");
+  }
+  const body = raw as Record<string, unknown>;
+
+  if (typeof body.x_user_id !== "string" || !body.x_user_id.trim()) {
+    throw new Error('"x_user_id" must be a non-empty string.');
+  }
+
+  return { x_user_id: body.x_user_id };
+}
+
+/**
+ * POST /api/complete-hunt — internal-secret gated. Marks the whole hunt as submitted for a
+ * user in one shot, replacing the per-task tracking in `user_tasks` (see
+ * migrations/0009_add_hunt_completion.sql). `x_users.status` defaulting to NULL is what
+ * makes this one-shot: a second call while status is already set is rejected as a duplicate
+ * submission instead of silently resetting a pending/reviewed state.
+ */
+async function handleCompleteHunt(request: Request, env: Env, cors: HeadersInit | undefined): Promise<Response> {
+  let body: HuntCompleteRequestBody;
+  try {
+    body = parseHuntCompleteBody(await request.json());
+  } catch (err) {
+    return jsonResponse({ error: err instanceof Error ? err.message : "Invalid request body." }, 400, cors);
+  }
+
+  const user = await env.USERS_DB.prepare(`SELECT id, status FROM x_users WHERE x_user_id = ?1`)
+    .bind(body.x_user_id)
+    .first<{ id: number; status: string | null }>();
+  if (!user) {
+    return jsonResponse({ error: "Unknown x_user_id. Call /api/x-login first." }, 404, cors);
+  }
+  if (user.status !== null) {
+    return jsonResponse({ error: "Hunt has already been submitted." }, 409, cors);
+  }
+
+  const now = new Date().toISOString();
+  await env.USERS_DB.prepare(`UPDATE x_users SET status = 'pending', submitted_at = ?1 WHERE id = ?2`)
+    .bind(now, user.id)
+    .run();
+
+  return jsonResponse({ ok: true }, 200, cors);
+}
+
+interface HuntStatusRow {
+  status: string | null;
+  submitted_at: string | null;
+  reviewed_at: string | null;
+}
+
+/**
+ * GET /api/hunt-status/:x_user_id — public, no secret: same reasoning as
+ * GET /api/user-tasks/:x_user_id (x_user_id is not a secret, same as a public handle).
+ */
+async function handleHuntStatus(env: Env, xUserId: string, cors: HeadersInit | undefined): Promise<Response> {
+  const row = await env.USERS_DB.prepare(
+    `SELECT status, submitted_at, reviewed_at FROM x_users WHERE x_user_id = ?1`
+  )
+    .bind(xUserId)
+    .first<HuntStatusRow>();
+  if (!row) {
+    return jsonResponse({ error: "Unknown x_user_id." }, 404, cors);
+  }
+
+  return jsonResponse(row, 200, cors);
+}
+
+interface HuntReviewRequestBody {
+  x_user_id: string;
+  action: "approve" | "reject";
+}
+
+function parseHuntReviewBody(raw: unknown): HuntReviewRequestBody {
+  if (typeof raw !== "object" || raw === null) {
+    throw new Error("Request body must be a JSON object.");
+  }
+  const body = raw as Record<string, unknown>;
+
+  if (typeof body.x_user_id !== "string" || !body.x_user_id.trim()) {
+    throw new Error('"x_user_id" must be a non-empty string.');
+  }
+  if (body.action !== "approve" && body.action !== "reject") {
+    throw new Error('"action" must be "approve" or "reject".');
+  }
+
+  return { x_user_id: body.x_user_id, action: body.action };
+}
+
+/**
+ * POST /api/admin/hunt/review — Hunt-Admin-Secret gated (isAuthorizedHuntAdmin), a distinct
+ * secret from the general /admin/* routes below. Sets x_users.status to 'approved' or
+ * 'rejected' and stamps reviewed_at. Does not require the current status to be 'pending'
+ * first: an admin correcting a prior review (e.g. flipping a mistaken reject) is a legitimate
+ * use, not a bug.
+ */
+async function handleAdminHuntReview(request: Request, env: Env): Promise<Response> {
+  let body: HuntReviewRequestBody;
+  try {
+    body = parseHuntReviewBody(await request.json());
+  } catch (err) {
+    return jsonResponse({ error: err instanceof Error ? err.message : "Invalid request body." }, 400);
+  }
+
+  const user = await env.USERS_DB.prepare(`SELECT id FROM x_users WHERE x_user_id = ?1`)
+    .bind(body.x_user_id)
+    .first<{ id: number }>();
+  if (!user) {
+    return jsonResponse({ error: "Unknown x_user_id." }, 404);
+  }
+
+  const status = body.action === "approve" ? "approved" : "rejected";
+  const now = new Date().toISOString();
+  await env.USERS_DB.prepare(`UPDATE x_users SET status = ?1, reviewed_at = ?2 WHERE id = ?3`)
+    .bind(status, now, user.id)
+    .run();
+
+  return jsonResponse({ ok: true }, 200);
+}
+
+interface AdminHuntPendingRow {
+  x_user_id: string;
+  x_username: string;
+  submitted_at: string | null;
+}
+
+/** GET /api/admin/hunt/pending — Hunt-Admin-Secret gated (isAuthorizedHuntAdmin). Review queue. */
+async function handleAdminHuntPending(env: Env): Promise<Response> {
+  const { results } = await env.USERS_DB.prepare(
+    `SELECT x_user_id, x_username, submitted_at FROM x_users WHERE status = 'pending' ORDER BY submitted_at ASC`
+  ).all<AdminHuntPendingRow>();
+  return jsonResponse(results ?? [], 200);
+}
+
+interface AdminHuntReviewedRow {
+  x_user_id: string;
+  x_username: string;
+  status: string;
+  submitted_at: string | null;
+  reviewed_at: string | null;
+}
+
+/** GET /api/admin/hunt/reviewed — Hunt-Admin-Secret gated (isAuthorizedHuntAdmin). Already-reviewed history. */
+async function handleAdminHuntReviewed(env: Env): Promise<Response> {
+  const { results } = await env.USERS_DB.prepare(
+    `SELECT x_user_id, x_username, status, submitted_at, reviewed_at FROM x_users
+     WHERE status = 'approved' OR status = 'rejected'
+     ORDER BY reviewed_at DESC`
+  ).all<AdminHuntReviewedRow>();
+  return jsonResponse(results ?? [], 200);
+}
+
+interface RevealRewardRequestBody {
+  x_user_id: string;
+}
+
+function parseRevealRewardBody(raw: unknown): RevealRewardRequestBody {
+  if (typeof raw !== "object" || raw === null) {
+    throw new Error("Request body must be a JSON object.");
+  }
+  const body = raw as Record<string, unknown>;
+
+  if (typeof body.x_user_id !== "string" || !body.x_user_id.trim()) {
+    throw new Error('"x_user_id" must be a non-empty string.');
+  }
+
+  return { x_user_id: body.x_user_id };
+}
+
+/**
+ * POST /api/reveal-reward — internal-secret gated, server-to-server ONLY. Deliberately never
+ * exposed via buildSiteCorsHeaders/buildCorsHeaders: env.HUNT_REWARD_SEED is the reward
+ * payload itself, so a browser-reachable route here would let anyone with an x_user_id read
+ * it directly, bypassing the approve/reject gate entirely. Returns { seed: null } (200, not
+ * 403) for anyone not yet approved — "no reward available" is not an error condition.
+ */
+async function handleRevealReward(request: Request, env: Env): Promise<Response> {
+  let body: RevealRewardRequestBody;
+  try {
+    body = parseRevealRewardBody(await request.json());
+  } catch (err) {
+    return jsonResponse({ error: err instanceof Error ? err.message : "Invalid request body." }, 400);
+  }
+
+  const user = await env.USERS_DB.prepare(`SELECT status FROM x_users WHERE x_user_id = ?1`)
+    .bind(body.x_user_id)
+    .first<{ status: string | null }>();
+
+  if (!user || user.status !== "approved") {
+    return jsonResponse({ seed: null }, 200);
+  }
+
+  return jsonResponse({ seed: env.HUNT_REWARD_SEED ?? null }, 200);
+}
+
 /**
  * `Authorization: Bearer <ADMIN_SECRET>` gate for the /admin/* routes below. Deliberately
  * not the extension-origin CORS check the other routes use — an operator hits these from a
@@ -709,6 +922,17 @@ async function handleUserTasksForUser(env: Env, xUserId: string, cors: HeadersIn
 function isAuthorizedAdmin(request: Request, env: Env): boolean {
   if (!env.ADMIN_SECRET) return false;
   return request.headers.get("Authorization") === `Bearer ${env.ADMIN_SECRET}`;
+}
+
+/**
+ * `Hunt-Admin-Secret: <HUNT_ADMIN_SECRET>` gate for POST /api/admin/hunt/review and GET
+ * /api/admin/hunt/pending. Parallel to isAuthorizedAdmin above but deliberately a distinct
+ * secret and header: hunt reward review is a separate operator role from the general
+ * /admin/* dashboard, so the two can be rotated/granted independently.
+ */
+function isAuthorizedHuntAdmin(request: Request, env: Env): boolean {
+  if (!env.HUNT_ADMIN_SECRET) return false;
+  return request.headers.get("Hunt-Admin-Secret") === env.HUNT_ADMIN_SECRET;
 }
 
 async function handleAdminUsers(env: Env): Promise<Response> {
@@ -1098,8 +1322,13 @@ const ADMIN_PATHS = new Set(["/admin/users", "/admin/activity"]);
 // buildSiteCorsHeaders instead of buildCorsHeaders. Shared by the OPTIONS preflight branch and
 // the route dispatch below so the two can't drift out of sync.
 const USER_TASKS_GET_PATTERN = /^\/api\/user-tasks\/[^/]+$/;
+const HUNT_STATUS_GET_PATTERN = /^\/api\/hunt-status\/[^/]+$/;
 function isSiteCorsPath(pathname: string): boolean {
-  return pathname === "/api/tasks" || USER_TASKS_GET_PATTERN.test(pathname);
+  return (
+    pathname === "/api/tasks" ||
+    USER_TASKS_GET_PATTERN.test(pathname) ||
+    HUNT_STATUS_GET_PATTERN.test(pathname)
+  );
 }
 
 export default {
@@ -1153,6 +1382,24 @@ export default {
       );
     }
 
+    // Simplified hunt completion (see migrations/0009_simplify_user_completion.sql): replaces
+    // per-task submission with a single "I did it" flag stored directly on x_users.
+    if (url.pathname === "/api/complete-hunt" && request.method === "POST") {
+      if (!isAuthorizedInternal(request, env)) {
+        return jsonResponse({ error: "Unauthorized." }, 401);
+      }
+      return handleCompleteHunt(request, env, undefined);
+    }
+
+    const huntStatusMatch = url.pathname.match(/^\/api\/hunt-status\/([^/]+)$/);
+    if (huntStatusMatch && huntStatusMatch[1] && request.method === "GET") {
+      return handleHuntStatus(
+        env,
+        decodeURIComponent(huntStatusMatch[1]),
+        buildSiteCorsHeaders(origin, env) ?? undefined
+      );
+    }
+
     // Admin routes: Bearer-token gated, not origin/CORS gated — see isAuthorizedAdmin.
     if (ADMIN_PATHS.has(url.pathname)) {
       if (request.method !== "GET") {
@@ -1162,6 +1409,39 @@ export default {
         return jsonResponse({ error: "Unauthorized." }, 401);
       }
       return url.pathname === "/admin/users" ? handleAdminUsers(env) : handleAdminActivity(env);
+    }
+
+    // Hunt reward review + reveal. Hunt-admin-secret (distinct from ADMIN_SECRET) or
+    // internal-secret gated, never origin/CORS gated — see isAuthorizedHuntAdmin /
+    // isAuthorizedInternal above.
+    if (url.pathname === "/api/admin/hunt/review" && request.method === "POST") {
+      if (!isAuthorizedHuntAdmin(request, env)) {
+        return jsonResponse({ error: "Unauthorized." }, 401);
+      }
+      return handleAdminHuntReview(request, env);
+    }
+
+    if (url.pathname === "/api/admin/hunt/pending" && request.method === "GET") {
+      if (!isAuthorizedHuntAdmin(request, env)) {
+        return jsonResponse({ error: "Unauthorized." }, 401);
+      }
+      return handleAdminHuntPending(env);
+    }
+
+    if (url.pathname === "/api/admin/hunt/reviewed" && request.method === "GET") {
+      if (!isAuthorizedHuntAdmin(request, env)) {
+        return jsonResponse({ error: "Unauthorized." }, 401);
+      }
+      return handleAdminHuntReviewed(env);
+    }
+
+    // Deliberately absent from isSiteCorsPath/USER_TASKS_GET_PATTERN-style CORS allowlisting:
+    // this is server-to-server only (see handleRevealReward).
+    if (url.pathname === "/api/reveal-reward" && request.method === "POST") {
+      if (!isAuthorizedInternal(request, env)) {
+        return jsonResponse({ error: "Unauthorized." }, 401);
+      }
+      return handleRevealReward(request, env);
     }
 
     if (request.method !== "POST" || !KNOWN_PATHS.has(url.pathname)) {

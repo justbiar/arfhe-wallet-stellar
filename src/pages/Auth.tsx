@@ -1,12 +1,15 @@
 import * as React from "react";
-import { Typography, Box, Button, Grid, Alert, Stack, Tab, Tabs, TextField, Paper, Container, IconButton, InputAdornment, CircularProgress, LinearProgress, Dialog, DialogTitle, DialogContent, DialogActions, Checkbox, FormControlLabel } from "@mui/material";
+import { Typography, Box, Button, Grid, Alert, Stack, Tab, Tabs, TextField, Paper, Container, IconButton, InputAdornment, CircularProgress, LinearProgress, Dialog, DialogTitle, DialogContent, DialogActions, Checkbox, FormControlLabel, ToggleButton, ToggleButtonGroup } from "@mui/material";
 import { AppContext, WalletContext } from "../AppContext.js";
 import { useNavigate } from "react-router";
 import { Visibility, VisibilityOff, Google, Lock, Fingerprint, ContentCopy, Check } from "@mui/icons-material";
 import { Mnemonic } from "ethers";
+import Account from "../backend/Account";
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
 import { BiometricService } from '../backend/BiometricService';
+import { normalizeMnemonic } from "../backend/normalizeMnemonic";
+import { currentSurface } from "../backend/DisplaySurfaceService";
 import type AccountManager from '../backend/AccountManager';
 import type StorageManager from '../backend/StorageManager';
 
@@ -29,35 +32,41 @@ import { EthereumPrivateKeyProvider } from "@web3auth/ethereum-provider";
 const clientId = import.meta.env.VITE_WEB3AUTH_CLIENT_ID ?? "";
 
 /**
- * Whether this document is the browser-action popup rather than a tab or window.
+ * Whether this document will still be alive after it loses focus.
  *
- * `chrome.tabs.getCurrent()` resolves to a tab in anything that *is* a tab — including a
- * `windows.create({type:"popup"})` window, whose content is a tab — and to `undefined` in
- * the action popup, which is not one. That is the distinction that matters here, and it
- * needs no extra permission.
+ * Web3Auth opens a login window of its own, which takes focus away from whatever started
+ * it. Only one surface cannot survive that: the browser-action popup, which Chrome
+ * destroys outright — so the popup died mid-`await`, the resolved private key was never
+ * imported, and the user was left staring at a closed wallet.
+ *
+ * The old test for this was `chrome.tabs.getCurrent()` returning nothing, on the reasoning
+ * that only the action popup is not a tab. **The side panel is not a tab either.** So the
+ * panel — the one surface built specifically to stay open while the user works elsewhere —
+ * was misread as the fragile one, and social login threw the whole wallet into a separate
+ * window for no reason at all. The URL marker names the surface directly, which is the
+ * thing actually being asked about.
  */
-async function isActionPopup(): Promise<boolean> {
+async function survivesFocusLoss(): Promise<boolean> {
+  if (currentSurface() === "sidepanel") return true;
+
   try {
     const tabs = (globalThis as { chrome?: typeof chrome }).chrome?.tabs;
-    if (!tabs?.getCurrent) return false;
-    return !(await tabs.getCurrent());
+    // Not an extension context at all (dev server) — an ordinary page, which survives.
+    if (!tabs?.getCurrent) return true;
+    // Resolves in anything that *is* a tab, including a `windows.create({type:"popup"})`
+    // window, whose content is a tab. Only the action popup gets nothing back.
+    return !!(await tabs.getCurrent());
   } catch {
-    // Not an extension context at all (dev server) — treat as a normal page.
-    return false;
+    return true;
   }
 }
 
 /**
- * Re-open the wallet in its own window so an OAuth flow can survive.
+ * Re-open the wallet in its own small window so an OAuth flow can survive.
  *
- * The action popup is destroyed by Chrome the moment it loses focus, and Web3Auth's login
- * opens a window of its own — so the popup died mid-`await`, the resolved private key was
- * never imported, and the user was left staring at a closed wallet. Clicking again
- * appeared to fix it only because Web3Auth had cached the session by then and resolved
- * before focus moved.
- *
- * A window created here is an ordinary window: it keeps running while the OAuth window is
- * in front, so the flow completes where it started.
+ * Only reached from the action popup, where there is no alternative: the document running
+ * this code is about to be destroyed. A window created here keeps running while the OAuth
+ * window is in front, so the flow completes where it started.
  */
 async function openSocialLoginWindow(): Promise<boolean> {
   try {
@@ -65,11 +74,19 @@ async function openSocialLoginWindow(): Promise<boolean> {
     const windows = (globalThis as { chrome?: typeof chrome }).chrome?.windows;
     if (!runtime?.getURL || !windows?.create) return false;
 
+    const width = 420;
+    const height = 700;
+
     await windows.create({
       url: runtime.getURL("index.html#/auth?social=1"),
       type: "popup",
-      width: 420,
-      height: 700,
+      width,
+      height,
+      // Placed and sized explicitly, and pinned to `normal`: this is meant to read as the
+      // wallet, not as a browser window that happens to contain it.
+      left: Math.max(0, Math.round((globalThis.screen?.availWidth ?? width) / 2 - width / 2)),
+      top: Math.max(0, Math.round((globalThis.screen?.availHeight ?? height) / 2 - height / 2)),
+      state: "normal",
       focused: true,
     });
     return true;
@@ -146,6 +163,12 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
   const [words, setWords] = React.useState<string[]>([]);
   const [isGenerated, setIsGenerated] = React.useState(false);
 
+  // Twelve words is the default because it is what every other wallet produces, so a user
+  // who has no opinion gets the phrase they expect. Twenty-four is offered for the users
+  // who arrive already wanting it; the choice is fixed before generation because changing
+  // it afterwards would mean discarding a phrase they may already have written down.
+  const [wordCount, setWordCount] = React.useState<12 | 24>(12);
+
   // Both gate the "Generate Phrase" button itself, not just a later step — someone who
   // hasn't yet agreed the wallet is testnet-only or that a lost phrase is unrecoverable
   // shouldn't be handed a mnemonic before agreeing to either.
@@ -160,6 +183,9 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
   const [quizPositions, setQuizPositions] = React.useState<number[]>([]);
   const [answers, setAnswers] = React.useState<Record<number, string>>({});
   const [quizError, setQuizError] = React.useState('');
+
+  /** A failure to build the wallet itself, as opposed to a wrong answer in the quiz. */
+  const [createError, setCreateError] = React.useState('');
 
   // Copying is offered because the alternative people actually choose is worse: retyping
   // twelve words by hand into a password manager is where transcription errors are made,
@@ -182,15 +208,32 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
     }
   };
 
+  /**
+   * Generate the phrase only. No account is added to the wallet here.
+   *
+   * It used to be: pressing this created the account, and everything after it was
+   * presentation. That made a fully usable, password-less wallet exist from the moment the
+   * words appeared on screen — and the app has routes that will happily render it. Someone
+   * who backed out of this screen instead of finishing ended up on the home screen of a
+   * wallet they had never set a password on.
+   *
+   * The account is created in {@link submitVerification}, once the user has proved they
+   * wrote the phrase down. Until then this screen holds words and nothing else, and
+   * abandoning it leaves nothing behind.
+   */
   const handleGenerate = () => {
     if (!accountManager || !username.trim() || !acceptedTestnetOnly || !acceptedNoRecovery) return;
-    const index = accountManager.CreateAccount(username.trim());
-    if (index < 0) return;
 
-    const mnemonicWords = accountManager.accounts[index]?.GetWords();
-    setWords(mnemonicWords ?? []);
+    try {
+      setWords(Account.GeneratePhrase(wordCount).split(' '));
+    } catch {
+      setCreateError(t('auth.createFailed'));
+      return;
+    }
+
     setCopied(false);
     setCopyError('');
+    setCreateError('');
     setIsGenerated(true);
   };
 
@@ -216,6 +259,21 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
       setQuizError(t('auth.phraseCheckFailed'));
       return;
     }
+
+    // The wallet is created here, at the last possible moment before the password screen,
+    // so the window in which an account exists without a password behind it is as short as
+    // the flow allows. The route guard closes what is left of it.
+    if (!accountManager) {
+      setCreateError(t('auth.createFailed'));
+      return;
+    }
+
+    const index = accountManager.CreateAccountFromPhrase(words.join(' '), username.trim());
+    if (index < 0) {
+      setCreateError(t('auth.createFailed'));
+      return;
+    }
+
     onDone('created');
   };
 
@@ -251,9 +309,9 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
             ))}
           </Stack>
 
-          {quizError && (
+          {(quizError || createError) && (
             <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1.5 }}>
-              {quizError}
+              {quizError || createError}
             </Typography>
           )}
 
@@ -360,6 +418,30 @@ function CreateWallet({ accountManager, onDone }: WalletStepProps) {
             sx={{ mb: 2, textAlign: 'left' }}
           />
 
+          <Box sx={{ mb: 2, textAlign: 'left' }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.75 }}>
+              {t('auth.phraseLengthLabel')}
+            </Typography>
+            <ToggleButtonGroup
+              exclusive
+              fullWidth
+              size="small"
+              value={wordCount}
+              onChange={(_, value) => { if (value) setWordCount(value); }}
+              aria-label={t('auth.phraseLengthLabel')}
+            >
+              <ToggleButton value={12} sx={{ borderRadius: 0, py: 0.75 }}>
+                {t('auth.phraseLength12')}
+              </ToggleButton>
+              <ToggleButton value={24} sx={{ borderRadius: 0, py: 0.75 }}>
+                {t('auth.phraseLength24')}
+              </ToggleButton>
+            </ToggleButtonGroup>
+            <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 0.75 }}>
+              {wordCount === 24 ? t('auth.phraseLength24Desc') : t('auth.phraseLength12Desc')}
+            </Typography>
+          </Box>
+
           <Stack spacing={0.5} sx={{ mb: 2, textAlign: 'left' }}>
             <FormControlLabel
               sx={{ alignItems: 'flex-start', ml: 0 }}
@@ -442,6 +524,9 @@ type ImportMode = "phrase" | "key";
  * key has no phrase to reveal, so the key the user pastes here is the only copy that will
  * ever exist. That is said on the screen rather than discovered on the day it matters.
  */
+/** The word counts BIP-39 defines. Anything else cannot be a recovery phrase at all. */
+const VALID_MNEMONIC_LENGTHS = new Set([12, 15, 18, 21, 24]);
+
 function ImportWallet({ accountManager, onDone }: WalletStepProps) {
   const { t } = useTranslation();
   const [mode, setMode] = React.useState<ImportMode>("phrase");
@@ -460,14 +545,30 @@ function ImportWallet({ accountManager, onDone }: WalletStepProps) {
   const importFromMnemonic = async () => {
     if (!accountManager) return;
 
-    if (!Mnemonic.isValidMnemonic(mnemonic.trim())) {
+    // Normalized, not just trimmed. A correct phrase copied out of a numbered backup grid —
+    // the shape this wallet's own recovery screen displays — carries its numbering and line
+    // breaks along with it, and ethers rejects that as an invalid checksum. Telling someone
+    // their backup is wrong when it is not is the worst thing this screen can do.
+    const phrase = normalizeMnemonic(mnemonic);
+
+    // Word count first, because it is the mistake people actually make and the only one
+    // where the wallet can say something specific. "You entered 11 words" sends someone
+    // back to their backup looking for the missing one; a generic rejection sends them
+    // back to look for nothing in particular.
+    const wordCount = phrase ? phrase.split(" ").length : 0;
+    if (!VALID_MNEMONIC_LENGTHS.has(wordCount)) {
+      setError(t('auth.mnemonicWordCount', { count: wordCount }));
+      return;
+    }
+
+    if (!Mnemonic.isValidMnemonic(phrase)) {
       setError(t('auth.invalidMnemonic'));
       return;
     }
 
     setIsScanning(true);
     try {
-      const index = accountManager.ImportAccount(mnemonic.trim());
+      const index = accountManager.ImportAccount(phrase);
       if (index === -1) {
         setError(t('auth.importFailed'));
         setIsScanning(false);
@@ -484,7 +585,12 @@ function ImportWallet({ accountManager, onDone }: WalletStepProps) {
 
       onDone('mnemonic');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // Deliberately not `e.message`. What reaches here is a library error written for a
+      // developer — "invalid mnemonic checksum (argument=..., code=INVALID_ARGUMENT,
+      // version=6.15.0)" — and showing that to someone recovering a wallet tells them
+      // nothing they can act on while reading as though something is deeply wrong.
+      console.error("Mnemonic import failed:", e);
+      setError(t('auth.importFailed'));
       setIsScanning(false);
     }
   };
@@ -1094,7 +1200,13 @@ export default function Auth() {
         // Legacy plaintext wallet — need to set password first, then migrate
         setStep(AuthStep.SET_PASSWORD);
       } else {
-        // No wallet exists — show choice screen
+        // No wallet exists — show choice screen.
+        //
+        // Anything still in memory here belongs to an onboarding that was abandoned: it has
+        // no password, so it was never written to disk and never will be. Left in place it
+        // would be quietly adopted by the next wallet the user creates, and it can still
+        // sign in the meantime.
+        accountManager?.discardUnpersistedAccounts();
         setStep(AuthStep.CHOICE);
       }
     };
@@ -1214,10 +1326,10 @@ export default function Auth() {
                     return;
                   }
 
-                  // Web3Auth opens its own window, which costs the action popup its focus —
-                  // and Chrome destroys a popup that loses focus. Move to a real window
-                  // first and let the flow run there.
-                  if (await isActionPopup()) {
+                  // Web3Auth opens its own window, which costs this document its focus.
+                  // Everywhere but the action popup that is survivable, and the login runs
+                  // right here — in the side panel, on the screen the user is already on.
+                  if (!(await survivesFocusLoss())) {
                     if (await openSocialLoginWindow()) {
                       window.close();
                       return;

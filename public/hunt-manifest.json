@@ -1,0 +1,18 @@
+{
+  "version": "2.0.0",
+  "generated": "2026-08-14T09:12:44Z",
+  "fragments": [
+    { "screen": "/settings/security", "index": 1, "word": "nice" },
+    { "screen": "/home", "index": 2, "word": "try" },
+    { "screen": "/portfolio", "index": 3, "word": "you" },
+    { "screen": "/agent", "index": 4, "word": "must" },
+    { "screen": "/privacy", "index": 5, "word": "open" },
+    { "screen": "/token", "index": 6, "word": "real" },
+    { "screen": "/history", "index": 7, "word": "one" },
+    { "screen": "/explore", "index": 8, "word": "find" },
+    { "screen": "/revoke", "index": 9, "word": "word" },
+    { "screen": "/settings/networks", "index": 10, "word": "inside" },
+    { "screen": "/settings/accounts", "index": 11, "word": "human" },
+    { "screen": "/settings/notifications", "index": 12, "word": "effort" }
+  ]
+}

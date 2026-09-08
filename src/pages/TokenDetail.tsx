@@ -30,6 +30,7 @@ import {
 import { useNavigate, useParams, useLocation } from "react-router";
 import { useTranslation } from "react-i18next";
 import { WalletContext } from "../AppContext.js";
+import { useHuntState } from "../components/HuntStateProvider";
 import { useActiveAccount } from "../ActiveAccountProvider.js";
 import { useToast } from "../components/ToastProvider.js";
 import { NetworkId } from "../backend/NetworkTypes.js";
@@ -167,6 +168,16 @@ export default function TokenDetail() {
   // Token state
   const [tokenName, setTokenName] = useState("");
   const [tokenSymbol, setTokenSymbol] = useState("");
+  const hunt = useHuntState();
+
+  // The symbol, not the address: a wrapper is deployed per chain, and the hunt should mean
+  // "you are looking at aeETH" rather than "you are looking at this one deployment of it".
+  useEffect(() => {
+    const key = tokenSymbol ? `token:${tokenSymbol}` : "";
+    if (!key) return;
+    hunt.setState(key, true);
+    return () => hunt.setState(key, false);
+  }, [tokenSymbol, hunt]);
   const [tokenLogo, setTokenLogo] = useState(passedLogo);
   const [tokenBalance, setTokenBalance] = useState("0");
   const [tokenValueUsd, setTokenValueUsd] = useState(0);

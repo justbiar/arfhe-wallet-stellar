@@ -25,6 +25,51 @@ import { useCallback, useEffect, useRef, useState } from "react";
  */
 const MAX_SPLASH_MS = 5600;
 
+/**
+ * How long the wallet must have been closed before the animation plays again.
+ *
+ * A five-second brand animation is a pleasure the first time and a toll every time after.
+ * People open a wallet to check a balance — often several times in a row — and making them
+ * sit through, or dismiss, the same clip on each of those is the animation working against
+ * the thing it is introducing.
+ *
+ * So it plays on a genuinely fresh visit and stays out of the way for the rest of the
+ * session. Four hours is long enough that the next viewing feels like an opening rather
+ * than a repeat, and short enough that someone who uses the wallet daily still sees it.
+ */
+const SPLASH_COOLDOWN_MS = 4 * 60 * 60 * 1000;
+
+/** When the animation was last played through. Survives the popup closing. */
+const LAST_SHOWN_KEY = "arfhe_splash_last_shown";
+
+/**
+ * Whether to play the animation now.
+ *
+ * Errs towards playing it: a storage read that throws — a private context, a wiped profile —
+ * means we cannot know when it last ran, and showing a five-second animation to someone who
+ * did not need it is a far smaller failure than a first-time user opening the wallet on a
+ * bare login screen with no sense of what they have installed.
+ */
+function shouldPlaySplash(): boolean {
+  try {
+    const last = Number(localStorage.getItem(LAST_SHOWN_KEY));
+    if (!Number.isFinite(last) || last <= 0) return true;
+    // A clock moved backwards would otherwise suppress the splash indefinitely.
+    if (last > Date.now()) return true;
+    return Date.now() - last >= SPLASH_COOLDOWN_MS;
+  } catch {
+    return true;
+  }
+}
+
+function markSplashShown(): void {
+  try {
+    localStorage.setItem(LAST_SHOWN_KEY, String(Date.now()));
+  } catch {
+    /* Nothing to do; shouldPlaySplash() already fails towards showing it. */
+  }
+}
+
 function Splash() {
   const navigate = useNavigate();
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -39,6 +84,14 @@ function Splash() {
   }, [navigate]);
 
   useEffect(() => {
+    // Recently seen: go straight through. `replace` so Back does not land on the splash.
+    if (!shouldPlaySplash()) {
+      navigate("auth", { replace: true });
+      doneRef.current = true;
+      return;
+    }
+    markSplashShown();
+
     const deadline = setTimeout(finish, MAX_SPLASH_MS);
 
     // Autoplay is requested through the attribute *and* here: the attribute covers the
@@ -47,7 +100,7 @@ function Splash() {
     videoRef.current?.play().catch(() => setVideoFailed(true));
 
     return () => clearTimeout(deadline);
-  }, [finish]);
+  }, [finish, navigate]);
 
   return (
     <Box

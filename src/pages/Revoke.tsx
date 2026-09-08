@@ -1,6 +1,5 @@
-import { useState, useEffect, useContext, useCallback } from 'react';
+import React, { useState, useEffect, useContext, useCallback } from 'react';
 import {
-  Container,
   Paper,
   Typography,
   Box,
@@ -14,11 +13,13 @@ import {
   Stack,
   Divider,
   Tooltip,
+  IconButton,
   useTheme,
   alpha
 } from '@mui/material';
 import {
-  VerifiedUserRounded,
+  ArrowBack,
+  QrCode,
   RefreshRounded,
   SearchRounded,
   LinkOffRounded,
@@ -31,7 +32,11 @@ import {
   GppGoodRounded,
   SecurityRounded,
 } from '@mui/icons-material';
+import { useNavigate } from 'react-router';
+import { useTranslation } from 'react-i18next';
 import { WalletContext } from '../AppContext';
+import { useHuntState } from "../components/HuntStateProvider";
+import ScanDialog from "../components/panels/ScanDialog";
 import { formatUnits, Interface, MaxUint256, JsonRpcProvider, Contract, Log } from 'ethers';
 import type { WCSessionInfo, WCNamespace } from '../types/index';
 import type { SitePermission } from '../backend/SitePermissionService.js';
@@ -139,7 +144,15 @@ function calculateApprovalRisk(
   return { score, level, reasons };
 }
 
-// Risk level → visual config
+type RiskLevel = 'critical' | 'high' | 'medium' | 'low';
+
+/**
+ * Risk level → colour and icon.
+ *
+ * The only palette this page keeps of its own. Severity is the one thing here that the
+ * wallet's divider-and-paper surface genuinely cannot say, and the labels are translated at
+ * render rather than stored, so this stays a visual table.
+ */
 const RISK_CONFIG = {
   critical: { color: '#dc2626', bg: '#dc262615', label: 'Critical', icon: GppBadRounded },
   high: { color: '#ef4444', bg: '#ef444412', label: 'High Risk', icon: WarningAmberRounded },
@@ -330,6 +343,15 @@ class RevokeService {
   }
 }
 
+/** The compact chip shape used for every tag on this page. */
+const chipSx = {
+  fontSize: '0.6rem',
+  height: 18,
+  fontWeight: 700,
+  borderRadius: '0px',
+  border: 'none',
+} as const;
+
 const CHAIN_LABELS: Record<string, { name: string; color: string }> = {
   "eip155:1": { name: "Ethereum", color: "#627EEA" },
   "eip155:11155111": { name: "Sepolia", color: "#9B59B6" },
@@ -359,6 +381,9 @@ const RevokeAlchemyPage = () => {
   const wcService = context?.walletConnectService;
   const sitePermissions = context?.sitePermissions;
   const theme = useTheme();
+  const navigate = useNavigate();
+  const { t } = useTranslation();
+  const [scanOpen, setScanOpen] = useState(false);
 
   const [approvals, setApprovals] = useState<TokenApproval[]>([]);
   const [sessions, setSessions] = useState<WCSessionInfo[]>([]);
@@ -366,6 +391,7 @@ const RevokeAlchemyPage = () => {
   const [sites, setSites] = useState<SitePermission[]>([]);
   const [loading, setLoading] = useState(false);
   const [disconnectingAll, setDisconnectingAll] = useState(false);
+  const hunt = useHuntState();
   const [scanProgress, setScanProgress] = useState(0);
   const [scanMessage, setScanMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -433,6 +459,9 @@ const RevokeAlchemyPage = () => {
       await sitePermissions.revokeAccount(origin, address);
       notifyPermissionChange();
       setSuccess(`${origin} disconnected`);
+      // A moment rather than a condition: it clears itself, so it cannot follow the user
+      // onto another screen and make a mark appear somewhere it does not belong.
+      hunt.pulse("just-disconnected");
       await fetchSites();
     } catch (err) {
       setError('Failed to disconnect: ' + (err instanceof Error ? err.message : String(err)));
@@ -596,186 +625,147 @@ const RevokeAlchemyPage = () => {
     }
   }, [activeAccount, network]);
 
-  // ─── Derived values ───
-  const isDark = theme.palette.mode === 'dark';
-  const cardBg = isDark ? 'rgba(30, 41, 59, 0.65)' : 'rgba(255, 255, 255, 0.75)';
-  const cardBorder = isDark ? 'rgba(96, 165, 250, 0.08)' : 'rgba(0, 0, 0, 0.06)';
+  /**
+   * The card shape the rest of the wallet uses: square corners, a divider-coloured hairline,
+   * and the paper background.
+   *
+   * This page used to carry its own look — translucent slate panels, blurred backdrops,
+   * rounded corners, its own risk palette — which made it read as a different application
+   * bolted on beside the wallet. The risk colours are kept, because they carry meaning that
+   * the palette does not; everything else here is now the same surface as Portfolio,
+   * Privacy and History.
+   */
+  const cardSx = {
+    p: 2,
+    border: '1px solid',
+    borderColor: 'divider',
+    bgcolor: 'background.paper',
+    borderRadius: '0px',
+  } as const;
+
+  const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
+
+  /** Section heading — the same one Portfolio and Privacy use above each block. */
+  const SectionTitle = ({ children }: { children: React.ReactNode }) => (
+    <Typography variant="subtitle2" fontWeight={800} sx={{ mb: 1, pl: 0.5 }}>
+      {children}
+    </Typography>
+  );
 
   return (
-    <Box sx={{ pb: 12, minHeight: '100%' }}>
-      <Container maxWidth="md" sx={{ px: { xs: 2, sm: 3 }, py: 3 }}>
+    <Box sx={{ pb: 12, px: 2, pt: 2 }}>
+      {/* ── Header ─────────────────────────────────────────────── */}
+      <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mb: 0.5 }}>
+        <IconButton onClick={() => navigate(-1)} aria-label={t('common.back')} sx={{ ml: -1 }}>
+          <ArrowBack />
+        </IconButton>
+        <SecurityRounded sx={{ fontSize: 20, color: 'primary.main' }} />
+        <Typography variant="h6" fontWeight={800} sx={{ letterSpacing: '-0.02em', flex: 1 }}>
+          {t('revoke.pageTitle')}
+        </Typography>
+        {/* Pairing a new dApp belongs beside the sessions it creates, not on the toolbar of
+            every screen in the wallet. */}
+        <Tooltip title={t('revoke.pairDapp')}>
+          <IconButton size="small" onClick={() => setScanOpen(true)} aria-label={t('revoke.pairDapp')}>
+            <QrCode fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title={t('revoke.scan')}>
+          <span>
+            <IconButton
+              size="small"
+              onClick={() => { fetchApprovals(); fetchSessions(); void fetchSites(); }}
+              disabled={loading}
+              aria-label={t('revoke.scan')}
+            >
+              {loading ? <CircularProgress size={16} /> : <RefreshRounded fontSize="small" />}
+            </IconButton>
+          </span>
+        </Tooltip>
+      </Stack>
 
-        {/* ─── Header ─── */}
-        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2.5 }}>
-          <Stack direction="row" alignItems="center" spacing={1}>
-            <SecurityRounded sx={{ fontSize: 22, color: 'primary.main' }} />
-            <Typography variant="subtitle1" fontWeight={800} letterSpacing="-0.01em">
-              Permissions & Sessions
+      {/* Whose permissions these are. The lists are scoped to one account, and a page that
+          takes access away should say which account it is taking it away from rather than
+          leaving it to be inferred from the header. */}
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2, pl: 0.5 }}>
+        {t('revoke.subtitle')}
+        {activeAccount?.GetAddress() ? ` · ${shortAddress(activeAccount.GetAddress()!)}` : ''}
+      </Typography>
+
+      {/* ── Error ──────────────────────────────────────────────── */}
+      {error && (
+        <Alert
+          severity="error"
+          onClose={() => setError(null)}
+          sx={{ mb: 2, borderRadius: '0px', fontSize: '0.78rem' }}
+        >
+          {error}
+        </Alert>
+      )}
+
+      {/* ── Scanning ───────────────────────────────────────────── */}
+      {loading && (
+        <Paper elevation={0} sx={{ ...cardSx, mb: 2 }}>
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+            <SearchRounded sx={{ fontSize: 18, color: 'primary.main' }} />
+            <Typography variant="subtitle2" fontWeight={700} sx={{ flex: 1 }}>
+              {t('revoke.scanning')}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" fontWeight={700}>
+              {scanProgress}%
             </Typography>
           </Stack>
-          <Button
-            size="small"
-            startIcon={loading ? <CircularProgress size={14} color="inherit" /> : <RefreshRounded sx={{ fontSize: 16 }} />}
-            onClick={() => { fetchApprovals(); fetchSessions(); }}
-            disabled={loading}
-            variant="outlined"
+          <LinearProgress
+            variant="determinate"
+            value={scanProgress}
             sx={{
-              borderRadius: 2.5,
-              fontWeight: 600,
-              fontSize: '0.75rem',
-              textTransform: 'none',
-              px: 2,
-              borderColor: cardBorder,
+              height: 4,
+              borderRadius: 0,
+              bgcolor: alpha(theme.palette.text.primary, 0.08),
+              '& .MuiLinearProgress-bar': { bgcolor: 'primary.main', borderRadius: 0 },
             }}
-          >
-            {loading ? 'Scanning...' : 'Scan'}
-          </Button>
-        </Stack>
+          />
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }} noWrap>
+            {scanMessage || t('revoke.scanningDetail')}
+          </Typography>
+        </Paper>
+      )}
 
-        {/* ─── Error ─── */}
-        {error && (
-          <Paper elevation={0} sx={{
-            mb: 2, p: 1.5, borderRadius: 2.5,
-            bgcolor: 'rgba(220, 38, 38, 0.08)',
-            border: '1px solid rgba(220, 38, 38, 0.2)',
-          }}>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <GppBadRounded sx={{ fontSize: 18, color: '#dc2626' }} />
-              <Typography variant="caption" fontWeight={600} color="error.main" sx={{ flex: 1 }}>{error}</Typography>
-              <Button size="small" onClick={() => setError(null)} sx={{ minWidth: 'auto', fontSize: '0.65rem', fontWeight: 700 }}>
-                Dismiss
-              </Button>
-            </Stack>
-          </Paper>
-        )}
-
-        {/* ─── Compact Loading Scanner ─── */}
-        {loading && (
-          <Paper elevation={0} sx={{
-            mb: 2.5, p: 2, borderRadius: 3,
-            bgcolor: cardBg,
-            backdropFilter: 'blur(16px)',
-            border: '1px solid',
-            borderColor: cardBorder,
-          }}>
-            <Stack direction="row" alignItems="center" spacing={2}>
-              <Box sx={{ position: 'relative', display: 'inline-flex' }}>
-                <CircularProgress
-                  variant="determinate"
-                  value={scanProgress}
-                  size={44}
-                  thickness={4}
-                  sx={{
-                    color: 'primary.main',
-                    '& .MuiCircularProgress-circle': {
-                      strokeLinecap: 'round',
-                    },
-                  }}
-                />
-                <Box
-                  sx={{
-                    top: 0, left: 0, bottom: 0, right: 0,
-                    position: 'absolute',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}
-                >
-                  <Typography variant="caption" fontWeight={800} color="primary.main" sx={{ fontSize: '0.6rem' }}>
-                    {scanProgress}%
-                  </Typography>
-                </Box>
-              </Box>
-
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography variant="body2" fontWeight={700} sx={{ mb: 0.5 }}>
-                  Scanning Permissions
-                </Typography>
-                <Typography variant="caption" color="text.secondary" noWrap>
-                  {scanMessage || 'Analyzing blockchain data...'}
-                </Typography>
-                <LinearProgress
-                  variant="determinate"
-                  value={scanProgress}
-                  sx={{
-                    mt: 1,
-                    height: 3,
-                    borderRadius: 2,
-                    bgcolor: isDark ? 'rgba(96, 165, 250, 0.08)' : 'rgba(37, 99, 235, 0.06)',
-                    '& .MuiLinearProgress-bar': {
-                      borderRadius: 2,
-                      background: 'linear-gradient(90deg, #2563eb 0%, #3b82f6 100%)',
-                    }
-                  }}
-                />
-              </Box>
-            </Stack>
-          </Paper>
-        )}
-
-        {/* ─── Connected sites (injected provider) ───
-            A grant made through `window.ethereum` is standing access to the user's address
-            and a standing right to ask for signatures, so it belongs on the page whose
-            whole job is taking such access back — not only buried in Settings. */}
-        {sites.length > 0 && (
-          <Box sx={{ mb: 2.5 }}>
-            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
-              <Box>
-                <Typography variant="body2" fontWeight={700} color="text.secondary" letterSpacing="0.03em" sx={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>
-                  Connected Sites ({sites.length})
-                </Typography>
-                {/* Whose connections these are. The list is scoped to one account, and a
-                    page that revokes access should say which account it is revoking for
-                    rather than leaving it to be inferred from the header. */}
-                <Typography
-                  variant="caption"
-                  color="text.disabled"
-                  sx={{ display: 'block', fontFamily: 'monospace', textTransform: 'none', fontSize: '0.65rem' }}
-                >
-                  {(() => {
-                    const a = activeAccount?.GetAddress() ?? '';
-                    return a ? `${a.slice(0, 8)}…${a.slice(-6)}` : '';
-                  })()}
-                </Typography>
-              </Box>
-              {sites.length > 1 && (
-                <Button
-                  size="small"
-                  color="error"
-                  startIcon={<LinkOffRounded sx={{ fontSize: 14 }} />}
-                  onClick={handleDisconnectAllSites}
-                  sx={{ borderRadius: 2, fontWeight: 700, textTransform: 'none', fontSize: '0.7rem' }}
-                >
-                  Disconnect All
-                </Button>
-              )}
-            </Stack>
-
-            {sites.map((site) => (
-              <Paper
-                key={site.origin}
-                elevation={0}
-                sx={{
-                  p: 2,
-                  mb: 1,
-                  borderRadius: 3,
-                  border: '1px solid',
-                  borderColor: cardBorder,
-                  bgcolor: cardBg,
-                  backdropFilter: 'blur(16px)',
-                  transition: 'all 0.15s ease',
-                  '&:hover': { borderColor: 'primary.main' },
-                }}
+      {/* ── Connected sites (injected provider) ─────────────────
+          A grant made through `window.ethereum` is standing access to the user's address
+          and a standing right to ask for signatures, so it belongs on the page whose whole
+          job is taking such access back — not only buried in Settings. */}
+      {sites.length > 0 && (
+        <Box sx={{ mb: 2 }}>
+          <Stack direction="row" alignItems="center" sx={{ mb: 1 }}>
+            <SectionTitle>{t('revoke.connectedSites', { count: sites.length })}</SectionTitle>
+            <Box sx={{ flex: 1 }} />
+            {sites.length > 1 && (
+              <Button
+                size="small"
+                color="error"
+                startIcon={<LinkOffRounded sx={{ fontSize: 14 }} />}
+                onClick={handleDisconnectAllSites}
+                sx={{ borderRadius: '0px', fontWeight: 700, textTransform: 'none', fontSize: '0.7rem' }}
               >
+                {t('revoke.disconnectAll')}
+              </Button>
+            )}
+          </Stack>
+
+          <Stack spacing={1}>
+            {sites.map((site) => (
+              <Paper key={site.origin} elevation={0} sx={cardSx}>
                 <Stack direction="row" alignItems="center" spacing={1.5}>
                   <Avatar
+                    variant="square"
                     sx={{
-                      width: 36, height: 36,
-                      bgcolor: isDark ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.08)',
+                      width: 32, height: 32,
+                      bgcolor: alpha(theme.palette.secondary.main, 0.12),
                       color: 'secondary.main',
-                      border: '1px solid',
-                      borderColor: cardBorder,
                     }}
                   >
-                    <LanguageRounded sx={{ fontSize: 18 }} />
+                    <LanguageRounded sx={{ fontSize: 17 }} />
                   </Avatar>
 
                   <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -783,29 +773,21 @@ const RevokeAlchemyPage = () => {
                       {site.origin.replace(/^https?:\/\//, '')}
                     </Typography>
                     <Typography variant="caption" color="text.secondary" noWrap sx={{ fontSize: '0.65rem' }}>
-                      {site.accounts.map((a) => `${a.slice(0, 6)}…${a.slice(-4)}`).join(', ')}
+                      {site.accounts.map(shortAddress).join(', ')}
                     </Typography>
                     <Stack direction="row" gap={0.5} sx={{ mt: 0.5 }} flexWrap="wrap">
                       <Chip
                         size="small"
-                        label="Browser"
-                        sx={{
-                          fontSize: '0.6rem', height: 18, fontWeight: 700,
-                          bgcolor: 'action.hover', color: 'text.secondary', border: 'none',
-                        }}
+                        label={t('revoke.viaBrowser')}
+                        sx={{ ...chipSx, bgcolor: 'action.hover', color: 'text.secondary' }}
                       />
                       {site.lastUsedAt && (
-                        <Tooltip title={`Last used: ${new Date(site.lastUsedAt).toLocaleString()}`} arrow>
+                        <Tooltip title={t('revoke.lastUsed', { when: new Date(site.lastUsedAt).toLocaleString() })} arrow>
                           <Chip
                             size="small"
                             icon={<AccessTimeRounded sx={{ fontSize: 10 }} />}
                             label={new Date(site.lastUsedAt).toLocaleDateString()}
-                            sx={{
-                              fontSize: '0.6rem', height: 18, fontWeight: 600,
-                              color: 'text.secondary',
-                              '& .MuiChip-icon': { color: 'inherit' },
-                              border: 'none',
-                            }}
+                            sx={{ ...chipSx, color: 'text.secondary', '& .MuiChip-icon': { color: 'inherit' } }}
                           />
                         </Tooltip>
                       )}
@@ -816,39 +798,41 @@ const RevokeAlchemyPage = () => {
                     size="small"
                     color="error"
                     variant="outlined"
-                    startIcon={<LinkOffRounded sx={{ fontSize: 14 }} />}
                     onClick={() => handleDisconnectSite(site.origin)}
-                    sx={{ borderRadius: 2, fontWeight: 700, textTransform: 'none', fontSize: '0.7rem', flexShrink: 0 }}
+                    sx={{ borderRadius: '0px', fontWeight: 700, textTransform: 'none', fontSize: '0.7rem', flexShrink: 0 }}
                   >
-                    Disconnect
+                    {t('revoke.disconnect')}
                   </Button>
                 </Stack>
               </Paper>
             ))}
-          </Box>
-        )}
+          </Stack>
+        </Box>
+      )}
 
-        {/* ─── Connected dApps ─── */}
-        {sessions.length > 0 && (
-          <Box sx={{ mb: 2.5 }}>
-            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
-              <Typography variant="body2" fontWeight={700} color="text.secondary" letterSpacing="0.03em" sx={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>
-                Connected dApps ({sessions.length})
-              </Typography>
-              {sessions.length > 1 && (
-                <Button
-                  size="small"
-                  color="error"
-                  startIcon={disconnectingAll ? <CircularProgress size={12} /> : <LinkOffRounded sx={{ fontSize: 14 }} />}
-                  onClick={handleDisconnectAll}
-                  disabled={disconnectingAll}
-                  sx={{ borderRadius: 2, fontWeight: 700, textTransform: 'none', fontSize: '0.7rem' }}
-                >
-                  Disconnect All
-                </Button>
-              )}
-            </Stack>
+      {/* ── WalletConnect sessions ──────────────────────────────
+          These used to be duplicated on the home screen. They are a standing record, not
+          something to glance at, so they live here with everything else that grants access. */}
+      {sessions.length > 0 && (
+        <Box sx={{ mb: 2 }}>
+          <Stack direction="row" alignItems="center" sx={{ mb: 1 }}>
+            <SectionTitle>{t('revoke.connectedDapps', { count: sessions.length })}</SectionTitle>
+            <Box sx={{ flex: 1 }} />
+            {sessions.length > 1 && (
+              <Button
+                size="small"
+                color="error"
+                startIcon={disconnectingAll ? <CircularProgress size={12} /> : <LinkOffRounded sx={{ fontSize: 14 }} />}
+                onClick={handleDisconnectAll}
+                disabled={disconnectingAll}
+                sx={{ borderRadius: '0px', fontWeight: 700, textTransform: 'none', fontSize: '0.7rem' }}
+              >
+                {t('revoke.disconnectAll')}
+              </Button>
+            )}
+          </Stack>
 
+          <Stack spacing={1}>
             {sessions.map((s: WCSessionInfo) => {
               const peerMeta = s.peer?.metadata || {};
               const chains = Object.values(s.namespaces || {}).flatMap((ns: WCNamespace) => ns.chains || ns.accounts?.map((a: string) => a.split(':').slice(0, 2).join(':')) || []);
@@ -861,42 +845,35 @@ const RevokeAlchemyPage = () => {
                   key={s.topic}
                   elevation={0}
                   sx={{
-                    p: 2,
-                    mb: 1,
-                    borderRadius: 3,
-                    border: '1px solid',
-                    borderColor: isExpired ? 'rgba(239, 68, 68, 0.3)' : cardBorder,
-                    bgcolor: cardBg,
-                    backdropFilter: 'blur(16px)',
-                    transition: 'all 0.15s ease',
-                    '&:hover': { borderColor: 'primary.main' },
+                    ...cardSx,
+                    // An expired session is still listed — it is still in the store, and a
+                    // row that vanishes leaves nothing to disconnect — but it should not
+                    // look like a live one.
+                    borderColor: isExpired ? 'error.main' : 'divider',
                   }}
                 >
                   <Stack direction="row" alignItems="center" spacing={1.5}>
                     <Avatar
+                      variant="square"
                       src={peerMeta.icons?.[0]}
                       sx={{
-                        width: 36, height: 36,
-                        bgcolor: isDark ? 'rgba(37, 99, 235, 0.15)' : 'rgba(37, 99, 235, 0.08)',
+                        width: 32, height: 32,
+                        bgcolor: alpha(theme.palette.primary.main, 0.12),
                         color: 'primary.main',
-                        fontSize: '0.85rem',
+                        fontSize: '0.8rem',
                         fontWeight: 700,
-                        border: '1px solid',
-                        borderColor: cardBorder,
                       }}
                     >
                       {peerMeta.name?.[0]?.toUpperCase() || '?'}
                     </Avatar>
+
                     <Box sx={{ flex: 1, minWidth: 0 }}>
                       <Typography variant="body2" fontWeight={700} noWrap>
-                        {peerMeta.name || 'Unknown dApp'}
+                        {peerMeta.name || t('revoke.unknownDapp')}
                       </Typography>
-                      <Stack direction="row" alignItems="center" spacing={0.5}>
-                        <LanguageRounded sx={{ fontSize: 11, color: 'text.secondary' }} />
-                        <Typography variant="caption" color="text.secondary" noWrap sx={{ fontSize: '0.65rem' }}>
-                          {peerMeta.url || 'No URL'}
-                        </Typography>
-                      </Stack>
+                      <Typography variant="caption" color="text.secondary" noWrap sx={{ fontSize: '0.65rem' }} component="div">
+                        {peerMeta.url || t('revoke.noUrl')}
+                      </Typography>
                       <Stack direction="row" gap={0.5} sx={{ mt: 0.5 }} flexWrap="wrap">
                         {uniqueChains.map((chain: string) => {
                           const label = CHAIN_LABELS[chain];
@@ -906,210 +883,177 @@ const RevokeAlchemyPage = () => {
                               size="small"
                               label={label?.name || chain}
                               sx={{
-                                fontSize: '0.6rem', height: 18, fontWeight: 700,
-                                bgcolor: label ? `${label.color}12` : 'action.hover',
+                                ...chipSx,
+                                bgcolor: label ? `${label.color}14` : 'action.hover',
                                 color: label?.color || 'text.secondary',
-                                border: 'none',
                               }}
                             />
                           );
                         })}
                         {expiryDate && (
-                          <Tooltip title={`Expires: ${expiryDate.toLocaleString()}`} arrow>
+                          <Tooltip title={t('revoke.expires', { when: expiryDate.toLocaleString() })} arrow>
                             <Chip
                               size="small"
                               icon={<AccessTimeRounded sx={{ fontSize: 10 }} />}
-                              label={isExpired ? 'Expired' : expiryDate.toLocaleDateString()}
+                              label={isExpired ? t('revoke.expired') : expiryDate.toLocaleDateString()}
                               sx={{
-                                fontSize: '0.6rem', height: 18, fontWeight: 600,
-                                color: isExpired ? '#ef4444' : 'text.secondary',
+                                ...chipSx,
+                                color: isExpired ? 'error.main' : 'text.secondary',
                                 '& .MuiChip-icon': { color: 'inherit' },
-                                border: 'none',
                               }}
                             />
                           </Tooltip>
                         )}
                       </Stack>
                     </Box>
+
                     <Button
                       size="small"
                       variant="outlined"
                       color="error"
                       onClick={() => handleDisconnectSession(s.topic)}
-                      sx={{
-                        borderRadius: 2, fontWeight: 700, textTransform: 'none',
-                        fontSize: '0.7rem', minWidth: 88, py: 0.5,
-                        borderColor: 'rgba(239, 68, 68, 0.3)',
-                        '&:hover': { borderColor: 'error.main', bgcolor: 'rgba(239, 68, 68, 0.06)' },
-                      }}
+                      sx={{ borderRadius: '0px', fontWeight: 700, textTransform: 'none', fontSize: '0.7rem', flexShrink: 0 }}
                     >
-                      Disconnect
+                      {t('revoke.disconnect')}
                     </Button>
                   </Stack>
                 </Paper>
               );
             })}
-          </Box>
-        )}
+          </Stack>
+        </Box>
+      )}
 
-        {/* ─── Risk Overview (compact) ─── */}
-        {!loading && approvals.length > 0 && (() => {
-          const avgScore = Math.round(approvals.reduce((s, a) => s + a.riskScore, 0) / approvals.length);
-          const overallLevel = avgScore >= 75 ? 'critical' : avgScore >= 50 ? 'high' : avgScore >= 30 ? 'medium' : 'low';
-          const cfg = RISK_CONFIG[overallLevel];
-          const OverallIcon = cfg.icon;
-          const unlimitedCount = approvals.filter(a => a.isUnlimited).length;
-          const highRiskCount = approvals.filter(a => a.riskLevel === 'critical' || a.riskLevel === 'high').length;
+      {/* ── Risk summary ───────────────────────────────────────── */}
+      {!loading && approvals.length > 0 && (() => {
+        const avgScore = Math.round(approvals.reduce((sum, a) => sum + a.riskScore, 0) / approvals.length);
+        const overallLevel: RiskLevel = avgScore >= 75 ? 'critical' : avgScore >= 50 ? 'high' : avgScore >= 30 ? 'medium' : 'low';
+        const cfg = RISK_CONFIG[overallLevel];
+        const unlimitedCount = approvals.filter((a) => a.isUnlimited).length;
+        const highRiskCount = approvals.filter((a) => a.riskLevel === 'critical' || a.riskLevel === 'high').length;
 
-          return (
-            <Paper elevation={0} sx={{
-              p: 2, mb: 2.5, borderRadius: 3,
-              bgcolor: cardBg,
-              backdropFilter: 'blur(16px)',
-              border: '1px solid',
-              borderColor: `${cfg.color}20`,
-            }}>
-              <Stack direction="row" alignItems="center" spacing={2}>
-                {/* Score circle */}
-                <Box sx={{
-                  width: 52, height: 52, borderRadius: '50%',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column',
-                  bgcolor: `${cfg.color}10`,
-                  border: '2px solid',
-                  borderColor: `${cfg.color}30`,
-                  flexShrink: 0,
-                }}>
-                  <Typography variant="subtitle2" fontWeight={900} sx={{ color: cfg.color, lineHeight: 1 }}>{avgScore}</Typography>
-                  <Typography sx={{ fontSize: '0.5rem', color: cfg.color, fontWeight: 700, lineHeight: 1 }}>RISK</Typography>
-                </Box>
+        return (
+          <Paper elevation={0} sx={{ ...cardSx, mb: 2 }}>
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+              <ShieldRounded sx={{ fontSize: 18, color: cfg.color }} />
+              <Typography variant="subtitle2" fontWeight={700} sx={{ flex: 1 }}>
+                {t('revoke.riskSummary')}
+              </Typography>
+              <Typography variant="h6" fontWeight={800} sx={{ color: cfg.color }}>
+                {avgScore}
+              </Typography>
+            </Stack>
 
-                {/* Stats row */}
-                <Stack direction="row" spacing={2} sx={{ flex: 1 }} divider={<Divider orientation="vertical" flexItem />}>
-                  <Box sx={{ textAlign: 'center', flex: 1 }}>
-                    <Typography variant="subtitle2" fontWeight={800}>{approvals.length}</Typography>
-                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6rem' }}>Approvals</Typography>
-                  </Box>
-                  {unlimitedCount > 0 && (
-                    <Box sx={{ textAlign: 'center', flex: 1 }}>
-                      <Typography variant="subtitle2" fontWeight={800} color="error.main">{unlimitedCount}</Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6rem' }}>Unlimited</Typography>
-                    </Box>
-                  )}
-                  {highRiskCount > 0 && (
-                    <Box sx={{ textAlign: 'center', flex: 1 }}>
-                      <Typography variant="subtitle2" fontWeight={800} sx={{ color: '#ef4444' }}>{highRiskCount}</Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6rem' }}>High Risk</Typography>
-                    </Box>
-                  )}
-                </Stack>
-              </Stack>
-            </Paper>
-          );
-        })()}
+            <LinearProgress
+              variant="determinate"
+              value={avgScore}
+              sx={{
+                height: 8,
+                borderRadius: 0,
+                bgcolor: alpha(theme.palette.text.primary, 0.08),
+                '& .MuiLinearProgress-bar': { bgcolor: cfg.color, borderRadius: 0 },
+              }}
+            />
 
-        {/* ─── Approval Cards ─── */}
-        {approvals.length > 0 && (
-          <Box sx={{ mb: 2 }}>
-            <Typography variant="body2" fontWeight={700} color="text.secondary" letterSpacing="0.03em" sx={{ textTransform: 'uppercase', fontSize: '0.7rem', mb: 1.5 }}>
-              Token Permissions ({approvals.length})
-            </Typography>
+            <Stack direction="row" spacing={2} sx={{ mt: 1 }} divider={<Divider orientation="vertical" flexItem />}>
+              <Box sx={{ flex: 1 }}>
+                <Typography variant="subtitle2" fontWeight={800}>{approvals.length}</Typography>
+                <Typography variant="caption" color="text.secondary">{t('revoke.approvalsLabel')}</Typography>
+              </Box>
+              <Box sx={{ flex: 1 }}>
+                <Typography variant="subtitle2" fontWeight={800} color={unlimitedCount > 0 ? 'error.main' : 'text.primary'}>
+                  {unlimitedCount}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">{t('revoke.unlimited')}</Typography>
+              </Box>
+              <Box sx={{ flex: 1 }}>
+                <Typography variant="subtitle2" fontWeight={800} color={highRiskCount > 0 ? 'error.main' : 'text.primary'}>
+                  {highRiskCount}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">{t('revoke.highRisk')}</Typography>
+              </Box>
+            </Stack>
+          </Paper>
+        );
+      })()}
 
+      {/* ── Token approvals ────────────────────────────────────── */}
+      {approvals.length > 0 && (
+        <Box sx={{ mb: 2 }}>
+          <SectionTitle>{t('revoke.tokenPermissions', { count: approvals.length })}</SectionTitle>
+
+          <Stack spacing={1}>
             {[...approvals].sort((a, b) => b.riskScore - a.riskScore).map((a, i) => {
               const riskCfg = RISK_CONFIG[a.riskLevel];
               const RiskIcon = riskCfg.icon;
 
               return (
-                <Paper key={i} elevation={0} sx={{
-                  mb: 1.5,
-                  borderRadius: 3,
-                  bgcolor: cardBg,
-                  backdropFilter: 'blur(16px)',
-                  border: '1px solid',
-                  borderColor: `${riskCfg.color}18`,
-                  overflow: 'hidden',
-                  transition: 'all 0.15s ease',
-                  '&:hover': { borderColor: `${riskCfg.color}40` },
-                }}>
-                  {/* Subtle risk bar */}
+                <Paper key={i} elevation={0} sx={{ ...cardSx, p: 0 }}>
+                  {/* The one place this page keeps a colour of its own: the bar says how bad
+                      this approval is at a glance, which no amount of divider grey can. */}
                   <LinearProgress
                     variant="determinate"
                     value={a.riskScore}
                     sx={{
-                      height: 2,
+                      height: 3,
                       bgcolor: 'transparent',
                       '& .MuiLinearProgress-bar': { bgcolor: riskCfg.color, borderRadius: 0 },
                     }}
                   />
 
                   <Box sx={{ p: 2 }}>
-                    {/* Top row: token + risk badge */}
-                    <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
-                      <Stack direction="row" alignItems="center" spacing={1}>
-                        <Typography variant="body2" fontWeight={800}>{a.tokenSymbol}</Typography>
-                        <Typography variant="caption" color="text.secondary">{a.tokenName}</Typography>
+                    <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }} flexWrap="wrap" useFlexGap>
+                      <Typography variant="body2" fontWeight={800}>{a.tokenSymbol}</Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ flex: 1, minWidth: 0 }} noWrap>
+                        {a.tokenName}
+                      </Typography>
+                      <Chip
+                        icon={<RiskIcon sx={{ fontSize: 12 }} />}
+                        label={t(`revoke.risk.${a.riskLevel}`)}
+                        size="small"
+                        sx={{
+                          ...chipSx,
+                          bgcolor: `${riskCfg.color}14`,
+                          color: riskCfg.color,
+                          '& .MuiChip-icon': { color: riskCfg.color },
+                        }}
+                      />
+                      {a.isUnlimited && (
                         <Chip
-                          icon={<RiskIcon sx={{ fontSize: 12 }} />}
-                          label={riskCfg.label}
+                          label={t('revoke.unlimited')}
                           size="small"
-                          sx={{
-                            height: 20, fontSize: '0.6rem', fontWeight: 800,
-                            bgcolor: `${riskCfg.color}10`,
-                            color: riskCfg.color,
-                            border: 'none',
-                            '& .MuiChip-icon': { color: riskCfg.color },
-                          }}
+                          sx={{ ...chipSx, bgcolor: alpha(theme.palette.error.main, 0.12), color: 'error.main' }}
                         />
-                        {a.isUnlimited && (
-                          <Chip
-                            label="UNLIMITED"
-                            size="small"
-                            sx={{
-                              height: 18, fontSize: '0.55rem', fontWeight: 800,
-                              bgcolor: 'rgba(220, 38, 38, 0.10)',
-                              color: '#dc2626',
-                              border: 'none',
-                            }}
-                          />
-                        )}
-                      </Stack>
+                      )}
                     </Stack>
 
-                    {/* Details grid */}
-                    <Box sx={{
-                      display: 'grid',
-                      gridTemplateColumns: 'auto 1fr',
-                      gap: '2px 12px',
-                      mb: 1.5,
-                    }}>
-                      <Typography variant="caption" color="text.secondary" fontWeight={600}>Spender</Typography>
-                      <Typography variant="caption" fontWeight={700}>{a.spenderName}</Typography>
+                    <Box sx={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '2px 12px', mb: 1.5 }}>
+                      <Typography variant="caption" color="text.secondary" fontWeight={600}>{t('revoke.spender')}</Typography>
+                      <Typography variant="caption" fontWeight={700} noWrap>{a.spenderName}</Typography>
 
-                      <Typography variant="caption" color="text.secondary" fontWeight={600}>Address</Typography>
-                      <Typography variant="caption" sx={{
-                        fontFamily: 'monospace', fontSize: '0.65rem',
-                        color: 'primary.main',
-                        overflow: 'hidden', textOverflow: 'ellipsis',
-                      }}>
-                        {a.spenderAddress.slice(0, 6)}...{a.spenderAddress.slice(-4)}
+                      <Typography variant="caption" color="text.secondary" fontWeight={600}>{t('revoke.address')}</Typography>
+                      <Typography variant="caption" sx={{ fontFamily: 'monospace', fontSize: '0.65rem' }} noWrap>
+                        {shortAddress(a.spenderAddress)}
                       </Typography>
 
-                      <Typography variant="caption" color="text.secondary" fontWeight={600}>Allowance</Typography>
+                      <Typography variant="caption" color="text.secondary" fontWeight={600}>{t('revoke.allowance')}</Typography>
                       <Typography variant="caption" fontWeight={700} color={a.isUnlimited ? 'error.main' : 'text.primary'}>
-                        {a.isUnlimited ? '∞ Unlimited' : a.allowance}
+                        {a.isUnlimited ? `∞ ${t('revoke.unlimited')}` : a.allowance}
                       </Typography>
                     </Box>
 
-                    {/* Risk reasons as inline tags */}
                     <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mb: 1.5 }}>
                       {a.riskReasons.map((reason, ri) => (
                         <Typography
                           key={ri}
                           variant="caption"
                           sx={{
-                            fontSize: '0.6rem', fontWeight: 600,
+                            fontSize: '0.6rem',
+                            fontWeight: 600,
                             color: 'text.secondary',
-                            bgcolor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
-                            px: 1, py: 0.25, borderRadius: 1,
+                            bgcolor: alpha(theme.palette.text.primary, 0.05),
+                            px: 1,
+                            py: 0.25,
                           }}
                         >
                           {reason}
@@ -1117,84 +1061,52 @@ const RevokeAlchemyPage = () => {
                       ))}
                     </Stack>
 
-                    {/* Revoke button */}
                     <Button
                       fullWidth
                       size="small"
                       variant="contained"
-                      color={a.riskLevel === 'critical' || a.riskLevel === 'high' ? "error" : "primary"}
+                      color={a.riskLevel === 'critical' || a.riskLevel === 'high' ? 'error' : 'primary'}
                       onClick={() => handleRevoke(a)}
                       startIcon={<LinkOffRounded sx={{ fontSize: 16 }} />}
-                      sx={{
-                        borderRadius: 2.5,
-                        fontWeight: 700,
-                        fontSize: '0.75rem',
-                        py: 0.75,
-                        textTransform: 'none',
-                        boxShadow: a.riskLevel === 'critical'
-                          ? '0 2px 10px rgba(220, 38, 38, 0.25)'
-                          : '0 2px 10px rgba(37, 99, 235, 0.2)',
-                      }}
+                      sx={{ borderRadius: '0px', fontWeight: 700, fontSize: '0.75rem', py: 0.75, textTransform: 'none', boxShadow: 'none' }}
                     >
-                      Revoke Permission
+                      {t('revoke.revokeApproval')}
                     </Button>
                   </Box>
                 </Paper>
               );
             })}
-          </Box>
-        )}
+          </Stack>
+        </Box>
+      )}
 
-        {/* ─── Secure State ─── */}
-        {!loading && approvals.length === 0 && sessions.length === 0 && sites.length === 0 && (
-          <Paper elevation={0} sx={{
-            p: 4,
-            textAlign: 'center',
-            bgcolor: cardBg,
-            backdropFilter: 'blur(16px)',
-            border: '1px solid',
-            borderColor: isDark ? 'rgba(34, 197, 94, 0.12)' : 'rgba(34, 197, 94, 0.15)',
-            borderRadius: 3,
-          }}>
-            <Box sx={{
-              width: 56, height: 56, borderRadius: '50%', mx: 'auto', mb: 2,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              bgcolor: isDark ? 'rgba(34, 197, 94, 0.1)' : 'rgba(34, 197, 94, 0.08)',
-              border: '2px solid',
-              borderColor: isDark ? 'rgba(34, 197, 94, 0.2)' : 'rgba(34, 197, 94, 0.15)',
-            }}>
-              <CheckCircleOutlineRounded sx={{ fontSize: 28, color: '#22c55e' }} />
-            </Box>
-            <Typography variant="subtitle1" fontWeight={800} sx={{ mb: 0.5 }}>
-              Wallet Secure
-            </Typography>
-            <Typography variant="caption" color="text.secondary" fontWeight={500}>
-              No active token approvals or dApp connections found.
-            </Typography>
-          </Paper>
-        )}
+      {/* ── Nothing to revoke ──────────────────────────────────── */}
+      {!loading && approvals.length === 0 && sessions.length === 0 && sites.length === 0 && (
+        <Paper elevation={0} sx={{ ...cardSx, p: 3, textAlign: 'center' }}>
+          <CheckCircleOutlineRounded sx={{ fontSize: 32, color: 'secondary.main', mb: 1 }} />
+          <Typography variant="subtitle2" fontWeight={800} sx={{ mb: 0.5 }}>
+            {t('revoke.secureTitle')}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            {t('revoke.secureBody')}
+          </Typography>
+        </Paper>
+      )}
 
-        <Snackbar
-          open={!!success}
-          autoHideDuration={4000}
-          onClose={() => setSuccess(null)}
-          message={success}
-          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-          sx={{
-            mb: 8,
-            '& .MuiSnackbarContent-root': {
-              borderRadius: 3,
-              fontWeight: 600,
-              fontSize: '0.8rem',
-              bgcolor: isDark ? 'rgba(30, 41, 59, 0.95)' : 'rgba(15, 23, 42, 0.9)',
-              backdropFilter: 'blur(12px)',
-            }
-          }}
-        />
-      </Container>
+      {/* Re-reads the session list on close: a pairing that just succeeded should appear
+          without the user having to press Rescan. */}
+      <ScanDialog open={scanOpen} onClose={() => { setScanOpen(false); fetchSessions(); }} />
+
+      <Snackbar
+        open={!!success}
+        autoHideDuration={4000}
+        onClose={() => setSuccess(null)}
+        message={success}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        sx={{ mb: 10, '& .MuiSnackbarContent-root': { borderRadius: '0px', fontWeight: 600, fontSize: '0.8rem' } }}
+      />
     </Box>
   );
 };
 
 export default RevokeAlchemyPage;
-

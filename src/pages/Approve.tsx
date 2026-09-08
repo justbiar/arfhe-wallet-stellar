@@ -34,6 +34,7 @@ import { toChainId, wellKnownChainName } from "../backend/NetworkTypes.js";
 import { analyzeFheRisk } from "../backend/DAppConnectionService.js";
 import { PhishingDetector, type PhishingCheckResult } from "../backend/PhishingDetector.js";
 import { toUserMessage } from "../backend/UserFacingError.js";
+import HuntSurface from "../components/HuntSurface.js";
 
 /** A request parked by the service worker. */
 interface PendingRequest {
@@ -285,7 +286,18 @@ export default function Approve() {
     if (index >= 0) setSelectedAccountIndex(index);
   }, [context, account]);
 
-  /** Report the outcome and close. Closing without this would strand the site. */
+  /**
+   * Whether this screen is a guest inside an already-open wallet rather than a window of
+   * its own.
+   *
+   * Set by the surface that took the request from the worker. It decides what "done" means
+   * here: a window closes, but calling `window.close()` inside the side panel either does
+   * nothing or takes the whole wallet down — neither of which is what the user asked for
+   * by answering a prompt.
+   */
+  const inline = new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("inline") === "1";
+
+  /** Report the outcome, then leave. Leaving without this would strand the site. */
   const respond = useCallback(async (payload: { result?: unknown; error?: { code: number; message: string } }) => {
     if (!request) return;
     setAnswered(true);
@@ -295,8 +307,13 @@ export default function Approve() {
       origin: request.origin,
       ...payload,
     });
+    if (inline) {
+      // Back to the wallet the user was already in, not a closed window.
+      window.location.hash = "#/home";
+      return;
+    }
     window.close();
-  }, [request]);
+  }, [request, inline]);
 
   const reject = useCallback(() => {
     void respond({ error: { code: RPC_ERR_REJECTED, message: "User rejected the request." } });
@@ -475,7 +492,15 @@ export default function Approve() {
         <Typography variant="caption" color="text.disabled" textAlign="center" sx={{ mt: 1, maxWidth: 280 }}>
           {t("approve.noPendingHint")}
         </Typography>
-        <Button sx={{ mt: 2 }} onClick={() => window.close()}>{t("common.close")}</Button>
+        <Button
+          sx={{ mt: 2 }}
+          onClick={() => {
+            if (inline) { window.location.hash = "#/home"; return; }
+            window.close();
+          }}
+        >
+          {t("common.close")}
+        </Button>
       </Centered>
     );
   }
@@ -529,6 +554,14 @@ export default function Approve() {
     // be scrolled to. On the one screen whose entire purpose is a decision, the buttons
     // have to be reachable.
     <Box sx={{ p: 2.5, height: "100vh", overflowY: "auto", display: "flex", flexDirection: "column", bgcolor: "background.default" }}>
+      {/* Mounted here as well as in AppLayout.
+          This screen is deliberately outside AppLayout — no nav chrome belongs on a
+          decision — and the surface that draws hunt marks lives inside it, so this route
+          was the one reachable screen where a mark could never appear.
+          No state provider is needed: the states context defaults to empty, and nothing
+          placed here depends on one. */}
+      <HuntSurface />
+
       {/* Origin — the single most important thing on this screen */}
       <Stack alignItems="center" spacing={1} sx={{ mb: 2 }}>
         {/* The site's own icon, taken from the tab Chrome already had. Not fetched: asking

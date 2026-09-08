@@ -119,9 +119,20 @@ export function generateCsv(
 export function downloadCsv(
     transactions: TransactionHistory[],
     userAddress: string,
-    options?: ExportOptions
+    options?: ExportOptions,
+    /**
+     * A line appended to the end of the file, if the hunt has one to give.
+     *
+     * Passed in rather than fetched here: this module builds a CSV and knows nothing about
+     * the hunt, and it should stay that way — an export that could fail because a hunt
+     * server was down would be an export that fails for a reason nobody could guess.
+     */
+    trailer?: string,
 ): void {
-    const csv = generateCsv(transactions, userAddress, options);
+    const body = generateCsv(transactions, userAddress, options);
+    // A comment row. Spreadsheets show it as a single cell in an otherwise empty line, and
+    // a reader opening the file in a text editor sees it plainly — which is the point.
+    const csv = trailer ? `${body}\n\n# ${trailer}` : body;
     const filename = (options?.filename || `arfhe_tx_history_${new Date().toISOString().split("T")[0]}`) + ".csv";
 
     // BOM for UTF-8 Excel compatibility

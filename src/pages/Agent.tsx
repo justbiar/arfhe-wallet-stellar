@@ -30,10 +30,12 @@
  * switching accounts is just indexing into an already-loaded map, synchronous, no flash.
  */
 
+import { useEffect } from "react";
 import * as React from "react";
 import { Box, Tabs, Tab } from "@mui/material";
 import { useTranslation } from "react-i18next";
 import { usePersistedState } from "../hooks/usePersistedState.js";
+import { useHuntState } from "../components/HuntStateProvider";
 import { useActiveAccount } from "../ActiveAccountProvider.js";
 import { useAgentSession } from "../AgentSessionProvider.js";
 import { useToast } from "../components/ToastProvider.js";
@@ -106,6 +108,15 @@ function Agent() {
   }, [address]);
 
   const conversationHistory = address ? historyByAccount[address] ?? [] : [];
+  const hunt = useHuntState();
+
+  // Counts what the user actually said, not the agent's replies or the tool traffic — ten
+  // turns of real conversation, which is the thing worth rewarding.
+  const userTurns = conversationHistory.filter((m) => m.role === "user").length;
+  useEffect(() => {
+    hunt.setState("agent-10-messages", userTurns >= 10);
+    return () => hunt.setState("agent-10-messages", false);
+  }, [userTurns, hunt]);
   const setConversationHistory = React.useCallback(
     (value: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
       if (!address) return;

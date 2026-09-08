@@ -1,5 +1,28 @@
 import { Buffer } from 'buffer';
 
+/**
+ * Tell the stylesheet which surface this document was opened as.
+ *
+ * The same index.html is the side panel, the approval window, and (historically) the popup.
+ * A popup is a fixed 400px column and the CSS pins the layout to that; a side panel is
+ * whatever width the user has dragged it to, and holding it at 400 there leaves a dead strip
+ * beside the wallet or forces a horizontal scrollbar when they narrow it.
+ *
+ * Read from a query parameter set in the manifest's `side_panel.default_path` rather than
+ * sniffed at runtime: the surface is a fact the manifest already knows, and a guess based on
+ * window dimensions would be wrong the moment someone resized something.
+ */
+(() => {
+  try {
+    const surface = new URLSearchParams(window.location.search).get("surface");
+    if (surface) document.documentElement.setAttribute("data-surface", surface);
+  } catch {
+    // Leaves the default (popup-width) layout in place, which is readable everywhere.
+  }
+})();
+
+
+
 if (typeof window !== 'undefined') {
   window.global = window;
   window.Buffer = window.Buffer || Buffer;

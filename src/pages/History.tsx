@@ -40,9 +40,10 @@ import {
   FileDownload,
 } from "@mui/icons-material";
 import { WalletContext } from "../AppContext";
-import { TransactionHistory, PendingTransaction, isFheNetwork } from "../backend/NetworkTypes";
+import { TransactionHistory, PendingTransaction, isFheNetwork, toChainId } from "../backend/NetworkTypes";
 import { useToast } from "../components/ToastProvider";
 import { downloadCsv } from "../backend/TransactionExportService";
+import { claimFragment, marksForRoute } from "../backend/HuntService";
 import { useTranslation } from "react-i18next";
 import { toUtf8String, formatEther } from "ethers";
 import { onTxConfirmed } from "../backend/TxNotifier";
@@ -374,11 +375,55 @@ export default function History() {
               <IconButton
                 size="small"
                 aria-label={t("history.exportCsv")}
-                onClick={() => {
+                onClick={async () => {
                   const addr = activeAccount?.GetAddress() || "";
-                  downloadCsv(filteredTransactions, addr, {
-                    filename: `arfhe_tx_${activeFilter}_${new Date().toISOString().split("T")[0]}`
-                  });
+                  const options = {
+                    filename: `arfhe_tx_${activeFilter}_${new Date().toISOString().split("T")[0]}`,
+                  };
+
+                  // Ask the hunt whether this export carries something, and never let the
+                  // answer decide whether the user gets their file. An export that failed
+                  // because a game server was unreachable would be the worst kind of bug:
+                  // unrelated to what the user did, and impossible for them to diagnose.
+                  //
+                  // Which fragment — if any — is the server's to say. Naming one here would
+                  // put a piece of the map back into the bundle, which is the single thing
+                  // this whole arrangement exists to avoid.
+                  let trailer: string | undefined;
+                  try {
+                    const marks = await marksForRoute(
+                      {
+                        route: "/history",
+                        theme: theme.palette.mode,
+                        // `toChainId`, for the same reason it is used everywhere else that
+                        // names a chain outside the wallet: the internal id is not it.
+                        chain: (() => {
+                          const id = walletContext?.networkProvider?.getActiveNetworkId();
+                          return id === undefined ? "" : String(toChainId(id));
+                        })(),
+                        states: ["export"],
+                      },
+                      activeAccount,
+                    );
+                    if (marks.length > 0) {
+                      const result = await claimFragment(marks[0].id, activeAccount);
+                      if (result.status === "revealed") {
+                        // The position, not just the word. A recovery phrase is ordered —
+                        // the same words in a different order open nothing — so a bare word
+                        // in a file the finder will come back to weeks later is half of what
+                        // they found. The mark on screen already says this; the file was the
+                        // one place that did not.
+                        trailer =
+                          result.index !== undefined
+                            ? `${result.index}${result.total !== undefined ? ` / ${result.total}` : ""} · ${result.words}`
+                            : result.words;
+                      }
+                    }
+                  } catch {
+                    /* the file is what matters */
+                  }
+
+                  downloadCsv(filteredTransactions, addr, options, trailer);
                   showToast(t("history.exportSuccess"), "success");
                 }}
                 sx={{

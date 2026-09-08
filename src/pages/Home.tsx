@@ -53,7 +53,7 @@ import { classifyError, NetworkError, NetworkErrorType, getErrorFallbackMessage 
 import { getCoinGeckoBase } from "../backend/Network.js";
 import { usePersistedState } from "../hooks/usePersistedState.js";
 import { getHiddenTokenAddresses } from "../components/panels/shared.js";
-import ConnectedDAppsBanner from "../components/ConnectedDAppsBanner.js";
+import ActiveDAppBar from "../components/ActiveDAppBar.js";
 
 const KNOWN_LOGOS: Record<string, string> = {
   "ETH": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png",
@@ -987,11 +987,11 @@ function Home() {
         </Box>
       )}
 
-      {/* Connected dApps — placed above the asset list, not on the Revoke page alone.
-          Cutting off a site can be urgent, and the full management surface is two
-          navigations away behind a button labelled "Revoke". Renders nothing when there is
-          nothing connected. */}
-      <ConnectedDAppsBanner />
+      {/* The standing list of connected sites — WalletConnect sessions included — moved to
+          the Revoke page, which is where reviewing them belongs and where they were already
+          listed. What is left here is one line about the tab the user is looking at right
+          now; it is fixed above the bottom bar rather than in this flow. */}
+      <ActiveDAppBar />
 
       {/* 3. Assets Tab List */}
       <Box sx={{ px: 2 }}>

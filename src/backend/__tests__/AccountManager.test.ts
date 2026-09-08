@@ -69,6 +69,61 @@ describe('AccountManager', () => {
       expect(manager.GetActiveIndex()).toBe(0);
     });
 
+    it('varsayılan olarak 12 kelimelik kurtarma ifadesi üretir', () => {
+      const index = manager.CreateAccount('Varsayilan');
+      expect(manager.accounts[index]?.GetWords()).toHaveLength(12);
+    });
+
+    it('24 istendiğinde 24 kelimelik kurtarma ifadesi üretir', () => {
+      const index = manager.CreateAccount('Uzun', 24);
+      expect(manager.accounts[index]?.GetWords()).toHaveLength(24);
+    });
+
+    // A silent fallback to twelve words would hand the user a weaker seed than the one
+    // they chose, and nothing on screen would say so.
+    it('desteklenmeyen kelime sayısı sessizce kısalmaz, hata verir', () => {
+      expect(() => Account.Random('Gecersiz', 18)).toThrow(/12 or 24/);
+    });
+  });
+
+  // ─── Onboarding: ifade üretmek hesap oluşturmaz ────────────────
+  //
+  // The security bug this locks down: the creation screen used to call CreateAccount when
+  // it displayed the recovery phrase, so a usable, password-less wallet existed from that
+  // moment — and backing out of the screen left it sitting there, reachable.
+  describe('CreateAccountFromPhrase', () => {
+    it('ifade üretmek tek başına cüzdana hesap eklemez', () => {
+      const phrase = Account.GeneratePhrase(24);
+      expect(phrase.split(' ')).toHaveLength(24);
+      expect(manager.GetAll()).toHaveLength(0);
+    });
+
+    it('üretilen ifadeyi verilen adla hesaba dönüştürür', () => {
+      const phrase = Account.GeneratePhrase(24);
+      const index = manager.CreateAccountFromPhrase(phrase, 'Dogrulanmis');
+
+      expect(index).toBe(0);
+      expect(manager.GetAll()).toHaveLength(1);
+      expect(manager.GetActive()?.GetName()).toBe('Dogrulanmis');
+      expect(manager.accounts[index]?.GetWords()).toEqual(phrase.split(' '));
+    });
+
+    it('aynı ifade her zaman aynı adresi verir', () => {
+      const phrase = Account.GeneratePhrase(12);
+      const first = manager.CreateAccountFromPhrase(phrase, 'A');
+      const second = manager.CreateAccountFromPhrase(phrase, 'B');
+
+      expect(manager.accounts[first]?.GetAddress())
+        .toBe(manager.accounts[second]?.GetAddress());
+    });
+
+    // Throwing out of the verification handler would leave the screen stuck; -1 lets it
+    // say so instead.
+    it('geçersiz ifadede -1 döner ve hesap eklenmez', () => {
+      expect(manager.CreateAccountFromPhrase('bu bir kurtarma ifadesi degil', 'Kotu')).toBe(-1);
+      expect(manager.GetAll()).toHaveLength(0);
+    });
+
     it('oluşturulan hesabın geçerli adresi vardır', () => {
       manager.CreateAccount();
       const acc = manager.GetActive();

@@ -40,7 +40,6 @@ import {
 import { useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { WalletContext } from '../AppContext';
-import HuntMark from '../components/HuntMark';
 import ConnectedSites from "../components/ConnectedSites.js";
 import HiddenTokens from "../components/HiddenTokens.js";
 import { useToast } from '../components/ToastProvider';
@@ -413,10 +412,6 @@ export default function SettingsSecurity() {
                 </DialogActions>
             </Dialog>
 
-            {/* Treasure hunt — 1 of 3. */}
-            <Box sx={{ display: 'flex', justifyContent: 'center', pb: 4 }}>
-                <HuntMark reveal="1. range   2. random" hint="Arfhe" />
-            </Box>
         </Box>
     );
 }

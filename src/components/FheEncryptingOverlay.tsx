@@ -11,7 +11,6 @@ import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { Box, Typography, Fade, Button } from "@mui/material";
 import { Lock } from "@mui/icons-material";
-import HuntMark from "./HuntMark";
 
 interface FheEncryptingOverlayProps {
     visible: boolean;
@@ -112,15 +111,6 @@ function OverlayContent({ message, onDismiss, dismissLabel }: { message: string;
             >
                 {/* Hex rain canvas */}
                 <MatrixRainCanvas />
-
-                {/* Treasure hunt — 2 of 3.
-                    Here rather than on a page anyone can browse to: this overlay only
-                    exists while a confidential operation is actually encrypting, so
-                    reaching it means having shielded something. Bottom-left, clear of the
-                    centred status text and the dismiss button under it. */}
-                <Box sx={{ position: "absolute", left: 12, bottom: 12, zIndex: 3 }}>
-                    <HuntMark reveal="3. rigid   4. manual" hint="Arfhe" size={30} />
-                </Box>
 
                 {/* Central content — above canvas */}
                 <Box

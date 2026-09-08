@@ -40,6 +40,7 @@ const FadePage = React.memo(function FadePage({ children }: { children: React.Re
 
 
 import { WalletProvider } from "./WalletProvider";
+import RequireUnlocked from "./RequireUnlocked";
 import { ActiveAccountProvider } from "./ActiveAccountProvider";
 
 function AppRoutes() {
@@ -50,7 +51,10 @@ function AppRoutes() {
         <Route path="auth" element={<Auth />} />
         <Route path="approve" element={<Approve />} />
 
-        <Route element={<AppLayout />}>
+        {/* Everything below is the wallet itself, and none of it may render on a locked
+            wallet — including a wallet mid-creation, which is locked precisely because no
+            password has been set on it yet. */}
+        <Route element={<RequireUnlocked><AppLayout /></RequireUnlocked>}>
           <Route path="home" element={<FadePage><Home /></FadePage>} />
           <Route path="portfolio" element={<FadePage><Portfolio /></FadePage>} />
           <Route path="privacy" element={<FadePage><Privacy /></FadePage>} />

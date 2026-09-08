@@ -764,7 +764,12 @@ async function syncBadge() {
   try {
     const unreadCount = await getUnreadNotificationCount();
     const pendingCount = pendingTxs.size;
-    const total = unreadCount + pendingCount;
+    // Approvals count too. A site waiting on an answer is the most urgent thing the wallet
+    // can be holding, and in side-panel mode the badge is the whole of how the user learns
+    // about it: Chrome will not let an extension open its own panel, so the toolbar icon
+    // they click is what opens it, in the surface they chose.
+    const approvalCount = pendingApprovals.size;
+    const total = unreadCount + pendingCount + approvalCount;
 
     // Badge text: show total, with pending TX indicator
     let badgeText = "";
@@ -772,8 +777,8 @@ async function syncBadge() {
       badgeText = total > 99 ? "99+" : String(total);
     }
 
-    // Badge color: orange if pending TXs, red if only notifications
-    const badgeColor = pendingCount > 0 ? "#f59e0b" : "#ef4444";
+    // Colour by urgency: an unanswered site first, then pending transactions.
+    const badgeColor = approvalCount > 0 ? "#3b82f6" : pendingCount > 0 ? "#f59e0b" : "#ef4444";
 
     chrome.action.setBadgeText({ text: badgeText });
     chrome.action.setBadgeBackgroundColor({ color: badgeColor });
@@ -1332,6 +1337,17 @@ async function handleMessage(message) {
       return { success: true };
     }
 
+    /**
+     * Apply the side-panel/popup preference now and say whether it took.
+     *
+     * The storage listener applies it too, so this is not the only path — but it is the
+     * only one that can answer. Without a reply the Settings switch had to assume its own
+     * success, and a preference that failed to apply looked exactly like one that worked.
+     */
+    case "APPLY_DISPLAY_SURFACE": {
+      return await applyDisplaySurface({ openNow: true });
+    }
+
     /** The approval window asks what it is being asked to approve. */
     case "GET_PENDING_APPROVAL": {
       const result = await chrome.storage.session.get(STORAGE_KEY_PENDING_APPROVALS);
@@ -1467,9 +1483,10 @@ async function requestApproval({ method, params, origin, tabId, favIconUrl, titl
   const decision = new Promise((resolve) => {
     pendingApprovals.set(id, { resolve, origin });
   });
+  await syncBadge();
 
   try {
-    await openApprovalWindow(id);
+    await openApprovalWindow(id, origin);
   } catch (e) {
     pendingApprovals.delete(id);
     await removePendingApproval(id);
@@ -1505,6 +1522,17 @@ async function persistPendingApproval(entry) {
 }
 
 async function removePendingApproval(id) {
+  // Clear any announcement raised for it. A notification that outlives its request is one
+  // that opens the wallet onto nothing — and, worse, invites the user to answer something
+  // already answered.
+  const notificationId = `arfhe-approval-${id}`;
+  approvalNotifications.delete(notificationId);
+  try { chrome.notifications?.clear?.(notificationId); } catch { /* nothing to clear */ }
+
+  // The count this request contributed goes with it, or the icon keeps claiming a site is
+  // waiting for an answer it already has.
+  void syncBadge();
+
   try {
     const result = await chrome.storage.session.get(STORAGE_KEY_PENDING_APPROVALS);
     const all = Array.isArray(result?.[STORAGE_KEY_PENDING_APPROVALS]) ? result[STORAGE_KEY_PENDING_APPROVALS] : [];
@@ -1514,7 +1542,175 @@ async function removePendingApproval(id) {
   } catch { /* nothing to clean */ }
 }
 
-async function openApprovalWindow(requestId) {
+/**
+ * Hand the request to a wallet surface the user already has open.
+ *
+ * A connection prompt that spawns its own full window is a worse answer than one that
+ * appears where the user is already looking — and when the side panel is open, the wallet
+ * is right there. The page navigates itself; nothing about the request travels in this
+ * message but its id, and the page still reads the request itself through the privileged
+ * handler, so a wrong id shows an empty screen rather than a forged one.
+ *
+ * @returns Whether a surface took it. False means nothing was listening — no page open.
+ */
+async function showApprovalInline(requestId) {
+  // Asked of Chrome rather than inferred from whether anyone answers. A message that goes
+  // unanswered has two very different causes — no wallet open, or a wallet open that did
+  // not hear it — and treating them alike is what made this impossible to tell apart.
+  let contexts = "unknown";
+  try {
+    const open = await chrome.runtime.getContexts?.({
+      contextTypes: ["SIDE_PANEL", "POPUP", "TAB"],
+    });
+    contexts = Array.isArray(open) ? open.map((c) => c.contextType).join(",") || "none" : "unavailable";
+  } catch (e) {
+    contexts = `error: ${e?.message ?? e}`;
+  }
+
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "SHOW_APPROVAL", requestId });
+    if (res?.shown === true) return true;
+    // Only the unexpected case is logged. A line on every approval is a line nobody reads,
+    // and this one is worth reading: a wallet was open and did not take the request.
+    console.warn(`Approval not taken inline — open contexts: ${contexts}, reply:`, res);
+    return false;
+  } catch (e) {
+    // "Receiving end does not exist" — nothing listening. With `contexts` beside it that
+    // becomes a fact about which page is missing rather than a guess.
+    if (contexts !== "none") {
+      console.warn(`Approval not taken inline — open contexts: ${contexts}, no reply: ${e?.message ?? e}`);
+    }
+    return false;
+  }
+}
+
+/**
+ * Open the surface the user chose, and let the page find the request itself.
+ *
+ * Preferred over a window of its own: a prompt that arrives where the user keeps their
+ * wallet is less startling than one that takes over the screen, and it is what they asked
+ * for by choosing a surface at all.
+ *
+ * Only the popup can be opened this way. `sidePanel.open()` requires a live user gesture
+ * and the click here belongs to a website, not to the user — Chrome is explicit that this
+ * is not permitted, and there is no way around it. A side-panel user with the wallet
+ * closed still gets a window, which is stated here rather than discovered later.
+ *
+ * @returns Whether a surface was opened. False falls through to the window.
+ */
+async function openApprovalInChosenSurface(requestId, origin) {
+  let surface = "sidepanel";
+  try {
+    const stored = await chrome.storage.local.get(DISPLAY_SURFACE_KEY);
+    if (stored?.[DISPLAY_SURFACE_KEY] === "popup") surface = "popup";
+  } catch (e) {
+    console.warn("Approval: could not read the surface preference:", e?.message ?? e);
+  }
+  console.log(`Approval: wallet closed, chosen surface is "${surface}".`);
+
+  if (surface === "popup") {
+    try {
+      const window = await chrome.windows.getLastFocused();
+      if (window?.id === undefined) {
+        console.warn("Approval: preference is popup but there is no window to anchor it to.");
+        return false;
+      }
+      // Chrome refuses to show a popup on an unfocused window.
+      if (!window.focused) await chrome.windows.update(window.id, { focused: true });
+      await chrome.action.openPopup({ windowId: window.id });
+      console.log("Approval: opened the extension popup.");
+      return true;
+    } catch (e) {
+      console.warn("Approval: could not open the popup:", e?.message ?? e);
+      return false;
+    }
+  }
+
+  // Side panel. `sidePanel.open()` needs a user gesture, and the click that started this
+  // belongs to a website — Chrome does not carry that across, and there is no way to ask
+  // for the panel directly from here.
+  //
+  // So the toolbar icon carries it instead. The badge is set from `syncBadge`, and clicking
+  // the icon opens the panel — Chrome does that itself, because the panel is what the
+  // action opens in this mode. The page then finds the parked request as it mounts.
+  //
+  // This needs no permission and cannot silently fail, which the notification could: Chrome
+  // reports one as created whether or not the operating system ever displays it, and there
+  // is no signal back. A notification is still raised as a second chance at getting the
+  // user's attention, but nothing depends on it arriving.
+  await syncBadge();
+  void announceApproval(requestId, origin);
+
+  // The window still opens. The badge and the notification are both ways of *telling* the
+  // user, and neither can be confirmed to have worked: a badge can go unnoticed, and Chrome
+  // reports a notification as created whether or not the system ever showed it. A request a
+  // site is waiting on cannot depend on either. Opening in the chosen surface is worth
+  // wanting; losing the request is not worth risking for it.
+  return false;
+}
+
+/** Approval notifications, so a click can find the request it was raised for. */
+const approvalNotifications = new Map();
+
+async function announceApproval(requestId, origin) {
+  if (!chrome.notifications?.create) {
+    console.warn("Approval: no notifications API, cannot reach the side panel.");
+    return false;
+  }
+
+  const notificationId = `arfhe-approval-${requestId}`;
+  try {
+    await chrome.notifications.create(notificationId, {
+      type: "basic",
+      iconUrl: "icon48.png",
+      title: "Arfhe Wallet",
+      message: origin ? `${origin} is asking for your approval.` : "A site is asking for your approval.",
+      priority: 2,
+      requireInteraction: true,
+    });
+  } catch (e) {
+    console.warn("Could not announce an approval:", e?.message ?? e);
+    return false;
+  }
+
+  approvalNotifications.set(notificationId, requestId);
+  console.log(`Approval: announced ${notificationId} — clicking it opens the panel.`);
+  return true;
+}
+
+async function openApprovalWindow(requestId, origin) {
+  if (approvalWindowId === null) {
+    if (await showApprovalInline(requestId)) return;
+    if (await openApprovalInChosenSurface(requestId, origin)) return;
+  }
+  await createApprovalWindow(requestId);
+}
+
+/**
+ * The window of last resort.
+ *
+ * Kept separate from the surface attempts above so the notification fallback can reach it
+ * without going back through them — announcing an approval because an announcement could
+ * not be opened is a loop, and one that raises a notification per turn.
+ */
+async function createApprovalWindow(requestId) {
+  // Is the window we think we have still real?
+  //
+  // `approvalWindowId` outlives the window whenever `onRemoved` does not reach us — a
+  // worker evicted between the window opening and closing never hears it. A stale id then
+  // blocked the inline path forever after the first approval, which is why the wallet kept
+  // spawning windows with the side panel open right beside it.
+  if (approvalWindowId !== null) {
+    try {
+      await chrome.windows.get(approvalWindowId);
+    } catch {
+      approvalWindowId = null;
+    }
+  }
+
+  // Only when no approval window is genuinely up: one that is open is showing an earlier
+  // request, and moving the flow to another surface mid-decision would leave that one
+  // stranded with nothing to answer it.
   const url = chrome.runtime.getURL(`index.html#/approve?requestId=${encodeURIComponent(requestId)}`);
 
   // Reuse an open approval window so a site firing several requests cannot paper the
@@ -1535,11 +1731,19 @@ async function openApprovalWindow(requestId) {
     }
   }
 
+  // Placed and sized explicitly, and pinned to `normal`. Asking for a size without saying
+  // where to put it leaves Chrome free to reuse whatever geometry it remembers, which is
+  // how a 400x660 request came up filling the screen.
+  const width = 400;
+  const height = 660;
   const created = await chrome.windows.create({
     url,
     type: "popup",
-    width: 400,
-    height: 660,
+    width,
+    height,
+    left: Math.max(0, Math.round(((globalThis.screen?.availWidth ?? width) - width) / 2)),
+    top: Math.max(0, Math.round(((globalThis.screen?.availHeight ?? height) - height) / 2)),
+    state: "normal",
     focused: true,
   });
   approvalWindowId = created?.id ?? null;
@@ -1721,10 +1925,227 @@ async function broadcastAccountsForAllOrigins() {
 // ─── Notification click handler ─────────────────────────────────────
 
 chrome.notifications.onClicked.addListener((notifId) => {
-  // Open the extension popup when a notification is clicked
-  chrome.action.openPopup?.().catch(() => {
-    // openPopup not available in all contexts, ignore
-  });
+  // Which surface to open depends on the user's preference: `openPopup` does nothing when
+  // the action has no popup, and opening the side panel needs a window to open it in.
+  (async () => {
+    // An approval announcement. This click is the user gesture Chrome asks for, and the
+    // only moment the panel can be opened for a request a website started.
+    const awaitingRequestId = approvalNotifications.get(notifId);
+    if (awaitingRequestId !== undefined) {
+      approvalNotifications.delete(notifId);
+      try {
+        const window = await chrome.windows.getLastFocused();
+        if (window?.id === undefined) throw new Error("no window to open a panel in");
+        await chrome.sidePanel.open({ windowId: window.id });
+
+        // The window raised for the same request is now a second copy of the same
+        // decision. Closing it leaves one prompt, which is what a prompt should be.
+        if (approvalWindowId !== null) {
+          const closing = approvalWindowId;
+          approvalWindowId = null;
+          try { await chrome.windows.remove(closing); } catch { /* already gone */ }
+        }
+
+        // The panel asks the worker for the parked request as it mounts; nothing more to
+        // send, and nothing to time.
+        return;
+      } catch (e) {
+        // Chrome would not take the gesture, or there was no window. The request is still
+        // parked and still unanswered — a window is the last thing standing between the
+        // user and a site waiting on a promise that never settles.
+        console.warn("Panel would not open from the notification, falling back:", e?.message ?? e);
+        try {
+          await createApprovalWindow(awaitingRequestId);
+        } catch { /* the request expires on its own */ }
+        return;
+      }
+    }
+
+    let surface = "sidepanel";
+    try {
+      const stored = await chrome.storage.local.get(DISPLAY_SURFACE_KEY);
+      if (stored?.[DISPLAY_SURFACE_KEY] === "popup") surface = "popup";
+    } catch { /* default */ }
+
+    try {
+      if (surface === "popup") {
+        await chrome.action.openPopup?.();
+      } else {
+        const window = await chrome.windows.getLastFocused();
+        if (window?.id !== undefined) await chrome.sidePanel?.open({ windowId: window.id });
+      }
+    } catch {
+      // Neither is available in every context — a notification that cannot open the
+      // wallet should still clear.
+    }
+  })();
   chrome.notifications.clear(notifId);
 });
 
+/**
+ * Which surface the toolbar button opens: the side panel, or a popup.
+ *
+ * The wallet shipped as a popup, which Chrome closes the moment the user clicks anywhere
+ * else — including on the very page they were about to act on. A side panel stays until it
+ * is closed, which is what someone working alongside a site wants. Neither is right for
+ * everyone, so it is a setting.
+ *
+ * Set here rather than in the manifest because the manifest cannot express a choice: an
+ * action with a `default_popup` opens that popup and ignores the side panel entirely.
+ */
+const DISPLAY_SURFACE_KEY = "arfhe_display_surface";
+
+/**
+ * The popup path — deliberately bare.
+ *
+ * It used to carry `?surface=popup`. That marker was never needed: `currentSurface()` reads
+ * the side panel's marker and treats everything else as a popup, so the popup is already
+ * identified by not being marked.
+ *
+ * And it was a real risk. `chrome.action.setPopup` takes a path, and a path carrying a
+ * query string is exactly the kind of argument an API accepts without complaint and then
+ * does not honour. If it does not take, the action has no popup at all — and with
+ * `side_panel.default_path` declared in the manifest, Chrome opens the panel instead, which
+ * is indistinguishable from the preference having been ignored.
+ */
+const POPUP_PATH = "index.html";
+const SIDE_PANEL_PATH = "index.html?surface=sidepanel";
+
+/**
+ * @returns `{ ok, surface, error }` rather than nothing, so the Settings screen can say the
+ *          switch did not take instead of showing a state the toolbar button does not share.
+ */
+async function applyDisplaySurface({ openNow = false } = {}) {
+    let surface = "sidepanel";
+    try {
+        const stored = await chrome.storage.local.get(DISPLAY_SURFACE_KEY);
+        if (stored?.[DISPLAY_SURFACE_KEY] === "popup") surface = "popup";
+    } catch (e) {
+        // An unreadable store is not a reason to leave the button doing nothing; the
+        // default is the one the wallet ships with.
+        console.warn("Could not read display surface preference:", e);
+    }
+
+    const wantsPanel = surface === "sidepanel";
+    // Logged step by step. When this does not take, the only question worth answering is
+    // which call refused, and without this the service-worker console is silent about it.
+    const steps = [];
+
+    /**
+     * Set the action's popup and confirm Chrome kept it.
+     *
+     * Only a failure to *set* a popup is fatal: with no popup on the action, Chrome opens
+     * the declared side panel instead, so a silently-dropped popup is indistinguishable
+     * from the preference being ignored — which is the failure this function spent several
+     * attempts unable to explain.
+     *
+     * Failing to *clear* one is reported and then stepped over. The manifest deliberately
+     * declares no `default_popup` so that clearing works, but if a build ever reintroduces
+     * one, Chrome reads the empty string as "fall back to the manifest default" rather than
+     * "no popup" — and throwing there aborted the rest of the branch, leaving the panel
+     * behaviour unset and side-panel mode unreachable.
+     */
+    async function setPopupChecked(popup) {
+        await chrome.action.setPopup({ popup });
+        const actual = await chrome.action.getPopup?.({});
+        if (typeof actual !== "string") return;                 // API not available to check
+
+        if (popup === "") {
+            if (actual !== "") {
+                console.warn(`Popup did not clear (Chrome reports "${actual}") — a manifest default_popup would do this.`);
+            }
+            return;
+        }
+
+        if (!actual.endsWith(popup)) {
+            throw new Error(`Chrome would not set the popup to "${popup}" (it reports "${actual}")`);
+        }
+    }
+
+    try {
+        if (wantsPanel) {
+            // Cleared first: an action with a popup opens that popup and ignores the side
+            // panel entirely. Clearing is the documented direction — the empty string is
+            // defined to mean "no popup" — which is why the panel is the side that depends
+            // on a runtime call and the popup is the side the manifest guarantees.
+            await setPopupChecked("");
+            steps.push('setPopup("") verified');
+            await chrome.sidePanel?.setOptions({ path: SIDE_PANEL_PATH, enabled: true });
+            steps.push("setOptions(enabled:true)");
+            await chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true });
+            steps.push("setPanelBehavior(true)");
+        } else {
+            await setPopupChecked(POPUP_PATH);
+            steps.push("setPopup(popup) verified");
+            await chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: false });
+            steps.push("setPanelBehavior(false)");
+
+            // Off, then straight back on. Two calls, and both are needed.
+            //
+            // There is no `sidePanel.close()`. Disabling the panel is the only way to shut
+            // one that is already on screen, and leaving the user with a panel and a popup
+            // showing the same wallet side by side is not a switch — it is a duplicate.
+            //
+            // But a disabled panel cannot be reopened: `sidePanel.open()` refuses with "no
+            // active side panel", which is what silently stranded popup mode for several
+            // rounds. So the panel is re-armed immediately. Enabled does not mean showing —
+            // the popup set above is what decides where the toolbar button leads.
+            await chrome.sidePanel?.setOptions({ enabled: false });
+            steps.push("setOptions(enabled:false) — closes it");
+            await chrome.sidePanel?.setOptions({ path: SIDE_PANEL_PATH, enabled: true });
+            steps.push("setOptions(enabled:true) — re-armed");
+        }
+        console.log(`Display surface -> ${surface}:`, steps.join(" | "));
+    } catch (e) {
+        const error = e instanceof Error ? e.message : String(e);
+        console.warn(`Display surface -> ${surface} FAILED after [${steps.join(" | ")}]:`, error);
+        return { ok: false, surface, error };
+    }
+
+    if (!openNow) return { ok: true, surface };
+
+    // Switching the preference from inside the wallet should land the user in the surface
+    // they just chose, not close what they were reading and leave them to find the toolbar
+    // button. Only on an explicit change: doing this at boot would pop the wallet open
+    // every time Chrome starts.
+    //
+    // Only the popup direction is opened from here. `sidePanel.open()` requires a live user
+    // gesture, and a message that arrived from a page does not carry one — the worker is
+    // structurally the wrong place to make that call, so the Settings screen makes it
+    // itself, inside the click that asked for it.
+    if (surface !== "popup") return { ok: true, surface };
+
+    try {
+        const window = await chrome.windows.getLastFocused();
+        if (window?.id === undefined) return { ok: true, surface };
+
+        // Chrome refuses to show a popup on an unfocused window, and the window often is
+        // unfocused by the time this runs — the panel the user clicked in has just closed.
+        if (!window.focused) await chrome.windows.update(window.id, { focused: true });
+
+        // Chrome 127+. Older builds simply do not reopen — the preference still took,
+        // which is what `ok` reports.
+        await chrome.action.openPopup?.({ windowId: window.id });
+        console.log("Reopened as popup.");
+    } catch (e) {
+        // The preference is applied either way; failing to reopen is a smaller thing than
+        // reporting the whole change as failed when the toolbar button now behaves.
+        console.warn("Could not reopen the wallet after the surface change:", e);
+    }
+
+    return { ok: true, surface };
+}
+
+chrome.runtime.onInstalled.addListener(applyDisplaySurface);
+// Also on startup: the behaviour is stored by Chrome, but a profile that was migrated or
+// a worker revived after an update should not depend on onInstalled having run this boot.
+chrome.runtime.onStartup?.addListener(applyDisplaySurface);
+
+// Applied from the store as well as from the message below, so a settings change lands even
+// if the message was lost — a worker that was asleep when the switch was flipped still wakes
+// for this event.
+chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && DISPLAY_SURFACE_KEY in changes) applyDisplaySurface();
+});
+
+applyDisplaySurface();

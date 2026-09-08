@@ -1,4 +1,5 @@
 import Account from "./Account.js";
+import { normalizeMnemonic } from "./normalizeMnemonic";
 import StorageManager from "./StorageManager.js";
 import { HDNodeWallet, Wallet, keccak256, toUtf8Bytes, JsonRpcProvider } from "ethers";
 
@@ -98,6 +99,18 @@ export default class AccountManager {
           account.ethers_wallet = HDNodeWallet.fromPhrase(stored.mnemonic.phrase, "", account.derivationPath);
           account.mnemonic = account.ethers_wallet.mnemonic ?? undefined;
         } catch (e) {
+          // The stored phrase will not rebuild a wallet. Swallowing this used to leave an
+          // account in the list that looked ordinary — it kept its name and address — but
+          // held no signing key and no mnemonic, so every later use of it failed somewhere
+          // far from the cause. Most visibly, deriving a new account read the bad phrase
+          // straight back out and reported the library's own "invalid mnemonic checksum"
+          // to the user, on a screen that had nothing to do with mnemonics.
+          //
+          // The account is still returned, because dropping it would hide funds the user
+          // can see on-chain, but it is marked so callers can refuse to treat it as a
+          // parent and say something true about why.
+          account.mnemonic = undefined;
+          account.rehydrationFailed = true;
         }
       } else if (stored.private_key) {
         try {
@@ -185,8 +198,39 @@ export default class AccountManager {
     return true;
   }
 
-  CreateAccount(name?: string): number {
-    let account = Account.Random(name?.trim() || this.CreateRandomAccountName());
+  /**
+   * Adopt a phrase the caller already generated and showed to the user.
+   *
+   * The creation screen needs this because generating the words and adding a wallet to the
+   * running app are separate steps: an account that exists from the moment the phrase is
+   * displayed is a usable wallet with no password behind it, reachable by anyone who
+   * navigates away from the screen instead of finishing.
+   *
+   * @returns The new account's index, or -1 if the phrase does not build a wallet.
+   */
+  CreateAccountFromPhrase(phrase: string, name?: string): number {
+    let account: Account;
+    try {
+      account = Account.FromMnemonic(normalizeMnemonic(phrase), name?.trim() || this.CreateRandomAccountName(), "m/44'/60'/0'/0/0");
+    } catch {
+      return -1;
+    }
+
+    const index = this.AddAccount(account);
+    if (index < 0) return -1;
+
+    if (this.active == -1 || this.active != index) {
+      this.active = index;
+      this.notifyListeners();
+    }
+
+    this.updateStorage();
+    return index;
+  }
+
+  /** @param wordCount Length of the generated recovery phrase — 12 (default) or 24. */
+  CreateAccount(name?: string, wordCount: number = 12): number {
+    let account = Account.Random(name?.trim() || this.CreateRandomAccountName(), wordCount);
     let index = this.AddAccount(account);
 
     if (this.active == -1 || this.active != index) {
@@ -210,7 +254,9 @@ export default class AccountManager {
   }
 
   ImportAccount(mnemonic: string): number {
-    let account = Account.FromMnemonic(mnemonic, this.CreateRandomAccountName(), "m/44'/60'/0'/0/0");
+    // Normalized here as well as at the screen, so a caller that did not clean its input
+    // fails for a real reason rather than for a stray line break.
+    let account = Account.FromMnemonic(normalizeMnemonic(mnemonic), this.CreateRandomAccountName(), "m/44'/60'/0'/0/0");
     let index = this.AddAccount(account);
 
     if (this.active == -1 || this.active != index) {
@@ -284,7 +330,18 @@ export default class AccountManager {
 
     if (parentAccount.mnemonic && parentAccount.mnemonic.phrase) {
       const path = `m/44'/60'/0'/0/${nextIndex}`;
-      account = Account.FromMnemonic(parentAccount.mnemonic.phrase, name, path);
+      try {
+        account = Account.FromMnemonic(parentAccount.mnemonic.phrase, name, path);
+      } catch {
+        // Never surface the library's wording here. "invalid mnemonic checksum" on a
+        // screen where the user only pressed "Create New Account" reads as though their
+        // recovery phrase — the one they wrote down and trust — has gone bad, which is a
+        // frightening thing to be told and, in this case, not what happened.
+        throw new Error(
+          "This account's stored key could not be read, so a new account cannot be derived from it. " +
+          "Existing accounts are unaffected. Re-import your recovery phrase to restore the ability to add accounts.",
+        );
+      }
     } else if (parentAccount.ethers_wallet) {
       const path = `social/${nextIndex}`;
       const entropy = toUtf8Bytes(`${parentAccount.ethers_wallet.privateKey}_${nextIndex}`);
@@ -450,5 +507,30 @@ export default class AccountManager {
     for (const account of this.accounts) {
       account.wipeKeys();
     }
+  }
+
+  /**
+   * Throw away accounts that were created during an onboarding the user did not finish.
+   *
+   * Nothing is written to disk before a password exists, so an account left over from an
+   * abandoned run has no persisted copy — but it is still in memory, still able to sign,
+   * and would be silently adopted by the next wallet the user creates. Wiping the keys
+   * first so the seed does not outlive the decision to discard it.
+   *
+   * Refuses to run once a password exists: at that point the accounts are the real wallet,
+   * and dropping them would be data loss rather than cleanup.
+   *
+   * @returns How many accounts were discarded.
+   */
+  discardUnpersistedAccounts(): number {
+    if (this.linkedStorageManager.hasPassword()) return 0;
+    if (this.accounts.length === 0) return 0;
+
+    const discarded = this.accounts.length;
+    this.clearSensitiveData();
+    this.accounts = [];
+    this.active = -1;
+    this.notifyListeners();
+    return discarded;
   }
 }

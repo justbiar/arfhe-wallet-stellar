@@ -41,6 +41,7 @@
  */
 
 import * as React from "react";
+import AgentMarkdown from "./AgentMarkdown";
 import {
   Avatar,
   Box,
@@ -824,9 +825,15 @@ function AgentChatPanel({ conversationHistory, setConversationHistory, setPropos
                     bgcolor: item.role === "user" ? "action.hover" : "transparent",
                   }}
                 >
-                  <Typography variant="body2" sx={{ color: "text.primary", whiteSpace: "pre-wrap" }}>
-                    {item.content}
-                  </Typography>
+                  {/* The agent writes Markdown; rendered as React elements, never as HTML.
+                      See AgentMarkdown for why that distinction matters in a wallet. */}
+                  {item.role === "assistant" ? (
+                    <AgentMarkdown text={item.content} />
+                  ) : (
+                    <Typography variant="body2" sx={{ color: "text.primary", whiteSpace: "pre-wrap" }}>
+                      {item.content}
+                    </Typography>
+                  )}
                 </Box>
               </Box>
             ) : item.kind === "confirmation" ? (

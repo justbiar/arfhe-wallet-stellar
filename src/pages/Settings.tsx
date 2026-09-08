@@ -12,7 +12,7 @@ const APP_VERSION: string = typeof __APP_VERSION__ === "string" ? __APP_VERSION_
 import { useContext, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Box, Typography, Container, Paper, List, ListItem, ListItemButton, ListItemText, ListItemIcon, Switch, Chip, IconButton, alpha, useTheme, Stack, Divider, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Button, CircularProgress } from '@mui/material';
-import { Notifications, DarkMode, Language, Security, Lock, Wifi, ChevronRight, Check, Close, Fingerprint, PrivacyTip, Gavel, Info, OpenInNew, ManageAccounts } from '@mui/icons-material';
+import { Notifications, DarkMode, Language, Security, Lock, Wifi, ChevronRight, Check, Close, Fingerprint, PrivacyTip, Gavel, Info, OpenInNew, ManageAccounts, ViewSidebar } from '@mui/icons-material';
 import { ColorModeContext } from '../ThemeContext';
 import { WalletContext } from '../AppContext';
 import { CustomNetworkConfig } from '../backend/NetworkTypes';
@@ -20,6 +20,7 @@ import { useToast } from '../components/ToastProvider';
 import { useTranslation } from 'react-i18next';
 import { LANGUAGES, changeLanguage } from '../i18n';
 import { BiometricService } from '../backend/BiometricService';
+import { getDisplaySurface, setDisplaySurface, displaySurfaceSupported, openSidePanelNow, panelTarget, currentSurface, type PanelTarget, DEFAULT_DISPLAY_SURFACE, type DisplaySurface } from '../backend/DisplaySurfaceService';
 
 export default function Settings() {
     const navigate = useNavigate();
@@ -39,6 +40,81 @@ export default function Settings() {
     const [biometricLoading, setBiometricLoading] = useState(false);
 
     const currentLang = LANGUAGES.find(l => l.code === i18n.language) || LANGUAGES[0];
+
+    // Only offered where it can be honoured: on the dev server there is no toolbar button
+    // to change, and a switch that silently does nothing is worse than no switch.
+    const surfaceSupported = displaySurfaceSupported();
+    const [surface, setSurface] = useState<DisplaySurface>(DEFAULT_DISPLAY_SURFACE);
+
+    /**
+     * Held ready so the click handler can open the panel without awaiting anything first.
+     *
+     * `sidePanel.open()` only works inside a live user gesture, and an `await` ends one —
+     * so the target cannot be looked up at the moment it is needed.
+     */
+    const panelTargetRef = React.useRef<PanelTarget>({ tabId: null, windowId: null });
+
+    React.useEffect(() => {
+        if (!surfaceSupported) return;
+        let active = true;
+        getDisplaySurface().then((value) => { if (active) setSurface(value); });
+        panelTarget().then((target) => { if (active) panelTargetRef.current = target; });
+        return () => { active = false; };
+    }, [surfaceSupported]);
+
+    const handleSurfaceToggle = async () => {
+        const next: DisplaySurface = surface === 'sidepanel' ? 'popup' : 'sidepanel';
+
+        // First statement in the handler, deliberately. The gesture that opened this
+        // handler is what permits the call, and it does not survive the awaits below — nor
+        // does it survive being forwarded to the worker, which is why the worker cannot
+        // make this call on our behalf. Not awaited: doing so would not help, and a
+        // rejection here is not a reason to abandon the preference change.
+        //
+        // A rejection is worth saying out loud, though. The preference still applied, so
+        // the toolbar button works — but the user asked to be moved and was not, and
+        // silence there is what made this look broken rather than merely incomplete.
+        let panelOpening: Promise<void> | null = null;
+        if (next === 'sidepanel') {
+            const call = openSidePanelNow(panelTargetRef.current);
+            panelOpening = call
+                ? call
+                      .then(() => {
+                          // The panel is up; this popup is now a second copy of the same
+                          // wallet sitting beside it. Only closed once the panel has
+                          // actually opened — closing first and failing to open would
+                          // leave the user with nothing.
+                          //
+                          // Nothing runs after this: the document is gone.
+                          if (currentSurface() === 'popup') window.close();
+                      })
+                      .catch((e: unknown) => {
+                          const reason = e instanceof Error ? e.message : String(e);
+                          showToast(`${t('settings.displaySurfacePanelManual')} (${reason})`, 'info');
+                      })
+                : Promise.resolve(showToast(t('settings.displaySurfacePanelManual'), 'info'));
+        }
+        // Written first, shown second — if the write fails the switch stays where it was
+        // rather than claiming a change the toolbar button will not make.
+        const saved = await setDisplaySurface(next);
+        if (!saved.ok) {
+            // The worker's own words, not a generic failure: the switch not taking is a
+            // Chrome API refusing something, and which one it was is the whole diagnosis.
+            showToast(
+                saved.error
+                    ? `${t('settings.displaySurfaceFailed')} (${saved.error})`
+                    : t('settings.displaySurfaceFailed'),
+                'error',
+            );
+            return;
+        }
+        setSurface(next);
+
+        // The panel either opened or explained why it could not; a second, cheerier toast
+        // on top of that would only bury it.
+        if (panelOpening) return;
+        showToast(t('settings.displaySurfacePopupSet'), 'success');
+    };
 
     // Check biometric support on mount
     React.useEffect(() => {
@@ -94,6 +170,20 @@ export default function Settings() {
                             <ListItemText primary={t('settings.darkMode')} secondary={t('settings.toggleTheme')} />
                             <Switch checked={mode === 'dark'} onChange={toggleColorMode} />
                         </ListItem>
+                        {surfaceSupported && (
+                            <ListItem>
+                                <ListItemIcon><ViewSidebar /></ListItemIcon>
+                                <ListItemText
+                                    primary={t('settings.displaySurface')}
+                                    secondary={surface === 'sidepanel' ? t('settings.displaySurfacePanelDesc') : t('settings.displaySurfacePopupDesc')}
+                                />
+                                <Switch
+                                    checked={surface === 'sidepanel'}
+                                    onChange={handleSurfaceToggle}
+                                    inputProps={{ 'aria-label': t('settings.displaySurface') }}
+                                />
+                            </ListItem>
+                        )}
                         <ListItemButton onClick={() => navigate('/settings/notifications')}>
                             <ListItemIcon><Notifications /></ListItemIcon>
                             <ListItemText primary={t('settings.notifications')} secondary={t('settings.manageAlerts')} />
@@ -169,7 +259,7 @@ export default function Settings() {
                 >
                     <List disablePadding>
                         <ListItemButton
-                            onClick={() => window.open('https://github.com/arfdaodev/ArfheWallet/blob/rewrite-omer/PRIVACY_POLICY.md', '_blank', 'noopener,noreferrer')}
+                            onClick={() => window.open('https://www.arfhewallet.dev/privacy', '_blank', 'noopener,noreferrer')}
                         >
                             <ListItemIcon><PrivacyTip /></ListItemIcon>
                             <ListItemText
@@ -180,7 +270,7 @@ export default function Settings() {
                         </ListItemButton>
                         <Divider variant="inset" component="li" />
                         <ListItemButton
-                            onClick={() => window.open('https://github.com/arfdaodev/ArfheWallet/blob/rewrite-omer/TERMS_OF_SERVICE.md', '_blank', 'noopener,noreferrer')}
+                            onClick={() => window.open('https://www.arfhewallet.dev/terms', '_blank', 'noopener,noreferrer')}
                         >
                             <ListItemIcon><Gavel /></ListItemIcon>
                             <ListItemText

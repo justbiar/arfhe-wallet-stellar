@@ -39,6 +39,7 @@ import { ContactBookModal } from "../ContactBookModal.js";
 import GasSettingsPanel, { GasSettings } from "../GasSettingsPanel.js";
 import FheEncryptingOverlay from "../FheEncryptingOverlay.js";
 import SuccessAnimation from "../SuccessAnimation.js";
+import HuntSurface from "../HuntSurface.js";
 import { isAddress, parseUnits, Interface, formatEther, toUtf8Bytes, hexlify } from "ethers";
 import { isDomainName, resolveDomain } from "../../backend/DomainResolver.js";
 import { NetworkId, isFheNetwork } from "../../backend/NetworkTypes.js";
@@ -654,7 +655,9 @@ export default function SendPanel() {
 
       {/* Success State */}
       {status === 'success' ? (
-        <Stack spacing={1.5} alignItems="center" sx={{ py: 3 }}>
+        // `relative` so the hunt mark below can sit in this panel's own corner rather than
+        // at the end of its flow, where the drawer cuts it off.
+        <Stack spacing={1.5} alignItems="center" sx={{ py: 3, position: 'relative' }}>
           <SuccessAnimation label={t("send.transferComplete")} size={80} />
           {txHash && explorerTxUrl(network, txHash) && (
             <Link
@@ -673,6 +676,12 @@ export default function SendPanel() {
           >
             {t("send.newTransfer")}
           </Button>
+
+          {/* Only after a confidential transfer, and only here.
+              This screen is a panel inside a drawer, so it is not a route and the mark
+              cannot float above the window — a drawer is painted over that. Named and
+              placed inline for both reasons. */}
+          {isConfidential && <HuntSurface route="/send" inline />}
         </Stack>
       ) : isPreviewMode ? (
         <Stack spacing={2.5}>
@@ -1017,14 +1026,26 @@ export default function SendPanel() {
 
             <Paper elevation={0} sx={{ ...inputCardSx, flex: 1 }}>
               <Typography variant="caption" color="text.secondary" fontWeight={600}>{t("send.amount")}</Typography>
+              {/* Deliberately not `type="number"`.
+                  A number input changes its value on the scroll wheel whenever it has
+                  focus, so scrolling the send screen silently edited the amount — on the
+                  one field where a wrong figure costs the user money. It also brings
+                  spinner arrows nobody wants next to a token balance, and its own idea of
+                  what a decimal separator is, which varies by locale.
+                  Text plus a digits-only filter keeps the numeric keypad on mobile
+                  (`inputMode`) and nothing else. */}
               <TextField
                 variant="standard"
                 placeholder="0.00"
-                type="number"
                 fullWidth
                 value={sendAmount}
-                onChange={(e) => setSendAmount(e.target.value)}
+                onChange={(e) => {
+                  const next = e.target.value.replace(",", ".");
+                  // Empty, or a plain decimal. Anything else is not typed into this field.
+                  if (next === "" || /^\d*\.?\d*$/.test(next)) setSendAmount(next);
+                }}
                 disabled={isLoading}
+                inputProps={{ inputMode: "decimal", autoComplete: "off", spellCheck: false }}
                 InputProps={{
                   disableUnderline: true,
                   style: { fontSize: '1rem', fontWeight: 700, marginTop: 4 }

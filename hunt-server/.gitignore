@@ -1,0 +1,5 @@
+# Kelimeler burada. Asla commit edilmez.
+fragments.json
+claims.json
+nonces.json
+.env

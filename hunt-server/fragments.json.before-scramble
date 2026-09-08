@@ -1,0 +1,142 @@
+{
+  "_README": [
+    "GERÇEK DOSYA: fragments.json — .gitignore'da, repoya girmez, sadece sunucuda durur.",
+    "'words' alanlarını SEN doldur. Boş bırakılan bir parça hiç verilmez.",
+    "",
+    "İKİ TÜR KOŞUL VAR, KARIŞTIRMA:",
+    "  show/route/theme/onChain/state → cüzdan kendini anlatır, DOĞRULANAMAZ.",
+    "                                    Kuşun GÖRÜNMESİNİ belirler. Güvenlik değil.",
+    "  gate                            → sunucu zincire sorar, DOĞRULANIR.",
+    "                                    KELİMEYİ koruyan tek şey budur.",
+    "",
+    "KOLAY PARÇA SINIRI: gate'i 'signature' olan en fazla 5 parça olabilir.",
+    "Ölçüm: 12 kelime sosyal medyada (taranabilir kabul) + 5 kolay = 7 eksik = GPU'da 18.718 yıl.",
+    "6. kolayda 9 yıla, 7.'de 2 güne düşer. Bu oranı bozarsan av biter.",
+    "",
+    "KAPI TÜRLERİ:",
+    "  signature            → sadece cüzdan sahibi olmak",
+    "  tx_count             → o ağda N işlem yapmış olmak",
+    "  contract_interaction → o kontrata dokunmuş olmak (shield dahil)",
+    "  confidential_send    → gizli bakiyeyi BAŞKASINA göndermiş olmak (shield yetmez)"
+  ],
+  "fragments": {
+    "f1": {
+      "words": "resist",
+      "_hedef": "1 — Ayarlar > Güvenlik ana ekranı (kurtarma ifadesinin GÖSTERİLDİĞİ ekran değil, bkz. README)",
+      "fixedRoute": "/settings/security",
+      "gate": "signature"
+    },
+    "f2": {
+      "words": "load",
+      "_hedef": "2 — Portföy",
+      "fixedRoute": "/portfolio",
+      "gate": "tx_count",
+      "minTxCount": 1,
+      "chain": "sepolia",
+      "_not": "Kolay sınırını aşmamak için zincire bağlandı. Yeri değişmedi."
+    },
+    "f3": {
+      "words": "strike",
+      "_hedef": "3 — Unshield başlatıldıktan sonra (bekleyen claim varken)",
+      "fixedRoute": "/privacy",
+      "state": "pending-unshield",
+      "gate": "contract_interaction",
+      "chain": "sepolia",
+      "contracts": [
+        "0xf776533005a155B323F6BD64A682AA7Bb3c9e3aD"
+      ],
+      "_not": "'has-shielded' değil, 'pending-unshield': daha dar bir an. Ayrıca AÇIK tema — f6/f7/f8 koyu temada, böylece Privacy'de iki kuş aynı anda çıkmıyor.",
+      "theme": "light"
+    },
+    "f4": {
+      "words": "pool",
+      "_hedef": "4 — Geçmiş ekranından indirilen dosyanın İÇİNDE",
+      "_UYARI": "Bu bir kuş değil. Dışa aktarma kodunun sunucudan kelimeyi çekmesi gerekir — ayrı iş, bkz. cevabım.",
+      "fixedRoute": "/history",
+      "state": "export",
+      "gate": "tx_count",
+      "minTxCount": 1,
+      "chain": "sepolia"
+    },
+    "f5": {
+      "words": "dumb",
+      "_hedef": "5 — Koyu temada Explore",
+      "fixedRoute": "/explore",
+      "theme": "dark",
+      "gate": "tx_count",
+      "minTxCount": 1,
+      "chain": "sepolia",
+      "_not": "Kolay sınırı için zincire bağlandı."
+    },
+    "f6": {
+      "words": "catch",
+      "_hedef": "6 — Sepolia'da gizli send",
+      "fixedRoute": "/privacy",
+      "onChain": 11155111,
+      "gate": "confidential_send",
+      "chain": "sepolia",
+      "contracts": [
+        "0xf776533005a155B323F6BD64A682AA7Bb3c9e3aD"
+      ],
+      "_not": "Shield yetmez — gizli bakiyeyi BAŞKASINA göndermiş olmak gerekir. Koyu tema, f3 ile çakışmasın diye.",
+      "theme": "dark"
+    },
+    "f7": {
+      "words": "velvet",
+      "_hedef": "7 — Arbitrum Sepolia'da gizli send",
+      "fixedRoute": "/privacy",
+      "onChain": 421614,
+      "gate": "confidential_send",
+      "chain": "arb-sepolia",
+      "contracts": [
+        "0x8b165f3fa33245f37c952d5d2b8e3f938c58ef82"
+      ],
+      "_not": "Shield yetmez — gizli bakiyeyi BAŞKASINA göndermiş olmak gerekir. Koyu tema, f3 ile çakışmasın diye.",
+      "theme": "dark"
+    },
+    "f8": {
+      "words": "degree",
+      "_hedef": "8 — Base Sepolia'da gizli send",
+      "fixedRoute": "/privacy",
+      "onChain": 84532,
+      "gate": "confidential_send",
+      "chain": "base-sepolia",
+      "contracts": [
+        "0x09f3f9CEBa0AcBca42AfAF5Bd95BF227F08928BC"
+      ],
+      "_not": "Shield yetmez — gizli bakiyeyi BAŞKASINA göndermiş olmak gerekir. Koyu tema, f3 ile çakışmasın diye.",
+      "theme": "dark"
+    },
+    "f9": {
+      "words": "habit",
+      "_hedef": "9 — aeETH token detay sayfası",
+      "fixedRoute": "/token",
+      "state": "token:aeETH",
+      "gate": "contract_interaction",
+      "chain": "sepolia",
+      "contracts": [
+        "0xf776533005a155B323F6BD64A682AA7Bb3c9e3aD"
+      ]
+    },
+    "f10": {
+      "words": "glory",
+      "_hedef": "10 — dApp bağlanma onay ekranı",
+      "fixedRoute": "/approve",
+      "gate": "signature"
+    },
+    "f11": {
+      "words": "noise",
+      "_hedef": "11 — Revoke'ta bir bağlantı kesildikten sonra",
+      "fixedRoute": "/revoke",
+      "state": "just-disconnected",
+      "gate": "signature"
+    },
+    "f12": {
+      "words": "wife",
+      "_hedef": "12 — Arfio ile 10 mesajlık konuşmadan sonra",
+      "fixedRoute": "/agent",
+      "state": "agent-10-messages",
+      "gate": "signature"
+    }
+  }
+}

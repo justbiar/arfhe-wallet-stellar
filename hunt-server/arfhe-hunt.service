@@ -1,0 +1,30 @@
+[Unit]
+Description=Arfhe hunt server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/arfhe-hunt
+EnvironmentFile=/opt/arfhe-hunt/.env
+ExecStart=/usr/bin/node server.mjs
+Restart=always
+RestartSec=5
+
+# The words live in this directory, so the process gets as little else as possible.
+User=arfhe-hunt
+Group=arfhe-hunt
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+# The one path it may write: claims.json sits here.
+ReadWritePaths=/opt/arfhe-hunt
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

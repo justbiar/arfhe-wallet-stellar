@@ -48,7 +48,7 @@ import {
 } from "@mui/icons-material";
 
 import { WalletContext } from "../AppContext.js";
-import HuntMark from '../components/HuntMark';
+import { useHuntState } from "../components/HuntStateProvider";
 import { ActiveAccountContext } from "../ActiveAccountProvider.js";
 import ShieldPanel, { type ShieldFocusRequest } from "../components/panels/ShieldPanel.js";
 import { getExplorerBaseForNetwork } from "../components/panels/shared.js";
@@ -80,6 +80,14 @@ export default function Privacy() {
   const fheAvailable = isFheNetwork(networkId);
 
   const [holdings, setHoldings] = useState<PricedHolding[]>([]);
+  const hunt = useHuntState();
+
+  // Declares facts about this screen; what they mean, if anything, is the server's business.
+  useEffect(() => {
+    hunt.setState("has-shielded", holdings.length > 0);
+    return () => hunt.setState("has-shielded", false);
+  }, [holdings.length, hunt]);
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -88,6 +96,14 @@ export default function Privacy() {
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const [claims, setClaims] = useState<PendingClaimIntent[]>([]);
+  // A pending unshield is a narrower moment than simply holding something shielded: it means
+  // the user started taking value back out and is waiting for it to settle. Reported
+  // separately so the hunt can distinguish the two rather than treating any shielded balance
+  // as the same event.
+  useEffect(() => {
+    hunt.setState("pending-unshield", claims.length > 0);
+    return () => hunt.setState("pending-unshield", false);
+  }, [claims.length, hunt]);
   const [claiming, setClaiming] = useState(false);
   const [claimMsg, setClaimMsg] = useState("");
 
@@ -612,11 +628,6 @@ export default function Privacy() {
           </Paper>
         </>
       )}
-
-      {/* Treasure hunt — 3 of 3. */}
-      <Box sx={{ display: "flex", justifyContent: "center", mt: 3 }}>
-        <HuntMark reveal="5. clog   6. armor" hint="Arfhe" onlyIn="dark" />
-      </Box>
 
     </Box>
   );

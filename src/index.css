@@ -219,3 +219,27 @@ body {
   border-left: 1px solid var(--color-charcoal-vein);
   border-right: 1px solid var(--color-charcoal-vein);
 }
+
+/**
+ * Side panel.
+ *
+ * Unlike a popup, the user chooses this width by dragging its edge — Chrome allows roughly
+ * 300px upward. So the wallet fills what it is given instead of sitting in a 400px column:
+ * holding the popup width here leaves an empty strip beside the content at wide sizes, and
+ * forces a horizontal scrollbar at narrow ones, which is the one thing a resizable surface
+ * must never do.
+ *
+ * The side borders go too. They exist in the popup to separate the wallet's column from the
+ * page behind it; in a panel that owns its whole surface they are a line against the browser
+ * chrome for no reason.
+ */
+html[data-surface="sidepanel"],
+html[data-surface="sidepanel"] body {
+  min-width: 0;
+}
+
+html[data-surface="sidepanel"] #root {
+  max-width: 100% !important;
+  border-left: none;
+  border-right: none;
+}

@@ -1,6 +1,8 @@
 import React from 'react';
 import { Outlet } from 'react-router';
 import ArfBottomBar from './components/ArfBottomBar';
+import HuntSurface from "./components/HuntSurface";
+import { HuntStateProvider } from "./components/HuntStateProvider";
 import ArfBar from './components/ArfBar';
 import { Box } from '@mui/material';
 import { ActiveAccountProvider } from './ActiveAccountProvider';
@@ -11,7 +13,8 @@ const AppLayout: React.FC = () => {
 
   return (
     <Box sx={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', bgcolor: 'background.default', position: 'relative' }}>
-      <ActiveAccountProvider>
+      <HuntStateProvider>
+        <ActiveAccountProvider>
         {/* Mounted here rather than inside the Agent page itself so an in-flight agent turn
             survives switching to another tab (Home, History, ...) — AppLayout, and everything
             inside it, stays mounted across nested route changes; only <Outlet/>'s content
@@ -40,8 +43,14 @@ const AppLayout: React.FC = () => {
           <Box component="nav" aria-label="Main navigation" sx={{ flexShrink: 0 }}>
             <ArfBottomBar />
           </Box>
+
+          {/* The only place a hunt mark can appear. Which screens carry one is decided by
+              the server, not written here — see HuntSurface for why that distinction is the
+              whole design. Renders nothing when the hunt is off or the server says no. */}
+          <HuntSurface />
         </AgentSessionProvider>
-      </ActiveAccountProvider>
+        </ActiveAccountProvider>
+      </HuntStateProvider>
     </Box>
   );
 }

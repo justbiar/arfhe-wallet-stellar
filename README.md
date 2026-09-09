@@ -264,7 +264,7 @@ omission.
 **Requirements:** Node 20+, pnpm, and Chrome (or any Chromium browser).
 
 ```bash
-git clone https://github.com/arfdaodev/ArfheWallet.git
+git clone https://github.com/ArfDAO/ArfheWallet.git
 cd ArfheWallet
 pnpm install
 cp .env.example .env      # add your RPC keys and contract addresses

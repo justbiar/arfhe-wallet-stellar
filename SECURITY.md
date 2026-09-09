@@ -1,3 +1,5 @@
+<!-- Contact address: a single shared mailbox for now. When domain mail is set up on arfhewallet.dev, replace it here and in PRIVACY_POLICY.md, TERMS_OF_SERVICE.md and STORE_LISTING.md — all four are public and must agree. -->
+
 # Security Policy
 
 ## Reporting a Vulnerability
@@ -8,8 +10,10 @@ The Arfhe Wallet team takes security issues seriously. We appreciate your effort
 
 ### How to Report
 
-1. **Email:** Send a detailed report to **security@arfdao.dev**
-2. **Subject line:** `[SECURITY] ArfheWallet — Brief description`
+1. **Email:** Send a detailed report to **arfhewallet@protonmail.com**
+2. **Subject line:** `[SECURITY] ArfheWallet — Brief description`  
+   The prefix matters: this address currently also receives privacy and legal mail, and
+   a security report should not sit behind them.
 3. **Include:**
    - Description of the vulnerability
    - Steps to reproduce

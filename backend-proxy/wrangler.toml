@@ -10,6 +10,11 @@ compatibility_date = "2024-11-01"
 #
 # Requests from any other origin are rejected before hitting OpenRouter.
 ALLOWED_ORIGIN = "chrome-extension://cdhfecdlpblpdngkadiigjmodedapoih"
+# Exact arfhewallet.dev origin allowed (via CORS) to call the two public, browser-facing GET
+# routes: GET /api/tasks and GET /api/user-tasks/:x_user_id. POST /api/x-login and POST
+# /api/user-tasks are NOT covered by this — those are server-to-server (Vercel, with
+# X-Internal-Secret) and carry no CORS headers at all.
+SITE_ORIGIN = "https://arfhewallet.dev"
 # Requests allowed per IP per 60 seconds.
 RATE_LIMIT_PER_MINUTE = "15"
 # x402 (Faz 3) — "true" routes /agent/x402/* through the real facilitator
@@ -33,7 +38,9 @@ id = "dc1dcdbb178742ea94181d2e0260e6c8"
 preview_id = "e0bdca44a58d419494524c41f0d5ef4a"
 # D1 database for pseudonymous wallet/activity tracking — /users/register, /activity/log,
 # /admin/users, /admin/activity in src/index.ts. No amount/value column anywhere (see
-# migrations/0001_create_users_activity.sql).
+# migrations/0001_create_users_activity.sql). Also holds x_users/tasks/user_tasks (X login +
+# task completion tracking — /api/x-login, /api/tasks, /api/user-tasks, see
+# migrations/0004_create_x_tasks.sql).
 [[d1_databases]]
 binding = "USERS_DB"
 database_name = "arfio-users"
@@ -43,6 +50,10 @@ migrations_dir = "migrations"
 #   wrangler secret put ADMIN_SECRET
 # OPENROUTER_API_KEY is NOT set here — it's a secret, not a var:
 #   wrangler secret put OPENROUTER_API_KEY
+# INTERNAL_API_SECRET is NOT set here — it's a secret, not a var. Shared secret the
+# arfhewallet.dev site sends as `X-Internal-Secret` on POST /api/x-login and POST
+# /api/user-tasks:
+#   wrangler secret put INTERNAL_API_SECRET
 # Workers AI binding used to embed the user's message for RAG context retrieval
 # (src/knowledge/). No separate resource to create — this binding is available on any
 # Worker on the account as soon as it's declared here.

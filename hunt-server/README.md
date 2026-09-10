@@ -49,7 +49,7 @@ CLAIMS_FILE=./claims.json
 RPC_SEPOLIA=https://eth-sepolia.g.alchemy.com/v2/<key>
 RPC_ARB_SEPOLIA=https://arb-sepolia.g.alchemy.com/v2/<key>
 RPC_BASE_SEPOLIA=https://base-sepolia.g.alchemy.com/v2/<key>
-ALLOWED_ORIGINS=chrome-extension://cdhfecdlpblpdngkadiigjmodedapoih
+ALLOWED_ORIGINS=chrome-extension://jdihllmgakeejednibihnpclbddgfchp
 ```
 
 Run it behind the nginx that already terminates TLS for `mcp.arfhewallet.dev`, then point

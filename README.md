@@ -250,7 +250,7 @@ talking to a script the wallet injects into the page, so the wallet has to be al
 the pages you visit. What it does with that access is in [Websites](#websites) — it answers
 the chain id to anyone, and nothing else until you approve a connection.
 
-The extension id is fixed at `cdhfecdlpblpdngkadiigjmodedapoih`. If yours differs, the
+The extension id is fixed at `jdihllmgakeejednibihnpclbddgfchp`. If yours differs, the
 folder you loaded is not this build.
 
 ### Before you write anything down

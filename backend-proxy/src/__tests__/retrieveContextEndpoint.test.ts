@@ -3,7 +3,7 @@ import { env, SELF } from "cloudflare:test";
 import chunkEmbeddingsJson from "../knowledge/chunkEmbeddings.generated.json";
 
 const UNSHIELD_EMBEDDING = chunkEmbeddingsJson.find((c) => c.id === "mimari-ve-unshield")!.embedding;
-const EXTENSION_ORIGIN = "chrome-extension://cdhfecdlpblpdngkadiigjmodedapoih";
+const EXTENSION_ORIGIN = "chrome-extension://jdihllmgakeejednibihnpclbddgfchp";
 
 function postRetrieveContext(query: unknown) {
   return SELF.fetch("https://proxy.example/agent/retrieve-context", {

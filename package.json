@@ -7,7 +7,6 @@
     "dev": "vite",
     "build": "vite build",
     "build:chrome": "cross-env TARGET=chrome vite build",
-    "build:store": "cross-env TARGET=chrome STORE_BUILD=true vite build",
     "build:firefox": "cross-env TARGET=firefox vite build",
     "lint": "eslint .",
     "preview": "vite preview",

@@ -7,7 +7,6 @@ import StorageManager from "./backend/StorageManager.js";
 import DataCacheService from "./backend/DataCacheService.js";
 import PortfolioHistoryService from "./backend/PortfolioHistoryService.js";
 import { ContactManager } from "./backend/ContactManager.js";
-import FheCofheService from "./backend/FheCofheService.js";
 
 import { WalletConnectService } from "./backend/WalletConnectService";
 import SpamFilter from "./backend/SpamFilter.js";
@@ -69,7 +68,22 @@ export class AppContext {
       this.accountManager.clearSensitiveData();
     });
     this.storageManager.onLock(() => {
-      FheCofheService.getInstance().reset();
+      /**
+       * Loaded here rather than at the top of the file.
+       *
+       * Network, AccountManager and Home all import FheCofheService dynamically, on the
+       * reasoning that a 390 kB FHE bundle should not be part of opening the wallet. A
+       * single static import at module scope silently undid all three: this file is on the
+       * startup path, so the chunk was fetched and parsed every launch — for a callback
+       * that only runs when the wallet locks.
+       *
+       * The reset stays correct. If FHE was used, the module is already in cache and this
+       * resolves on the next microtask, before anything can paint. If it was never used
+       * there is no client and no worker, so there is nothing to wipe either way.
+       */
+      void import("./backend/FheCofheService.js").then(({ default: FheCofheService }) => {
+        FheCofheService.getInstance().reset();
+      });
     });
     this.storageManager.onLock(() => {
       // Memory only. The encrypted snapshot on disk stays, so unlocking renders balances

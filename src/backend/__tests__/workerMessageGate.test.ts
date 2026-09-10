@@ -22,7 +22,7 @@ import { describe, it, expect } from "vitest";
 import fs from "fs";
 import path from "path";
 
-const EXTENSION_ID = "cdhfecdlpblpdngkadiigjmodedapoih";
+const EXTENSION_ID = "jdihllmgakeejednibihnpclbddgfchp";
 const ORIGIN = `chrome-extension://${EXTENSION_ID}`;
 
 interface Sender {

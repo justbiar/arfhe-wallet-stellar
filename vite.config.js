@@ -89,30 +89,31 @@ export default defineConfig({
         global: true,
         process: true,
       },
+      /**
+       * `vm` is shimmed by vm-browserify, whose whole implementation is `eval`.
+       *
+       * Nothing in the extension asks for it — the only importer in the tree is `jiti`,
+       * which eslint and vite use at build time and which never reaches the bundle. So the
+       * shim shipped a live `eval` call that could not run anyway: the MV3 policy grants
+       * `wasm-unsafe-eval` and not `unsafe-eval`, so calling it throws. Excluding it drops
+       * the dead code rather than leaving review tooling to find an `eval` and ask why.
+       */
+      exclude: ['vm'],
     }),
     viteStaticCopy({
       targets: [
         {
-          src: 'extension/manifest.json',
-          dest: '.',
           /**
-           * `key` is stripped for a Web Store build, and kept for every other one.
+           * Copied through as-is, `key` included.
            *
-           * The store rejects a package containing `key` outright — it assigns the extension
-           * its identity, and a manifest claiming one is a conflict. Locally the opposite is
-           * true: without `key` an unpacked extension gets a fresh random id per profile, and
-           * this wallet's id is not cosmetic. It is baked into the WalletConnect project's
-           * allowed-origins list (chrome-extension://<id>), so an id that changes on every
-           * load means the relay refuses the connection with "origin not allowed".
-           *
-           * Hence: `npm run build:store` for an upload, the normal build for development.
+           * `key` fixes the extension's id. That id is not cosmetic: it is registered in the
+           * WalletConnect project's allowed-origins list as chrome-extension://<id>, so an
+           * id that changes drops every dApp connection with "origin not allowed". Ours is
+           * set to the Web Store listing's own public key, which means the unpacked build
+           * and the published one answer to the same id — one dist/ serves both.
            */
-          transform: (contents) => {
-            if (process.env.STORE_BUILD !== 'true') return contents;
-            const manifest = JSON.parse(contents);
-            delete manifest.key;
-            return JSON.stringify(manifest, null, 4) + '\n';
-          },
+          src: 'extension/manifest.json',
+          dest: '.'
         },
         {
           src: 'service-worker.js',

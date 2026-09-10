@@ -9,7 +9,7 @@ compatibility_date = "2024-11-01"
 # only whoever's id happened to be here could reach the agent.
 #
 # Requests from any other origin are rejected before hitting OpenRouter.
-ALLOWED_ORIGIN = "chrome-extension://cdhfecdlpblpdngkadiigjmodedapoih"
+ALLOWED_ORIGIN = "chrome-extension://jdihllmgakeejednibihnpclbddgfchp"
 # Exact arfhewallet.dev origin allowed (via CORS) to call the two public, browser-facing GET
 # routes: GET /api/tasks and GET /api/user-tasks/:x_user_id. POST /api/x-login and POST
 # /api/user-tasks are NOT covered by this — those are server-to-server (Vercel, with

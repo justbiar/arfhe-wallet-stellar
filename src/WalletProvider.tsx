@@ -138,6 +138,26 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       void (async () => {
         try {
           const net = appContext.networkProvider.getActiveNetwork();
+          const active = appContext.accountManager.GetActive();
+
+          /**
+           * Derived here rather than in the worker, which has no access to the mnemonic —
+           * it holds no keys by design, and this keeps it that way. Imported dynamically so
+           * the Stellar SDK is not parsed on a path that runs every time the network or
+           * account changes.
+           *
+           * Null for an account with no recovery phrase, and null on failure: a missing
+           * address makes stellar_getAddress answer null, which is the honest result. It
+           * must never break the rest of the push, since the worker needs the EVM address
+           * to keep watching for incoming funds.
+           */
+          let stellarAddress: string | null = null;
+          if (active) {
+            stellarAddress = await import("./backend/StellarService.js")
+              .then(({ getAddress }) => getAddress(active))
+              .catch(() => null);
+          }
+
           runtime.sendMessage?.({
             type: "SET_WALLET_STATE",
             // The real chain id, not the wallet's internal NetworkId — this is what
@@ -146,7 +166,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
             rpcUrl: net.rpc_url ?? null,
             // The worker watches this address for arriving funds while the popup is
             // closed. A public address and nothing more — no key ever crosses this line.
-            address: appContext.accountManager.GetActive()?.GetAddress() ?? null,
+            address: active?.GetAddress() ?? null,
+            stellarAddress,
             // So an arriving confidential transfer is announced without an amount: the
             // wrapper's public Transfer event carries an activity indicator, not a value.
             confidentialContracts: await net.getConfidentialWrapperAddresses().catch(() => []),

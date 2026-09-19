@@ -934,6 +934,9 @@ const APPROVAL_METHODS = new Set([
   "eth_signTypedData_v4",
   "wallet_switchEthereumChain",
   "wallet_addEthereumChain",
+  // Stellar. Signing is gated the same way an EVM signature is: a site may ask, a person
+  // decides. Reading the address is not here — see stellar_getAddress below for why.
+  "stellar_signTransaction",
 ]);
 
 // ─── Permission reads ───────────────────────────────────────────────
@@ -1043,6 +1046,19 @@ async function handleDappRequest(message, sender) {
     };
   }
   touchPermission(origin);
+
+  // ── Stellar: address ──────────────────────────────────────────────
+  //
+  // Connected sites may read it, and it never prompts — the same rule eth_accounts follows,
+  // for the same reason. An address is public by nature and reading one moves nothing; a
+  // site that could raise a window by asking for it would have a way to nag.
+  //
+  // It is answered from the granted EVM account: both addresses descend from one recovery
+  // phrase, so "this site may see my account" already covers the account's other chain.
+  // What a site still cannot do is spend on either.
+  if (method === "stellar_getAddress") {
+    return { result: state?.stellarAddress ?? null };
+  }
 
   // ── Approval-gated ────────────────────────────────────────────────
   if (APPROVAL_METHODS.has(method)) {
@@ -1322,6 +1338,11 @@ async function handleMessage(message) {
         confidentialContracts: Array.isArray(message.confidentialContracts)
           ? message.confidentialContracts.filter((a) => typeof a === "string").map((a) => a.toLowerCase())
           : [],
+        // The active account's Stellar address, for `stellar_getAddress`. Public, like the
+        // EVM one beside it, and null for an account imported from a raw private key —
+        // there is no phrase to derive it from and inventing one would hand out an address
+        // the user's backup cannot restore.
+        stellarAddress: typeof message.stellarAddress === "string" ? message.stellarAddress : null,
       };
       await chrome.storage.local.set({ [STORAGE_KEY_WALLET_STATE]: state });
 

@@ -61,6 +61,8 @@ const APPROVAL_METHODS = new Set([
     'eth_signTypedData_v4',
     'wallet_switchEthereumChain',
     'wallet_addEthereumChain',
+    // Stellar signing waits on a person too, so a dropped port must not cancel it.
+    'stellar_signTransaction',
 ]);
 
 /** Backoff for re-opening the channel, so a wallet being reloaded is not hammered. */

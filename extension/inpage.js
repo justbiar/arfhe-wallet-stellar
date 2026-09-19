@@ -36,6 +36,8 @@
         'eth_signTypedData_v4',
         'wallet_switchEthereumChain',
         'wallet_addEthereumChain',
+        // Waits on a person, so it gets the long deadline rather than the RPC one.
+        'stellar_signTransaction',
     ]);
 
     /** EIP-1193 error for a provider that is present but cannot service the request. */
@@ -303,6 +305,52 @@
     if (!window.ethereum) {
         window.ethereum = provider;
     }
+    /**
+     * Stellar, alongside the EIP-1193 surface rather than inside it.
+     *
+     * EIP-1193 describes an Ethereum provider: its `request` carries Ethereum methods and a
+     * dApp reading `window.ethereum` expects Ethereum semantics. Stellar is a different
+     * chain with different keys and a different transaction format, so it gets a named
+     * namespace instead of being smuggled through method strings nobody would discover.
+     *
+     * Both still travel the same pipe — the methods below are exactly what `request` sends,
+     * so a caller that prefers the raw form loses nothing.
+     *
+     *   const address = await window.arfheWallet.stellar.getAddress();
+     *   const signed  = await window.arfheWallet.stellar.signTransaction(xdr, passphrase);
+     */
+    provider.stellar = Object.freeze({
+        /**
+         * The active account's Stellar address, or null when it has none.
+         *
+         * Never prompts, and answers only a connected site — the same rule `eth_accounts`
+         * follows. Null is a real answer: an account imported from a raw private key has no
+         * recovery phrase to derive a Stellar key from.
+         */
+        getAddress() {
+            return provider.request({ method: 'stellar_getAddress' });
+        },
+
+        /**
+         * Signs a transaction envelope and returns the signed XDR. Opens the approval
+         * screen; the wallet signs nothing without a person agreeing to it.
+         *
+         * `networkPassphrase` is required because it is part of what gets signed. A
+         * signature made against the wrong network is invalid everywhere, and a default
+         * here would let a caller produce a mainnet signature believing it made a testnet
+         * one.
+         *
+         * Returns the signed XDR and does not submit it. When the transaction reaches the
+         * network is the caller's decision.
+         */
+        signTransaction(xdr, networkPassphrase) {
+            return provider.request({
+                method: 'stellar_signTransaction',
+                params: [{ xdr, networkPassphrase }],
+            });
+        },
+    });
+
     window.arfheWallet = provider;
 
     // Learn the current chain, and whether this site already has a grant, without asking

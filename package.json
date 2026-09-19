@@ -24,7 +24,8 @@
     "verify:discovery": "node scripts/verify-discovery.mjs",
     "verify:anchor": "node scripts/verify-anchor-ramp.mjs",
     "audit:privacy": "node scripts/audit-privacy.mjs",
-    "audit:secrets": "node scripts/secret-guard.mjs"
+    "audit:secrets": "node scripts/secret-guard.mjs",
+    "anchor": "tsx anchor/service.ts"
   },
   "dependencies": {
     "@aztec/bb.js": "0.87.0",

@@ -53,3 +53,4 @@ deploy/cache/
 *.zip
 store-screenshots/
 dist-panel/
+anchor/.keys.json

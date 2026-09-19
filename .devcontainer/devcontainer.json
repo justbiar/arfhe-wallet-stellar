@@ -1,0 +1,23 @@
+{
+  "name": "ArfheWallet",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:20",
+
+  // 8790 is the anchor. It has to be `public`, because the wallet and the panel reach it
+  // from the visitor's own browser rather than from inside this container — a `private`
+  // forward answers GitHub's auth page instead of the TOML, which reads as the anchor
+  // being down.
+  "forwardPorts": [8790, 5173, 5174],
+  "portsAttributes": {
+    "8790": { "label": "anchor", "visibility": "public", "onAutoForward": "notify" },
+    "5173": { "label": "extension dev" },
+    "5174": { "label": "panel" }
+  },
+
+  "postCreateCommand": "npm install -g pnpm && pnpm install",
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode"]
+    }
+  }
+}

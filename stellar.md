@@ -139,8 +139,8 @@ görüldü.
 
 | Konu | Durum |
 |---|---|
-| Confidential token katmanı | Hiç başlanmadı |
-| Tarayıcıda kanıt üretimi (`bb.js`) ölçümü | Yapılmadı |
+| Confidential token katmanının cüzdana girmesi | Protokol testnet'te çalıştırıldı (§5.1), cüzdana **hiçbir kod eklenmedi** |
+| Denetçi ciphertext'inin çözülmesi | Denenmedi — dağıtımın denetçi gizli anahtarı elimizde yok |
 | Panel'in uzantı ile uçtan uca denenmesi | Kod tam, gerçek tarayıcıda çalıştırılmadı |
 
 ---
@@ -187,10 +187,59 @@ koymayın; alt açıklama satırı dönüştürmüyor.
 
 ---
 
-## 5. Confidential Tokens — araştırma notları
+## 5. Confidential Tokens — artık okunan değil, çalıştırılan
 
 Kaynak: Stellar Developer Preview (OpenZeppelin kontratları + Nethermind UltraHonk
 doğrulayıcı). **Denetlenmemiş, yalnızca testnet.**
+
+### 5.1 Testnet'te gerçek bir gizli transfer yapıldı
+
+19 Eylül 2026, `brozorec/stellar-confidential-token-demo` reposunun `e2e` akışı canlı
+testnet'e karşı çalıştırıldı. Cüzdana **hiçbir şey eklenmedi** — ölçülen şey protokolün
+kendisi.
+
+| Adım | Sonuç |
+|---|---|
+| register (alice) | `f582124c3173118d9f73aebe5bc5cd7ad54cf0991d111e2ffffd305750e2b256` |
+| register (bob) | `a54cee41658a7fb017f1ce6830373891fc9d3c2cdbffbff4b63c71bd7e6ce101` |
+| deposit 1000 + merge | `501ba389…`, `d6931c25…` |
+| **confidential_transfer 400** | `9c9015c00d56e22f6d90d11a0a917db95293c939548efd5ff831a75ea4703366` |
+| withdraw 400 | `cc5b3303a16dddc5ac5ded9f57f059bae6b7d059b5beb907d37a62111f8a2eff` |
+
+Her kanıt **zincirde** doğrulandı; istemci bakiyeleri yalnızca event'lerden yeniden kurdu ve
+zincirdeki taahhütlerle eşleştiğini doğruladı.
+
+Zaten dağıtılmış testnet kontratları (kendi dağıtımını yapmak gerekmiyor):
+
+```
+token      CBF64DEOVQAXJFBSNGFEUT2AH4H7K5JBY3ZYJ5GVEINMNSDISWRG5N3F
+verifier   CDCET36PIS44DWJM5UQSSI4ZHGRDSBIIQW4G4ALPYK3Y6FEQGY5ZWFXL
+auditor    CA4II62E35TQKPGHCPBD6EBAS732GSGS6H37UUWKEDHR4YTBVMPHVY4L
+underlying CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC  (native XLM SAC)
+```
+
+Repo `deployments/testnet.json` içermiyor; README'deki kimliklerle elle yazıldı.
+`deployedAtLedger` **gerçek dağıtım ledger'ı olamaz** — RPC ~7 gün tutuyor (ölçülen pencere
+`4637170 – 4758129`), o yüzden taze hesaplar için "şimdi eksi biraz" yazılır.
+
+### 5.1.1 Gizlilik iddiası doğrulandı — okuyarak değil, bakarak
+
+Transfer işlemi Horizon'dan herhangi bir gözlemcinin göreceği gibi çekildi:
+
+| Parametre | İçerik |
+|---|---|
+| `[0] Address` | token kontratı |
+| `[1] Sym` | `confidential_transfer` |
+| `[2] Address` | **gönderen — açık** |
+| `[3] Address` | **alıcı — açık** |
+| `[4] Bytes` | 20.424 bayt kanıt + ciphertext |
+
+**Miktar yok.** 400, 1000 ve 600 sayıları zarf+meta baytlarında arandı, hiçbiri yok.
+
+Karşılaştırma: aynı hesabın `deposit` işleminde beşinci parametre bir `I128` ve içeriği
+`AAAACgAAAAAAAAAAAAAAAAAAA+g=` — yani **1000, açıkça.**
+
+Yani tablo doğru: **giriş ve çıkış miktarları açık, sarmalayıcı içi transfer gizli.**
 
 Mimari: mevcut bir SEP-41 token'ının üzerine **sarmalayıcı kontrat**. Bakiye Grumpkin
 eğrisinde Pedersen taahhüdü, her geçiş Noir'da yazılmış ZK kanıtıyla doğrulanıyor.
@@ -199,7 +248,7 @@ Operasyonlar: `register`, `deposit`, `merge`, `withdraw`, `confidential_transfer
 **Cüzdanın EVM'de yaptığının aynısı** — `shield`/`confidentialTransfer`/`unshield` ile birebir
 eşleşiyor.
 
-### Kritik: neyin gizli olduğu
+### 5.2 Kritik: neyin gizli olduğu
 
 | | Açık | Gizli |
 |---|---|---|
@@ -210,7 +259,7 @@ eşleşiyor.
 **Anchor ayağı gizlenemez.** Anchor doğru tutarda TRY ödeyecekse miktarı bilmek zorunda.
 Gizlenen şey sarmalayıcı **içindeki** transferler.
 
-### Denetçi (auditor)
+### 5.3 Denetçi (auditor)
 
 - Kayıt defteri kontratı, Grumpkin açık anahtarlarını `auditor_id` ile tutuyor.
   `register_key`/`rotate_key` **`manager` rolüne** bağlı.
@@ -221,7 +270,7 @@ Gizlenen şey sarmalayıcı **içindeki** transferler.
 - **Geriye dönük denetçi atamak işe yaramıyor**: ciphertext işlem anındaki anahtara göre
   üretiliyor, sonradan kaydedilen anahtar geçmişi okuyamaz.
 
-### Riskler
+### 5.4 Riskler
 
 **~7 gün olay saklama.** Harcanabilir sırlar (`v`, `r`) yalnızca event'lerde yaşıyor, zincir
 taahhütleri tutuyor, Soroban RPC ~7 günlük geçmiş sunuyor. İstemci yerel kalıcılığa bel
@@ -229,11 +278,47 @@ bağlıyor. Demo için kabul edilebilir; **cüzdan için veri kaybı riski** —
 açmazsa gelen transferin açılımı kurtarılamaz. Indexer ya da başka bir dayanıklılık planı
 gerekiyor.
 
-**`@ctd/sdk` npm'de yok** (404). Yalnızca demo reposunda: `brozorec/stellar-confidential-token-demo`.
+### 5.5 Kanıt maliyeti — ölçüldü
 
-**Tarayıcıda kanıt üretimi cross-origin isolation istiyor** (SharedArrayBuffer). Uzantı
-popup'ında çalışıp çalışmadığı **ölçülmedi** — sonuç mimariyi belirler (kanıt cüzdanda mı
-panelde mi üretilecek).
+Node 20, 10 çekirdek, transfer devresi:
+
+| İş parçacığı | İlk | Isınmış |
+|---|---|---|
+| 1 | 1513 ms | 1318 ms |
+| 4 | 690 ms | 458 ms |
+| 10 | 645 ms | 391 ms |
+
+Kanıt boyutu her devrede **14.592 bayt**. register ~0,7 s, transfer/withdraw ~1,3 s
+(tek iş parçacığı).
+
+**Bu, açık duran soruyu kapatıyor.** Tarayıcıda kanıt üretimi `crossOriginIsolated === true`
+istiyor (bb.js SharedArrayBuffer ile çok iş parçacıklı çalışıyor) — ama izolasyon yoksa bb.js
+tek iş parçacığına düşüyor, **çalışmayı bırakmıyor**. Tek iş parçacığında transfer kanıtı
+~1,5 s. Yani izolasyon bir **hız** meselesi, yapılabilirlik meselesi değil: uzantı popup'ı
+izole edilemese bile kanıtı kendi üretebilir, sadece dört kat yavaş üretir.
+
+Ölçüm Node'da yapıldı; tarayıcı wasm'ı farklı olacaktır, ama karar büyüklük mertebesine
+bağlı ve o belli.
+
+**bb.js paketleyiciye sokulmamalı.** Kendi Web Worker'ını `new Worker(new URL(...))` ile
+açıyor; hash'lenmiş bir chunk'a gömüldüğünde worker bulunamıyor ve kanıt üretimi **sessizce
+asılı kalıyor**. Native ESM olarak, worker/wasm kardeş dosyalarıyla birlikte sabit bir
+yoldan servis edilmeli.
+
+**`@ctd/sdk` npm'de yok** (404 — dört isim denendi). Yalnızca demo reposunda. Entegrasyon
+paketi kurmak değil, **kodu içeri almak** demek.
+
+### 5.6 Anahtar türetme — Arfhe'de daha temiz olacak
+
+Gizli `sk`, Grumpkin üzerinde rastgele bir skaler; her şey ondan türüyor
+(`vk = Poseidon2(VIEWING_KEY, sk, addr_f)`), ve **kontrata bağlı** — bir dağıtım için
+üretilen anahtar başka dağıtımda anlamsız.
+
+Demo uygulaması `sk`'yi Freighter'ın `signMessage` imzasından türetiyor (Ed25519 imzaları
+deterministik olduğu için geri getirilebilir) ve `localStorage`'a yazıyor. **Arfhe'nin buna
+ihtiyacı yok:** kurtarma ifadesi zaten elimizde, `sk` doğrudan tohumdan kendi yolu boyunca
+türetilebilir — imza turu yok, ve yedek gerçekten kurtarıyor. Stellar anahtarında yapılanın
+aynısı (bkz. §2.1).
 
 ---
 

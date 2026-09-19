@@ -46,9 +46,33 @@ function rateLimited(key) {
   return recent.length > RATE_LIMIT;
 }
 
+/**
+ * Headers every response carries.
+ *
+ * A page that generates proofs in a worker has to be cross-origin isolated, and an
+ * isolated document will not accept a cross-origin response without `Cross-Origin-
+ * Resource-Policy`. Without these the relayer is simply invisible to exactly the pages
+ * that need it — which is how it first showed up: a service that was running, reported by
+ * its own UI as not running.
+ *
+ * The allowed origin is configurable and defaults to everything, which is right for a
+ * testnet relayer whose whole API is "submit this proof" and wrong for anything holding
+ * mainnet value.
+ */
+const CORS = {
+  "access-control-allow-origin": process.env.RELAYER_ALLOW_ORIGIN ?? "*",
+  "access-control-allow-headers": "content-type",
+  "access-control-allow-methods": "GET, POST, OPTIONS",
+  "cross-origin-resource-policy": "cross-origin",
+};
+
 function send(res, status, body) {
   const payload = JSON.stringify(body);
-  res.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(payload) });
+  res.writeHead(status, {
+    ...CORS,
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(payload),
+  });
   res.end(payload);
 }
 
@@ -68,6 +92,10 @@ async function readBody(req) {
 }
 
 const server = createServer(async (req, res) => {
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, CORS);
+    return res.end();
+  }
   if (req.method === "GET" && req.url === "/health") {
     return send(res, 200, { ok: true, publicKey: relayer.publicKey, pools: relayer.allowedPools });
   }

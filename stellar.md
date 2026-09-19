@@ -583,6 +583,63 @@ fikri **reddedildi** — sildiğimiz bağı geri koyuyor (§5.9).
 
 ---
 
+## 5.11 Panelde gizlilik havuzu sayfası — ve neden işlemler tutmuyor
+
+`panel/pages/Privacy.tsx`, `/#/privacy`. SPP web SDK'sı (`stellar-private-payments` 0.1.0)
+panelin Vite yığınına bağlandı.
+
+### Çalışan
+
+| | |
+|---|---|
+| WASM + depolama işçisi + kanıtlayıcı yükleniyor | ✔ |
+| `crossOriginIsolated` | **true** — COOP/COEP başlıkları eklendi, çok iş parçacıklı kanıt mümkün |
+| Bootnode gerekliliği | Sorgulanıyor, gerekmiyorsa kullanılmıyor |
+| Anahtar türetme (SEP-53 imzası) | ✔ — SDK imzayı **doğruluyor**, yanlış olsaydı reddederdi |
+| Havuz oturumu, bakiye okuma | ✔ |
+
+Vite tarafında üç şey şart, üçü de yorumlarla kayıtlı:
+`optimizeDeps.exclude` (SDK kendi worker'ını `import.meta.url` ile buluyor),
+COOP/COEP başlıkları, ve 83 MB devre dosyasını `public/`'e kopyalamak yerine
+node_modules'tan servis eden bir dev middleware — `public/` uzantı build'iyle paylaşılıyor.
+
+### Çalışmayan — ve sebebi bizde değil
+
+Yatırma denemesi **kontrat hatası #10 = `WrongExtHash`** veriyor.
+
+```
+16 Eyl 2026  fix(pool): bind ext_data_hash to pool and token identity (#550)
+ 3 Eyl 2026  npm: stellar-private-payments 0.1.0 yayınlandı
+```
+
+Zincirdeki kontrat `ext_data_hash`'i `{pool, token, recipient, ext_amount, enc0, enc1}`
+üzerinden hesaplıyor. **npm'deki istemci bu değişiklikten 13 gün önce yayınlandı**, eski
+şemayla hash'liyor, kontrat reddediyor. CLI'ın çalışmasının sebebi depodan derlenmiş olması.
+
+Çözüm: web SDK'sını depodan derlemek (`wasm-bindgen-cli` 0.2.126 + binaryen gerekiyor).
+Ya da Nethermind yeni sürüm yayınlayana kadar beklemek.
+
+### Yolda yakalanan bir hata — bizim tarafımızda
+
+`pool.deposit()` **fırlatmıyor**; `{status: "failed", hashes: [], message}` döndürüyor.
+İlk sürüm bunu başarı sayıp "deposit tamam · 4,9 sn" yazdı, oysa zincire hiçbir şey
+gitmemişti. Sayfa artık dönen sonuca bakıp hash yoksa açıkça "hiçbir işlem üretmedi"
+diyor. **Başarıyı varsaymak, başarısızlığı gizlemenin en kolay yolu.**
+
+### Ölçülen: tarayıcıda kanıt süresi
+
+Başarısız denemede bile kanıt üretildi (reddedilen yer kontrat). Uçtan uca **4,9 saniye** —
+izolasyon açıkken, yerel CLI'ın ~19 saniyesine karşı. §5.5'teki "izolasyon hız meselesi"
+tahmini tarayıcıda doğrulandı.
+
+### Relayer ve izolasyon
+
+İzole bir sayfa, `Cross-Origin-Resource-Policy` taşımayan bir cevabı kabul etmiyor. Relayer
+çalışıyor olmasına rağmen sayfa onu "çalışmıyor" diye gösterdi. Relayer'a CORS + CORP
+başlıkları eklendi.
+
+---
+
 ## 6. Panel (demo sitesi)
 
 `panel/`, kökün bağımlılıklarını paylaşan ikinci bir Vite girişi (`vite.panel.config.js`).

@@ -16,6 +16,7 @@ import Landing from "./pages/Landing";
 import Bridge from "./pages/Bridge";
 import About from "./pages/About";
 import Anchor from "./pages/Anchor";
+import Privacy from "./pages/Privacy";
 import Shell from "./components/Shell";
 
 /**
@@ -38,6 +39,7 @@ function App() {
             <Route path="/" element={<Landing />} />
             <Route path="/bridge" element={<Bridge />} />
             <Route path="/anchor" element={<Anchor />} />
+            <Route path="/privacy" element={<Privacy />} />
             <Route path="/about" element={<About />} />
           </Routes>
         </Shell>

@@ -91,6 +91,20 @@ export class AppContext {
       this.dataCacheService.clearMemory();
       this.portfolioHistory.clearMemory();
     });
+    this.storageManager.onLock(() => {
+      /**
+       * Stellar keys are derived from the mnemonic and held in memory only, so locking has
+       * to drop them explicitly — otherwise the ed25519 key outlives the lock, which is the
+       * one property locking exists to provide.
+       *
+       * Imported dynamically for the same reason the FHE reset above is: this file is on
+       * the startup path, and the Stellar SDK has no business being parsed on every launch
+       * for a callback that runs when the wallet closes.
+       */
+      void import("./backend/StellarService.js").then(({ forgetDerivedKeys }) => {
+        forgetDerivedKeys();
+      });
+    });
 
   }
 

@@ -865,6 +865,20 @@ Tam zincir, ölçülmüş hâliyle:
   = 1.0 USDC, cüzdanın tanıdığı token
 ```
 
+### İkinci tur: doğrudan cüzdana
+
+Aynı yol, bu sefer `mint_recipient` gerçek bir Arfhe hesabı:
+
+| Adım | Sonuç |
+|---|---|
+| burn 1.0396090 USDC | `ebc5607f27589a0571aa22f077eb93d02aa59e24cdf1739ece1476705c0bbf6e` |
+| mint (Base Sepolia) | `0xd71b1fea8fbdc6dcfbcf2a2aa90897eb6a6bff18a3fbc90cd613e7eb8177be39` |
+| Stellar tarafı | 1.0396090 → **0** (tamamen yakıldı) |
+| Cüzdan bakiyesi | **2.039609 USDC** (ilk turun 1 USDC'si de aktarıldı) |
+
+2,039609 — yani 100 TRY'nin tam karşılığı, artık Base Sepolia'da, cüzdanın kendi
+hesabında. Ortada bizim yazdığımız tek satır köprü kodu yok.
+
 Kalan tek adım **CoFHE shield** — yani gizli bakiyeye çevirmek. O da Base Sepolia'da
 çalışıyor ve cüzdanda zaten var; zincirin bu son halkası cüzdan arayüzünden denenecek.
 

@@ -12,7 +12,7 @@ const APP_VERSION: string = typeof __APP_VERSION__ === "string" ? __APP_VERSION_
 import { useContext, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Box, Typography, Container, Paper, List, ListItem, ListItemButton, ListItemText, ListItemIcon, Switch, Chip, IconButton, alpha, useTheme, Stack, Divider, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Button, CircularProgress } from '@mui/material';
-import { Notifications, DarkMode, Language, Security, Lock, Wifi, ChevronRight, Check, Close, Fingerprint, PrivacyTip, Gavel, Info, OpenInNew, ManageAccounts, ViewSidebar , PublicOutlined } from '@mui/icons-material';
+import { Notifications, DarkMode, Language, Security, Lock, Wifi, ChevronRight, Check, Close, Fingerprint, PrivacyTip, Gavel, Info, OpenInNew, ManageAccounts, ViewSidebar , PublicOutlined, AccountBalanceOutlined } from '@mui/icons-material';
 import { ColorModeContext } from '../ThemeContext';
 import { WalletContext } from '../AppContext';
 import { CustomNetworkConfig } from '../backend/NetworkTypes';
@@ -248,6 +248,17 @@ export default function Settings() {
                             <ListItemText
                                 primary={t('stellar.title')}
                                 secondary={t('stellar.settingsDesc')}
+                            />
+                            <ChevronRight sx={{ fontSize: 18, color: 'text.disabled' }} />
+                        </ListItemButton>
+
+                        {/* The lira side of the same Stellar account: deposit instructions
+                            from the anchor, and the trustline a deposit waits on. */}
+                        <ListItemButton onClick={() => navigate('/bank')}>
+                            <ListItemIcon><AccountBalanceOutlined /></ListItemIcon>
+                            <ListItemText
+                                primary={t('bank.title')}
+                                secondary={t('bank.settingsDesc')}
                             />
                             <ChevronRight sx={{ fontSize: 18, color: 'text.disabled' }} />
                         </ListItemButton>

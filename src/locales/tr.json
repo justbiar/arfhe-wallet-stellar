@@ -222,7 +222,10 @@
     "stellarUnknownWarning": "Bu zarftaki {{n}} işlem çözümlenemedi. Ekranda gördüğünüz, imzalayacağınızın tamamı değil.",
     "stellarElevatedWarning": "Bu, tek seferlik bir transfer değil: hesabınız üzerinde kalıcı yetki veriyor. İmzalamadan önce ne istendiğinden emin olun.",
     "stellarFeeBump": "Bu bir ücret artırma zarfı. Ücreti siz ödeyeceksiniz; imzalanacak olan aşağıdaki iç işlem.",
-    "stellarUndecodable": "İşlem çözümlenemedi, bu yüzden imzalanamaz: {{reason}}"
+    "stellarUndecodable": "İşlem çözümlenemedi, bu yüzden imzalanamaz: {{reason}}",
+    "stellarMessageTitle": "Bir Stellar mesajı imzala",
+    "stellarMessageLabel": "İMZALANACAK MESAJ",
+    "stellarMessageNote": "SEP-53 mesajı bir önekle özetleyerek imzalar; buradaki imza bir ödeme olarak kullanılamaz. Gizlilik katmanları anahtarlarını böyle bir imzadan türetir."
   },
   "auth": {
     "acceptNoRecoveryHelp": "Kurtarma ifademi (seed phrase) kaybetmem durumunda Arfhe Wallet'ın cüzdanımı geri kazanmama yardımcı olamayacağını kabul ediyorum.",
@@ -301,6 +304,52 @@
     "hidePrivateKey": "Özel anahtarı gizle",
     "mnemonicWordCount": "Gizli Kurtarma İfadesi bulunamadı. {{count}} kelime girdiniz; kurtarma ifadesi 12, 15, 18, 21 veya 24 kelimeden oluşur.",
     "createFailed": "Cüzdan oluşturulamadı. Lütfen tekrar deneyin."
+  },
+  "bank": {
+    "title": "Banka (TRY)",
+    "testnet": "TESTNET",
+    "noAccount": "Etkin hesap yok.",
+    "noPhrase": "Bu hesabın kurtarma ifadesi yok, bu yüzden bir Stellar adresi de yok. Kurtarma ifadesiyle oluşturulmuş bir hesaba geçin.",
+    "timedOut": "Anchor zamanında cevap vermedi.",
+    "stellarAccount": "PARANIN GELECEĞİ STELLAR HESABI",
+    "canReceive": "USDC alabilir mi",
+    "ready": "HAZIR",
+    "notReady": "HAZIR DEĞİL",
+    "trustlineWhy": "Hesap USDC güven hattı açmadan bu varlığı tutamaz; yatırdığınız para anchor'da bekler. Hattı açmak küçük bir XLM rezervi ayırır.",
+    "accountMissing": "Bu hesap henüz zincirde yok. Stellar'da bir hesap, birisi onu fonlayana kadar oluşmaz.",
+    "openTrustline": "USDC güven hattını aç",
+    "depositTitle": "TRY yatır",
+    "amountTry": "Tutar (TRY)",
+    "getInstructions": "Talimat al",
+    "iban": "ANCHOR'IN IBAN'I · PARAYI BURAYA GÖNDERİN",
+    "reference": "SİZE ÖZEL REFERANS · AÇIKLAMAYA YAZIN",
+    "sharedIbanNote": "Bu IBAN anchor'a ait ve tüm kullanıcılarda aynıdır; havaleyi size bağlayan tek şey referans kodudur. Açıklamaya yazmadan gönderirseniz eşleşmez.",
+    "simulate": "Havaleyi simüle et",
+    "simulateWhy": "Test ortamı: gerçek bir anchor havalenin geldiğini bankasından öğrenir. Burada banka yok, bu düğme onun yerine geçiyor.",
+    "history": "İŞLEMLER",
+    "historyEmpty": "Henüz işlem yok.",
+    "historyUnavailable": "İşlem geçmişi okunamadı.",
+    "fee": "Komisyon",
+    "footer": "Testnet sandbox'ı. Gerçek para, gerçek banka ve gerçek KYC yoktur.",
+    "settingsDesc": "Anchor üzerinden TRY yatırma talimatı ve işlem geçmişi",
+    "modeWeb3": "Web3",
+    "modeBank": "Banka",
+    "goToAccounts": "Hesaplara git",
+    "noPhraseHint": "Listeden kurtarma ifadesiyle oluşturulmuş bir hesaba geçin. İçe aktarılmış bir hesap etkinken “Hesap ekle” yine ifadesiz bir hesap üretir, bu ekran değişmez.",
+    "fund": "Testnet XLM ile hesabı oluştur",
+    "tryAccount": "TRY HESABI",
+    "balanceLabel": "ANCHOR'DAN GELEN BAKİYE",
+    "pendingLabel": "{{amount}} TRY yolda",
+    "identityUnavailable": "Yatırma talimatı alınamadı. Yenileyin.",
+    "backedBy": "{{usdc}} USDC karşılığı · 1 USDC = {{rate}} TRY",
+    "rateUnavailable": "{{usdc}} USDC · anchor kuru alınamadı",
+    "stalled": "Anchor {{minutes}} dakikadır bu işleme dokunmadı. Para anchor'da duruyor; hesabınızdan bir şey eksilmedi.",
+    "anchorDetails": "Anchor kaydını aç",
+    "withdrawTitle": "IBAN'a çek",
+    "withdraw": "Çekim yap",
+    "amountUsdc": "Tutar (USDC)",
+    "payoutNote": "Para yukarıdaki IBAN'a yatar. Bu numarayı anchor bu hesaba atadı ve her oturumda aynı kalıyor; kendi IBAN'ınızı veremezsiniz — sandbox verileni yok sayıyor, ölçüldü.",
+    "yourIban": "HESABINIZ · ANCHOR'IN SİZE ATADIĞI IBAN"
   },
   "buy": {
     "amount": "Miktar",
@@ -834,7 +883,10 @@
       "medium": "Orta",
       "low": "Düşük risk"
     },
-    "pairDapp": "dApp eşleştir"
+    "pairDapp": "dApp eşleştir",
+    "otherAccountSites": "Diğer hesaplara bağlı siteler ({{count}})",
+    "otherAccountSitesHint": "Bu siteler cüzdanınızdaki başka bir hesaba bağlı. O hesaba geçmeden imza isteyemezler; bağlantıyı buradan kesip siteye yeniden bağlanabilirsiniz.",
+    "connectedAs": "Bağlı hesap: {{accounts}}"
   },
   "security": {
     "autoLock": "Otomatik Kilitleme",
@@ -1109,6 +1161,11 @@
     "readOnly": "Şimdilik yalnızca görüntüleme. Cüzdan Stellar işlemlerini bir sitenin isteği üzerine, onay ekranında imzalar — buradan gönderim yapılmaz.",
     "settingsDesc": "Kurtarma ifadenizden türetilen Stellar adresi ve bakiyeleri",
     "noAccount": "Aktif hesap yok. Cüzdanın kilidi açık değilse önce açın.",
-    "timedOut": "Stellar bilgileri zamanında gelmedi. Ağ yanıt vermiyor ya da bir modül yüklenemedi."
+    "timedOut": "Stellar bilgileri zamanında gelmedi. Ağ yanıt vermiyor ya da bir modül yüklenemedi.",
+    "openBank": "Banka (TRY) ekranına git",
+    "networkName": "Stellar Testnet",
+    "menuHeading": "Diğer ağlar",
+    "totalNote": "Testnet XLM'in piyasa fiyatı yok, toplama katılmıyor.",
+    "copyAddress": "Adresi kopyala"
   }
 }

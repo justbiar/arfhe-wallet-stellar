@@ -18,6 +18,7 @@ import lazyWithRetry, { noteChunkLoadSucceeded } from "./lazyWithRetry";
 const Home = lazyWithRetry(() => import("./pages/Home"));
 const Portfolio = lazyWithRetry(() => import("./pages/Portfolio"));
 const Privacy = lazyWithRetry(() => import("./pages/Privacy"));
+const Bank = lazyWithRetry(() => import("./pages/Bank"));
 const Explore = lazyWithRetry(() => import("./pages/Explore"));
 const History = lazyWithRetry(() => import("./pages/History"));
 const Revoke = lazyWithRetry(() => import("./pages/Revoke"));
@@ -59,6 +60,7 @@ function AppRoutes() {
           <Route path="home" element={<FadePage><Home /></FadePage>} />
           <Route path="portfolio" element={<FadePage><Portfolio /></FadePage>} />
           <Route path="privacy" element={<FadePage><Privacy /></FadePage>} />
+          <Route path="bank" element={<FadePage><Bank /></FadePage>} />
           <Route path="explore" element={<FadePage><Explore /></FadePage>} />
           <Route path="history" element={<FadePage><History /></FadePage>} />
           <Route path="revoke" element={<FadePage><Revoke /></FadePage>} />

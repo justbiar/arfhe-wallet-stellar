@@ -445,6 +445,86 @@ dosyanın hash'i repoda commit'li manifest'e karşı doğrulandı** — sıfır 
 
 ---
 
+## 5.9 Relayer — gönderen gizliliği, ve bunun neye mal olduğu
+
+§5.8'de kalan açık: transferde tutar ve alıcı gizli ama **ücreti ödeyen** görünüyor.
+Sorulan fikir "ücreti ödeyen bir kontrat yazalım" idi. Ölçüldü; sonuç fikri doğruluyor ama
+önerilen ödeme yöntemini çürütüyor.
+
+### Yeni kontrat gerekmiyor
+
+`contracts/pool/src/pool.rs`:
+
+```rust
+pub fn transact(env, proof, ext_data, sender: Address) -> Result<(), Error> {
+    sender.require_auth();
+    if ext_data.ext_amount > 0 { token_client.transfer(&sender, &this, &amount); }
+    Self::internal_transact(env, proof, ext_data)   // sender'ı hiç almıyor
+}
+```
+
+`sender` yalnızca **depozitoda** kullanılıyor (token ondan çekiliyor). Transferde
+(`ext_amount == 0`) ve çekimde (ödeme `ext_data.recipient`'e gidiyor) sadece
+`require_auth()` çağrılıyor ve başka hiçbir yerde kullanılmıyor. Yani **`sender` herhangi
+biri olabilir.**
+
+Ölçüm — CLI'ın `--sign-as` bayrağıyla, alice'in notları, relayer'ın imzası:
+
+```
+tx cd98cbf7e77e7477203e6780874a08e809f98802ee29cef58bd3b0512c34e572
+source    : GACSHNVC…  (relayer)
+[4] sender: GACSHNVC…  (relayer)
+ext_amount: 0
+recipient : havuz kontratı
+```
+
+alice 6 → 4, bob 1 → 3. **Alice zincirde hiçbir yerde yok.** Ücret 177.541 stroop.
+
+### Relayer çalamaz, sadece susabilir
+
+`ExtDataDomain` = `{pool, token, recipient, ext_amount, encrypted_output0, encrypted_output1}`
+keccak'lanıp BN254 alanına indiriliyor ve **kanıtın açık girdisi**. `sender` bu hash'in
+**içinde değil**.
+
+Sonuç: relayer `sender`'ı kendisiyle değiştirebilir, ama alıcıyı, tutarı ya da çıktıları
+değiştiremez — değiştirirse kanıt tutmaz. Yani hazır bir yükü relayer'a vermek güvenli:
+**sansürleyebilir ya da geciktirebilir, çalamaz ve yönlendiremez.**
+
+### Önerilen ödeme yöntemi işe yaramaz
+
+"Kullanıcı ücreti bizim kontrata yatırsın" — bu, az önce sildiğimiz bağı geri koyar.
+Kullanıcının açık adresinden relayer kontratına, relaylenen işlemin hemen öncesinde giden
+bir ödeme, zaman korelasyonuyla ikisini birleştirir. Üstelik amaca özel bir ödeme olduğu
+için sıradan bir transferden **daha** tanımlayıcıdır.
+
+Doğru çözüm ücretin **havuzun içinden** ödenmesi: gölgeli işlemin içinde bir `fee` alanı,
+relayer'a giden pay. Tornado Cash tam olarak böyle yapıyordu. Ama:
+
+`ExtData { recipient, ext_amount, encrypted_output0, encrypted_output1 }` — **`fee` alanı
+yok.** Yani bugün protokol içinde relayer'a ödeme yolu bulunmuyor; eklenmesi devre +
+kontrat değişikliği demek, bu da bizim elimizde değil. **Nethermind'a sorulacak şey bu.**
+
+### Bugün yapılabilecek: ücreti biz ödeyelim
+
+Transfer başına 177.541 stroop ≈ **0,0178 XLM**. Bir cüzdanın gizlilik için üstleneceği
+maliyet olarak yok mertebesinde.
+
+Kötüye kullanım doğal olarak sınırlı: bize ücret ödetmek için havuzda **gerçek not** sahibi
+olmak gerekiyor ve her not bir kez harcanıyor (nullifier). Sınırsız spam için sınırsız
+mevduat gerekir.
+
+Kalan maliyetler, gizlemeden yazılsın:
+
+- Relayer IP ve zamanlama görür. Transferde tutarı ve alıcıyı **görmez** (hepsi taahhüt ya
+  da şifreli), ama çekimde `recipient` zaten açık.
+- Tek relayer = sansür noktası ve zamanlama gözlemcisi.
+- Tüm kullanıcılarımızın işlemleri tek ödeyen hesabın altında kümelenir. Bu anonimlik
+  kümesidir, kötü değil — ama "Arfhe kullanıcısı" olmayı görünür kılar.
+- **Depozito relaylenemez.** Token gönderenden çekildiği için `sender` gerçek olmak zorunda.
+  Giriş her hâlükârda açık (§5.2).
+
+---
+
 ## 6. Panel (demo sitesi)
 
 `panel/`, kökün bağımlılıklarını paylaşan ikinci bir Vite girişi (`vite.panel.config.js`).

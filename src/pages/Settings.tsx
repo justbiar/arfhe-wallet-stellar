@@ -12,7 +12,7 @@ const APP_VERSION: string = typeof __APP_VERSION__ === "string" ? __APP_VERSION_
 import { useContext, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Box, Typography, Container, Paper, List, ListItem, ListItemButton, ListItemText, ListItemIcon, Switch, Chip, IconButton, alpha, useTheme, Stack, Divider, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Button, CircularProgress } from '@mui/material';
-import { Notifications, DarkMode, Language, Security, Lock, Wifi, ChevronRight, Check, Close, Fingerprint, PrivacyTip, Gavel, Info, OpenInNew, ManageAccounts, ViewSidebar } from '@mui/icons-material';
+import { Notifications, DarkMode, Language, Security, Lock, Wifi, ChevronRight, Check, Close, Fingerprint, PrivacyTip, Gavel, Info, OpenInNew, ManageAccounts, ViewSidebar , PublicOutlined } from '@mui/icons-material';
 import { ColorModeContext } from '../ThemeContext';
 import { WalletContext } from '../AppContext';
 import { CustomNetworkConfig } from '../backend/NetworkTypes';
@@ -236,6 +236,18 @@ export default function Settings() {
                                 size="small"
                                 variant="outlined"
                                 sx={{ height: 20, fontSize: 11, fontWeight: 700, mr: 1 }}
+                            />
+                            <ChevronRight sx={{ fontSize: 18, color: 'text.disabled' }} />
+                        </ListItemButton>
+
+                        {/* Stellar sits beside the network list rather than inside it: it is
+                            not an EVM chain, and a switcher entry would promise a switch that
+                            most of the wallet cannot honour. */}
+                        <ListItemButton onClick={() => navigate('/settings/stellar')}>
+                            <ListItemIcon><PublicOutlined /></ListItemIcon>
+                            <ListItemText
+                                primary={t('stellar.title')}
+                                secondary={t('stellar.settingsDesc')}
                             />
                             <ChevronRight sx={{ fontSize: 18, color: 'text.disabled' }} />
                         </ListItemButton>

@@ -1095,5 +1095,18 @@
     "unsupportedNetworkCount_other": "+{{count}} desteklenmeyen ağ",
     "value": "Tutar",
     "yourWallet": "Cüzdanınız"
+  },
+  "stellar": {
+    "title": "Stellar hesabı",
+    "testnet": "TESTNET",
+    "intro": "Aynı kurtarma ifadesinden türetilmiş ayrı bir Stellar hesabı. Ağ listesinde görünmez, çünkü orası EVM zincirlerine ait — Stellar farklı bir eğri, farklı bir adres biçimi ve farklı bir defter.",
+    "address": "STELLAR ADRESİ",
+    "viewOnChain": "Zincirde gör",
+    "balances": "BAKİYELER",
+    "noBalances": "Bakiye yok.",
+    "notFunded": "Bu hesap henüz zincirde yok. Stellar'da bir hesap, birisi onu fonlayana kadar oluşmaz — testnet için friendbot kullanılabilir.",
+    "noMnemonic": "Bu hesabın kurtarma ifadesi yok. Özel anahtarla içe aktarılan hesaplardan Stellar anahtarı türetilemez; ilgisiz bir anahtar üretmek, yedeğinizin geri getiremeyeceği bir adres vermek olurdu.",
+    "readOnly": "Şimdilik yalnızca görüntüleme. Cüzdan Stellar işlemlerini bir sitenin isteği üzerine, onay ekranında imzalar — buradan gönderim yapılmaz.",
+    "settingsDesc": "Kurtarma ifadenizden türetilen Stellar adresi ve bakiyeleri"
   }
 }

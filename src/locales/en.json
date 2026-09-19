@@ -1095,5 +1095,18 @@
     "unsupportedNetworkCount_other": "+{{count}} unsupported networks",
     "value": "Value",
     "yourWallet": "Your Wallet"
+  },
+  "stellar": {
+    "title": "Stellar account",
+    "testnet": "TESTNET",
+    "intro": "A separate Stellar account derived from the same recovery phrase. It does not appear in the network list, because that list is EVM chains — Stellar is a different curve, a different address format and a different ledger.",
+    "address": "STELLAR ADDRESS",
+    "viewOnChain": "View on chain",
+    "balances": "BALANCES",
+    "noBalances": "No balances.",
+    "notFunded": "This account does not exist on the ledger yet. On Stellar an account is not created until something funds it — on testnet, friendbot can.",
+    "noMnemonic": "This account has no recovery phrase. A Stellar key cannot be derived from an account imported from a raw private key, and inventing an unrelated one would hand you an address your backup cannot restore.",
+    "readOnly": "Read-only for now. The wallet signs Stellar transactions when a site asks, on the approval screen — there is no send form here.",
+    "settingsDesc": "The Stellar address derived from your recovery phrase, and its balances"
   }
 }

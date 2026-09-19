@@ -25,6 +25,7 @@ const Agent = lazyWithRetry(() => import("./pages/Agent"));
 const Settings = lazyWithRetry(() => import("./pages/Settings"));
 const SettingsSecurity = lazyWithRetry(() => import("./pages/SettingsSecurity"));
 const SettingsNetworks = lazyWithRetry(() => import("./pages/SettingsNetworks"));
+const SettingsStellar = lazyWithRetry(() => import("./pages/SettingsStellar"));
 const SettingsAccounts = lazyWithRetry(() => import("./pages/SettingsAccounts"));
 const SettingsNotifications = lazyWithRetry(() => import("./pages/SettingsNotifications"));
 const TokenDetail = lazyWithRetry(() => import("./pages/TokenDetail"));
@@ -65,6 +66,7 @@ function AppRoutes() {
           <Route path="settings" element={<FadePage><Settings /></FadePage>} />
           <Route path="settings/security" element={<FadePage><SettingsSecurity /></FadePage>} />
           <Route path="settings/networks" element={<FadePage><SettingsNetworks /></FadePage>} />
+          <Route path="settings/stellar" element={<FadePage><SettingsStellar /></FadePage>} />
           <Route path="settings/accounts" element={<FadePage><SettingsAccounts /></FadePage>} />
           <Route path="settings/notifications" element={<FadePage><SettingsNotifications /></FadePage>} />
           <Route path="token/:address" element={<FadePage><TokenDetail /></FadePage>} />

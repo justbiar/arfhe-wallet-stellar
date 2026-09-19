@@ -30,10 +30,34 @@ const sppCircuitsDir = path.dirname(
   fileURLToPath(import.meta.resolve("stellar-private-payments/circuits/NOTICE.txt"))
 );
 
-/** Serves the circuits at a stable path the page can pass as `circuitsBaseUrl`. */
-function serveSppCircuits() {
+/**
+ * Serves the circuits at a stable path in dev, and copies them there on build.
+ *
+ * Also writes Cloudflare Pages' `_headers`. Cross-origin isolation is not optional for the
+ * privacy page — without it the prover worker has no SharedArrayBuffer — and a static host
+ * only sends those headers if the deployment tells it to. Generating the file here keeps it
+ * next to the dev-server headers it has to match, instead of in a checked-in file that
+ * silently drifts from them.
+ */
+function sppAssets() {
+  const HEADERS = [
+    "# Cross-origin isolation, for the privacy-pool page's prover worker.",
+    "#",
+    "# The panel is a hash router: every route is the same document, so these cannot be",
+    "# scoped to /privacy. `credentialless` rather than `require-corp` so the Stellar RPC,",
+    "# Horizon and the anchor still answer without sending CORP headers of their own.",
+    "/*",
+    "  Cross-Origin-Opener-Policy: same-origin",
+    "  Cross-Origin-Embedder-Policy: credentialless",
+    "",
+  ].join("\n");
+
+  let outDir = "";
   return {
-    name: "serve-spp-circuits",
+    name: "spp-assets",
+    configResolved(config) {
+      outDir = config.build.outDir;
+    },
     configureServer(server) {
       server.middlewares.use("/spp-circuits", (req, res, next) => {
         const name = path.basename(decodeURIComponent((req.url ?? "").split("?")[0]));
@@ -43,13 +67,22 @@ function serveSppCircuits() {
         fs.createReadStream(file).pipe(res);
       });
     },
+    closeBundle() {
+      if (!outDir) return;
+      const target = path.join(outDir, "spp-circuits");
+      fs.mkdirSync(target, { recursive: true });
+      for (const name of fs.readdirSync(sppCircuitsDir)) {
+        fs.copyFileSync(path.join(sppCircuitsDir, name), path.join(target, name));
+      }
+      fs.writeFileSync(path.join(outDir, "_headers"), HEADERS);
+    },
   };
 }
 
 export default defineConfig({
   root: path.resolve(__dirname, "panel"),
   publicDir: path.resolve(__dirname, "public"),
-  plugins: [react(), serveSppCircuits()],
+  plugins: [react(), sppAssets()],
   server: {
     port: 5174,
     /**

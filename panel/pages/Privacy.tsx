@@ -91,13 +91,27 @@ export default function Privacy() {
     }
   };
 
-  const start = () => run("SDK yükleniyor", async () => {
+  const start = React.useCallback(() => run("Gizlilik katmanı yükleniyor", async () => {
     note("WASM, depolama işçisi ve kanıtlayıcı yükleniyor…");
     const s = await openSpp();
     setSession(s);
     note(`hazır · izolasyon ${s.crossOriginIsolated ? "var" : "YOK"} · bootnode ${s.bootnodeNeeded ? "gerekli" : "gerekmiyor"}`);
     void s.client.backgroundSync();
-  });
+  }), []);
+
+  /**
+   * Loads itself.
+   *
+   * There was a button here that said "load the SDK", which is this page asking the
+   * visitor to fetch its own dependency — a detail of how we built it, dressed up as a
+   * choice. It loads on arrival now and says so while it does.
+   */
+  React.useEffect(() => {
+    if (session || busy) return;
+    void start();
+    // Once, on arrival. `start` is stable and the guard above covers re-entry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const connect = () => run("Hesap bağlanıyor", async () => {
     if (!session) return;
@@ -201,17 +215,22 @@ export default function Privacy() {
       <Section title="ORTAM">
         {!session ? (
           <Stack gap={1.5}>
-            <Typography variant="body2" color="text.secondary">
-              SDK 90 MB civarı wasm ve devre dosyası indiriyor; bu yüzden sayfa açılır
-              açılmaz değil, istendiğinde yükleniyor.
-            </Typography>
-            <Button
-              variant="contained" onClick={start} disabled={busy !== null}
-              startIcon={busy ? <CircularProgress size={14} color="inherit" /> : null}
-              sx={{ borderRadius: 0, py: 1.2, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" }, alignSelf: "flex-start" }}
-            >
-              {busy ?? "SDK'yı yükle"}
-            </Button>
+            <Stack direction="row" alignItems="center" gap={1.2}>
+              {busy && <CircularProgress size={15} />}
+              <Typography variant="body2" color="text.secondary">
+                {busy
+                  ? "Gizlilik katmanı yükleniyor — wasm, devreler ve kanıtlayıcı işçi."
+                  : "Yüklenemedi."}
+              </Typography>
+            </Stack>
+            {!busy && (
+              <Button
+                variant="contained" onClick={start}
+                sx={{ borderRadius: 0, py: 1.2, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" }, alignSelf: "flex-start" }}
+              >
+                Yeniden dene
+              </Button>
+            )}
           </Stack>
         ) : (
           <>
@@ -254,13 +273,19 @@ export default function Privacy() {
       {session && (
         <Section title="HESAP">
           {!account ? (
-            <Button
-              variant="contained" onClick={connect} disabled={busy !== null}
-              startIcon={busy ? <CircularProgress size={14} color="inherit" /> : null}
-              sx={{ borderRadius: 0, py: 1.2, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" } }}
-            >
-              {busy ?? "Demo hesabı bağla"}
-            </Button>
+            <Stack gap={1.5}>
+              <Typography variant="body2" color="text.secondary">
+                Bu sekme için tek kullanımlık bir testnet hesabı üretilir ve gizlilik
+                anahtarları ondan türetilir. Kurtarma ifadesi istenmez.
+              </Typography>
+              <Button
+                variant="contained" onClick={connect} disabled={busy !== null}
+                startIcon={busy ? <CircularProgress size={14} color="inherit" /> : null}
+                sx={{ borderRadius: 0, py: 1.2, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" }, alignSelf: "flex-start" }}
+              >
+                {busy ?? "Hesabı bağla"}
+              </Button>
+            </Stack>
           ) : (
             <>
               <Fact label="Adres" value={shortAddress(account.userAddress, 10, 6)} />

@@ -640,6 +640,48 @@ başlıkları eklendi.
 
 ---
 
+## 5.12 Panel: kendiliğinden yükleme, canlı anchor, ve yayına alma durumu
+
+### "SDK'yı yükle" düğmesi kaldırıldı
+
+Sayfa kendi bağımlılığını yüklemeyi ziyaretçiye sormuyor artık; açılışta kendi yükleniyor
+ve yüklerken bunu söylüyor. Düğme, bir uygulama detayının seçenek kılığına girmiş haliydi.
+
+### Anchor sayfası artık canlı
+
+`panel/lib/anchorLive.ts` + `Anchor.tsx`. Sayfa açılırken anchor'ın kendi uçlarından
+okunuyor: `/health`, `stellar.toml` (ihraççı), `/sep38/prices` (iki yön ayrı), `/sep6/info`.
+Yanına iki yönün beşer adımlık akışı — orijinal sitedeki gibi.
+
+Cevap vermeyen uç **"—"** olarak gösteriliyor, makul bir sayıyla doldurulmuyor.
+
+**Yakalanan hata:** SEP-38 fiyatı *satılan varlık / alınan varlık* cinsinden veriyor. Alış
+yönü doğrudan TRY/USDC okunuyor ama satış yönü USDC/TRY dönüyor — ekrana ilk hâlinde
+"1 USDC = 0,0206 TRY" yazdı. Ters çevrildi; şimdi 49,0290 alış / 48,5400 satış, anchor'ın
+ilan ettiği değerlerle birebir.
+
+### Yayına alma (Cloudflare Pages) — kısmen hazır
+
+| | Durum |
+|---|---|
+| Statik build | ✔ `dist-panel/`, 91 MB |
+| Devre dosyaları | ✔ build sırasında `dist-panel/spp-circuits/`'e kopyalanıyor |
+| `_headers` (COOP/COEP) | ✔ build sırasında üretiliyor — hash router olduğu için site geneline uygulanır |
+| Dosya boyutu | ✔ en büyük devre 9,9 MB, Pages'in 25 MiB sınırının altında |
+| **Worker dosyaları** | **✘ build'e girmiyor** |
+| Relayer | ✘ `node:http` sunucusu; Workers'a taşınması ayrı iş |
+
+**Eksik olan:** SDK, depolama ve kanıtlayıcı işçilerini `new URL('../dist/workers/...',
+import.meta.url)` ile buluyor. Vite wasm'ı varlık olarak çıkardı ama worker'ları izlemedi;
+`dist-panel` içinde worker dosyası yok. Doğrusu paketin `dist/` ve `js/` klasörlerini
+olduğu gibi çıktıya kopyalayıp SDK'yı **paketleyiciden geçirmeden**, sabit bir yoldan
+çalışma anında import etmek — bb.js için yapılanın aynısı. Dev sunucusunda sorun yok,
+çünkü orada dosyalar zaten yerinde duruyor.
+
+Yani panel bugün **dev'de tam, prod'da eksik**.
+
+---
+
 ## 6. Panel (demo sitesi)
 
 `panel/`, kökün bağımlılıklarını paylaşan ikinci bir Vite girişi (`vite.panel.config.js`).

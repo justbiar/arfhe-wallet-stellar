@@ -13,6 +13,7 @@ import ContentCopyIcon from "@mui/icons-material/ContentCopyOutlined";
 import CheckIcon from "@mui/icons-material/Check";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import PaneFrame from "./PaneFrame";
+import TxReceipt from "./TxReceipt";
 import { ANCHOR_ASSET_CODE } from "../lib/anchor";
 import { shortAddress } from "../lib/stellar";
 import type { Ramp } from "../lib/useRamp";
@@ -120,6 +121,8 @@ export default function WalletPane({ direction, ramp }: { direction: Direction; 
         {ramp.error && (
           <Alert severity="error" sx={{ borderRadius: 0 }}>{ramp.error}</Alert>
         )}
+
+        {ramp.status && <TxReceipt status={ramp.status} />}
 
         <Box sx={{ border: "1px dashed", borderColor: "divider", p: 2 }}>
           <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>

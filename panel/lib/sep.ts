@@ -77,10 +77,11 @@ export async function authenticate(cfg: AnchorConfig, kp: Keypair): Promise<stri
 
 export interface DepositOrder {
   id: string;
-  /** Human-readable bank instructions: the IBAN and the reference to put in the description. */
+  /** Human-readable bank instructions, for display where the structured fields are absent. */
   how: string;
-  /** Pulled out of `how` so the UI can show it as the field it is. */
   iban: string | null;
+  bankName: string | null;
+  /** The reference the transfer description must carry; without it the money is unroutable. */
   reference: string | null;
 }
 
@@ -103,12 +104,19 @@ export async function startDeposit(
   const body = await res.json();
   if (!res.ok || !body.id) throw new Error(body.error ?? `Yükleme açılamadı (HTTP ${res.status}).`);
 
+  // SEP-6's `instructions` carries these as named fields. Reading them beats scraping the
+  // prose in `how`: a reworded sentence or a different IBAN format would silently break a
+  // regex, and the failure would look like the anchor returning nothing.
   const how: string = body.how ?? "";
+  const ins = body.instructions ?? {};
+  const field = (k: string): string | null => ins[k]?.value ?? null;
+
   return {
     id: body.id,
     how,
-    iban: how.match(/\b(TR\d{24})\b/)?.[1] ?? null,
-    reference: how.match(/"([A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4})"/)?.[1] ?? null,
+    iban: field("bank_account_number") ?? how.match(/\b(TR\d{24})\b/)?.[1] ?? null,
+    bankName: field("bank_name"),
+    reference: field("external_transfer_memo") ?? how.match(/"([A-Z0-9-]{8,})"/)?.[1] ?? null,
   };
 }
 
@@ -134,6 +142,12 @@ export interface TxStatus {
   status: string;
   amountIn: string | null;
   amountOut: string | null;
+  /** The on-chain payment hash, once the anchor has settled. Checkable on any explorer. */
+  stellarTxId: string | null;
+  /** The anchor's own reference for the fiat leg. */
+  externalTxId: string | null;
+  /** Set when the payment could not be delivered and is waiting to be claimed. */
+  claimableBalanceId: string | null;
 }
 
 export async function readTransaction(cfg: AnchorConfig, jwt: string, id: string): Promise<TxStatus> {
@@ -142,7 +156,14 @@ export async function readTransaction(cfg: AnchorConfig, jwt: string, id: string
   });
   const body = await res.json();
   const t = body.transaction ?? {};
-  return { status: t.status ?? "unknown", amountIn: t.amount_in ?? null, amountOut: t.amount_out ?? null };
+  return {
+    status: t.status ?? "unknown",
+    amountIn: t.amount_in ?? null,
+    amountOut: t.amount_out ?? null,
+    stellarTxId: t.stellar_transaction_id ?? null,
+    externalTxId: t.external_transaction_id ?? null,
+    claimableBalanceId: t.claimable_balance_id ?? null,
+  };
 }
 
 /** Terminal states — anything else means the anchor is still working. */
@@ -162,7 +183,7 @@ export async function waitForSettlement(
   onTick?: (s: TxStatus) => void,
   { intervalMs = 2500, maxTicks = 24 }: { intervalMs?: number; maxTicks?: number } = {}
 ): Promise<TxStatus> {
-  let last: TxStatus = { status: "unknown", amountIn: null, amountOut: null };
+  let last: TxStatus = { status: "unknown", amountIn: null, amountOut: null, stellarTxId: null, externalTxId: null, claimableBalanceId: null };
   for (let i = 0; i < maxTicks; i++) {
     await new Promise((r) => setTimeout(r, intervalMs));
     last = await readTransaction(cfg, jwt, id);

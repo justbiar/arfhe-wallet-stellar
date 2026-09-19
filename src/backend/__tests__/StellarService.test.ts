@@ -61,6 +61,12 @@ describe('StellarService', () => {
     ).rejects.toThrow(/kurtarma ifadesi yok/i);
   });
 
+  it('mainnet passphrase ile imzalamaz — imza üreten yer de ayrıca kontrol eder', async () => {
+    await expect(
+      signTransactionXdr(hdAccount(), 'irrelevant', 'Public Global Stellar Network ; September 2015')
+    ).rejects.toThrow(/desteklenmiyor/i);
+  });
+
   it('bozuk XDR imzalanmaz', async () => {
     await expect(
       signTransactionXdr(hdAccount(), 'not-valid-xdr', STELLAR_TESTNET_PASSPHRASE)

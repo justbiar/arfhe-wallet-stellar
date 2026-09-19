@@ -120,6 +120,16 @@ export async function signTransactionXdr(
   networkPassphrase: string,
   index = 0
 ): Promise<string> {
+  // Checked here as well as in the decoder, because this is the function that actually
+  // produces a signature. `TransactionBuilder.fromXDR` accepts any passphrase and records
+  // it without complaint, so nothing below would fail on a mainnet envelope — the only
+  // thing standing between a testnet signature and a mainnet one is this comparison.
+  if (networkPassphrase !== STELLAR_TESTNET_PASSPHRASE) {
+    throw new Error(
+      `Bu ağ desteklenmiyor: "${networkPassphrase}". Cüzdan yalnızca Stellar testnet üzerinde imzalar.`
+    );
+  }
+
   const kp = await getKeypair(account, index);
   if (!kp) {
     throw new Error("Bu hesabın kurtarma ifadesi yok, Stellar işlemi imzalanamaz.");

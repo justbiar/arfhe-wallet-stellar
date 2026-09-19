@@ -113,7 +113,25 @@ export default defineConfig({
            * and the published one answer to the same id — one dist/ serves both.
            */
           src: 'extension/manifest.json',
-          dest: '.'
+          dest: '.',
+          /**
+           * `key` is stripped for a Web Store build, and kept for every other one.
+           *
+           * The store rejects a package containing `key` outright — it assigns the extension
+           * its identity, and a manifest claiming one is a conflict. Locally the opposite is
+           * true: without `key` an unpacked extension gets a fresh random id per profile, and
+           * this wallet's id is not cosmetic. It is registered in the WalletConnect project's
+           * allowed-origins list (chrome-extension://<id>), so an id that changes on every
+           * load means the relay refuses the connection with "origin not allowed".
+           *
+           * Hence: `npm run build:store` for an upload, the normal build for development.
+           */
+          transform: (contents) => {
+            if (process.env.STORE_BUILD !== 'true') return contents;
+            const manifest = JSON.parse(contents);
+            delete manifest.key;
+            return JSON.stringify(manifest, null, 4) + '\n';
+          },
         },
         {
           src: 'service-worker.js',

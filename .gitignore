@@ -52,3 +52,4 @@ deploy/cache/
 # raw screenshot composites are rebuilt from dist/ and from screenshots, so they are not.
 *.zip
 store-screenshots/
+dist-panel/

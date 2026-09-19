@@ -1,0 +1,28 @@
+/*
+ * Panel base styles.
+ *
+ * Imports the typeface only. The extension's index.css is not used here: it pins #root to
+ * 400px and paints everything outside it black, which is right for a browser-action popup
+ * and wrong for a page someone opens in a tab.
+ */
+
+@import "@wallet/fonts.css";
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100%;
+}
+
+/* MUI's CssBaseline owns colour; this only guarantees the page fills the viewport. */
+#root {
+  min-height: 100dvh;
+}
+
+*:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}

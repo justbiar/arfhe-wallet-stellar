@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:panel": "vite --config vite.panel.config.js",
     "build": "vite build",
     "build:chrome": "cross-env TARGET=chrome vite build",
     "build:store": "cross-env TARGET=chrome STORE_BUILD=true vite build",
     "build:firefox": "cross-env TARGET=firefox vite build",
+    "build:panel": "vite build --config vite.panel.config.js",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest",

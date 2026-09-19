@@ -13,6 +13,7 @@ import { CHROME_STORE_URL } from "../lib/product";
 const NAV = [
   { to: "/", label: "Ana Sayfa" },
   { to: "/bridge", label: "Köprü" },
+  { to: "/anchor", label: "Confidential Anchor" },
   { to: "/about", label: "Arfhe Wallet" },
 ];
 

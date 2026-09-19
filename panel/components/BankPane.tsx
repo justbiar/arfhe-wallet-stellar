@@ -34,7 +34,7 @@ export default function BankPane({ direction }: { direction: Direction }) {
 
   return (
     <PaneFrame
-      label="BANKA"
+      label="BANKA · CONFIDENTIAL ANCHOR"
       accent={BANK_ACCENT}
       title={
         <Stack direction="row" alignItems="center" gap={0.8}>

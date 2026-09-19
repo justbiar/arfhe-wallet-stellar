@@ -12,6 +12,7 @@ import React from "react";
 import { Box, Stack, Typography, Chip, Divider, ToggleButton, ToggleButtonGroup, useTheme, alpha } from "@mui/material";
 import SwapHorizIcon from "@mui/icons-material/SwapHoriz";
 import { ANCHOR_HOME_DOMAIN, FIAT_CODE, ANCHOR_ASSET_CODE } from "../lib/anchor";
+import { useRamp } from "../lib/useRamp";
 import BankPane from "../components/BankPane";
 import WalletPane from "../components/WalletPane";
 
@@ -20,6 +21,7 @@ export type Direction = "deposit" | "withdraw";
 export default function Bridge() {
   const theme = useTheme();
   const [direction, setDirection] = React.useState<Direction>("deposit");
+  const ramp = useRamp();
 
   return (
     <Box sx={{ maxWidth: 1180, mx: "auto", px: { xs: 2, md: 3 }, py: { xs: 3, md: 5 } }}>
@@ -78,7 +80,7 @@ export default function Bridge() {
           alignItems: "stretch",
         }}
       >
-        <WalletPane direction={direction} />
+        <WalletPane direction={direction} ramp={ramp} />
 
         {/* Ortadaki yön göstergesi — mobilde araya girmez, sadece geniş ekranda sütun olur. */}
         <Stack
@@ -113,7 +115,7 @@ export default function Bridge() {
           <Divider orientation="vertical" sx={{ flex: 1 }} />
         </Stack>
 
-        <BankPane direction={direction} />
+        <BankPane direction={direction} ramp={ramp} />
       </Box>
 
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 3, textTransform: "none" }}>

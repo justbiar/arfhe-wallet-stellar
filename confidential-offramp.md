@@ -1,6 +1,94 @@
-# Gizli çıkış rampası — Stellar hackathon tasarımı
+# Gizli kurumsal ödeme — Stellar hackathon tasarımı
 
-> 19 Eylül 2026. Tasarım önerisi, karar değil.
+> 19 Eylül 2026.
+> **KARAR VERİLDİ:** hedef bireysel takip edilemezlik değil, **kurumsal ödeme gizliliği**.
+> Katman: **Confidential Token**. Mixer yok.
+
+## 0. Ürün cümlesi
+
+> **Maaş bordrosu zincirde yazmaz.**
+
+Senaryo: bir şirket TRY yatırır, çalışanlarına ve tedarikçilerine gizli öder, onlar
+istediklerinde TRY olarak çeker.
+
+### Neden bu doğru seçim
+
+CT adresleri gizlemiyor, tutarları gizliyor. Bu bir eksiklik değil, **bu senaryonun tam
+ihtiyacı**: kimin çalışan olduğu zaten bilinir ve denetim izi için bilinmesi gerekir;
+hassas olan **ne kadar aldığı**.
+
+Aynı şey tedarikçide (taraflar sözleşmeyle belli, **fiyat** ticari sır) ve kurumsal
+takasta (karşı taraf kayıtlı, **pozisyon büyüklüğü** gizli) geçerli.
+
+### Ne gizli, ne değil — dürüst hâli
+
+| | |
+|---|---|
+| **Gizli** | Her çalışanın maaşı |
+| **Gizli** | Şirketin toplam bordrosu |
+| **Gizli** | Herkesin bakiyesi |
+| Açık | Şirketin bu adreslere ödeme yaptığı (tutarsız) |
+| Açık | Şirketin ilk TRY → USDC yatırımı |
+| Açık | Her çekimin tutarı, anchor'a ödendiği anda |
+
+Son satır önemli: çalışan maaşının **tamamını hemen bozdurursa** o tutar zincirde görünür.
+Bordro gizli kalır, o kişinin o günkü çekimi görünür. Bunu kullanıcıya söylemek gerekir.
+
+## 0.1 ÇALIŞTI — bordro senaryosu testnette
+
+Kendi gizli USDC token'ımız dağıtıldı ve üç kişilik bir bordro ödendi.
+
+### Dağıtılan kontratlar (Stellar testnet)
+
+```
+token       CCR235ZHRQ6PVGLAJ4AUZLDWJLVRILSDAUP7EKW563SWZNAQY6C3EL4C
+verifier    CACOFUE7ROIR23VNSISE672CNUU4LMKUQ4LQDK3RPAGOLLF6J7SD7V65
+auditor     CAV7XOZQIJBQ4GJFLMHWGHAVOVN5UROJL7WLJK4ADK3O5FPVLAFPSKZA
+underlying  CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA  ← anchor'ın USDC'si
+deployedAt  ledger 4761744
+```
+
+`addr_f` parite kontrolü geçti — SDK'nın Poseidon2'si ile kontratınki aynı, yani kanıtlar
+doğrulanıyor.
+
+Demo XLM sarmalıyordu; **anchor'ın gerçek Circle USDC'sini sarmalamak** için deploy
+betiğine `UNDERLYING` seçeneği eklendi. Rampa çıktısı ile gizli katmanın varlığı artık aynı
+şey.
+
+### Akış, ölçülmüş hâliyle
+
+| Adım | Sonuç |
+|---|---|
+| Şirket 3000 TRY yatırır | **61.1882725 USDC** — zincirde açık |
+| Gizli katmana alır (`deposit` + `merge`) | Açık — 61.19 USDC gizlendi |
+| Ayşe'ye öder | `0d3d4543b21f65c23c6fb6557d83fbe79f2df84d24c768771d83933ae2ad404c` |
+| Mehmet'e öder | `5c4de47bdf64b2f67eb358aa3a5536b6f84f4c6af6a7245921f985e052508f28` |
+| Zeynep'e öder | `0ddf781645abe3cd089d1713dfbcc2594b88e161d5fc31ea2a4624ceaa5c5dbb` |
+
+Maaşlar 18 / 25 / 9,5 USDC. **Her çalışan kendi tutarını yalnızca zincirden çözdü** ve
+beklenen değerle eşleşti. Şirkette kalan 8,6882725 USDC — o da gizli.
+
+### Zincir ne görüyor
+
+Bir bordro ödemesinin açık parametreleri:
+
+```
+[0] Address  gizli token kontratı
+[1] Sym      confidential_transfer
+[2] Address  ŞİRKET          ← açık
+[3] Address  MEHMET          ← açık
+[4] Bytes    15.308 bayt     ← kanıt + ciphertext
+```
+
+31.788 baytlık zarfın tamamında **180000000, 250000000, 95000000, 611882725 ve 86882725
+sayılarının hiçbiri geçmiyor.** Üç işlemde de aynı sonuç.
+
+Yani: **kimin kime ödediği açık, ne kadar ödediği yok.** Ürün cümlesi tam olarak bu, ve
+artık bir iddia değil bir ölçüm.
+
+---
+
+> Aşağısı, karardan önceki alternatif değerlendirmesi. Gerekçeler için duruyor.
 
 ## 1. Kısıtlar (değiştirilemez)
 

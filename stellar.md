@@ -682,6 +682,57 @@ Yani panel bugün **dev'de tam, prod'da eksik**.
 
 ---
 
+## 5.13 Stellar'da FHE var mı? — arandı, yok
+
+Soru: Zama işin içine girdiğine göre Stellar'da FHE tabanlı bir şey var mı? Tüm
+dokümantasyon ve protokol önerileri tarandı. **Yok.** Bir daha aranmasın diye kanıtlar:
+
+| Arama | Sonuç |
+|---|---|
+| `homomorphic` — `stellar/stellar-protocol` (tüm CAP'ler) | **0 sonuç** |
+| `FHE` — `stellar/stellar-docs` | Yalnızca yanlış eşleşme (`fhead` CSS sınıfı, base64 blob'lar) |
+| `Zama` — `stellar/stellar-docs` | **Tek sonuç**: privacy sayfasında dernek üyesi olarak anılıyor |
+| `homomorphic` — `stellar/stellar-docs` | 6 Ağustos 2026 geliştirici toplantı notu — **ama FHE değil** |
+
+### Kelime çakışması
+
+Toplantı notundaki cümle: *"incoming amounts accumulate **homomorphically** into your
+receivable balance"*. Bu, **Pedersen taahhütlerinin toplamsal homomorfizmi** — iki taahhüt
+toplanabiliyor, o kadar. FHE değil. Aynı kelime, bambaşka şey. Arama yaparken buna
+takılmamak lazım.
+
+### SDF kendi ağzıyla
+
+6 Ağustos 2026 toplantısında adı geçen şemalar: **Poseidon, BN254, BLS12-381** host
+fonksiyonları, kanıt tarafında **Noir**, zincirde **UltraHonk** doğrulayıcı. Baştan sona ZK.
+FHE ve Zama hiç geçmiyor.
+
+Protokolün yeni host fonksiyonları da (Protokol 22 / 25 / 26, CAP-0059, CAP-0080) tamamen
+ZK ilkelleri: eğri işlemleri, eşleştirme, skaler alan aritmetiği, Poseidon. FHE'ye benzeyen
+hiçbir şey yok — FHE'nin ihtiyaç duyduğu şey bunlar değil zaten.
+
+### Zama'nın kendi yol haritası
+
+EVM zincirleri 2026 H1, **Solana 2026 H2**. Stellar listede yok. Zama'nın Stellar'la tek
+bağı Confidential Token Association üyeliği — yani standardı yazan masada oturmak, o
+standardın Stellar uygulamasını yazmak değil. Stellar'daki uygulama OpenZeppelin +
+Nethermind, ve taahhüt+ZK.
+
+### Yan fayda: 7 gün sorunu SDF tarafından da doğrulandı
+
+Aynı toplantı notu, bizim §5.4'te yazdığımızı neredeyse aynı cümlelerle söylüyor: yerel
+durum kaybolur ve event'ler pencereden düşerse, *"paranın var olduğunu görürsün ama onu
+harcayacak açılımı yeniden kuramazsın"*, ve tohumdan kurtarma **dayanıklı bir event arşivi**
+gerektiriyor. Yani indexer/bootnode bir tercih değil, protokolün sahibi de öyle diyor.
+
+### Sonuç
+
+Arfhe'nin FHE'si EVM tarafında (Fhenix CoFHE) ve orada kalıyor. Stellar'a gizlilik eklemek,
+**farklı bir teknolojiyi** aynı çatı altına almak demek — farklı kurtarma garantisiyle
+birlikte. Bu bir engel değil ama sessizce yapılacak bir şey de değil.
+
+---
+
 ## 6. Panel (demo sitesi)
 
 `panel/`, kökün bağımlılıklarını paylaşan ikinci bir Vite girişi (`vite.panel.config.js`).

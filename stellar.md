@@ -827,11 +827,38 @@ TRY → [SEP-6 anchor] → USDC (Stellar) → [CCTP burn/mint] → USDC (Base Se
 Üçü de standart, hiçbiri bizim yazdığımız bir köprü değil. CCTP emanetçi tutmuyor, havuz
 işletmiyor, sarmalanmış token üretmiyor — yakıyor ve basıyor.
 
-### Neyin doğrulanmadığı
+### Gerçek transfer denendi — yakma ve attestation tamam
 
-**Kontratların varlığı ve yapılandırması doğrulandı; tamamlanmış bir transfer değil.**
-Gerçek bir `deposit_for_burn` → Iris attestation → EVM'de `receiveMessage` turu henüz
-yapılmadı. Sıradaki test bu.
+Stellar tarafı uçtan uca çalıştırıldı:
+
+| Adım | Sonuç |
+|---|---|
+| Anchor'dan USDC | 100 TRY → 2,0396090 USDC (`GAZ2BOPK…`) |
+| `approve` | `e760f0634372e32fca8272cdf9981d381963d62c8857d35400f8b0d22c036100` |
+| **`deposit_for_burn` 1 USDC → domain 6** | `3ded9d5f7e37a432b3d029979a3f5a7ea5b74bf3920552e5b18232282187ee47` |
+| Bakiye | 2,0396090 → **1,0396090** (gerçekten yakıldı) |
+| Circle attestation | **`status: complete`**, imza alındı |
+
+Attestation kaydı: `sourceDomain 27 → destinationDomain 6`, `mintRecipient
+0x11fc342e…b279`, `amount 1000000`, `cctpVersion 2`.
+
+**Kalan tek adım:** Base Sepolia'da `receiveMessage(message, attestation)`. Yapılmadı,
+çünkü hedef hesapta gaz yok (0 wei). Mesaj hazır ve süresiz bekliyor; `scripts/cctp-mint.mjs`
+gazı olan herhangi bir anahtarla çalıştırılabilir — alıcı mesajın içinde sabit olduğu için
+kimin gönderdiğinin önemi yok.
+
+### Yolda öğrenilen iki şey
+
+**`deposit_for_burn` allowance istiyor.** Kontrat `transfer_from` kullanıyor, yani önce
+USDC SAC'ında `approve` gerekiyor. Atlanırsa hata `#9`, olay günlüğünde
+`"not enough allowance to spend"` yazıyor.
+
+**Ondalık dönüşümü kontratta yapılıyor.** Stellar tarafında 7 hane (`10000000`), yayılan
+olayda 6 hane (`amount: 1000000`). Aynı 1 USDC. İstemcinin çevirmesine gerek yok, ama
+7 haneli tutarın 10'a bölünebilmesi gerekiyor — aksi halde kayıp olurdu.
+
+**Iris API hash'i `0x` öneki olmadan istiyor.** Önekli sorgu "message not found" diyor,
+yani hata mesajı yanıltıcı.
 
 ### Gizlilik muhasebesi
 

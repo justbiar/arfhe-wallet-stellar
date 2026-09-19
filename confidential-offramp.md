@@ -92,6 +92,67 @@ değil; üründe indexer şart (SDF de aynı şeyi söylüyor, `stellar.md` §5.
 
 **`@ctd/sdk` npm'de yok.** Kaynaktan derlenir; e2e akışı zaten çalıştırıldı.
 
+## 5.5 FAZ 0 SONUCU — ölçüm önerimi çürüttü
+
+İki şey ölçüldü, ikisi de tasarımı değiştiriyor.
+
+### Relayer deseni CT'de çalışmıyor
+
+Simülasyon, `merge(account)` çağrısı için **hesabın kendi yetkisini** istiyor:
+
+```
+YETKİ GEREKİYOR → GCCKKXKX…  (notların sahibi)
+                  kaynak hesap değil
+```
+
+Denendi: çekimi relayer imzalayıp gönderdi, zincirde **trap** ile düştü
+(`d091a2a1…`, INVOKE_HOST_FUNCTION_TRAPPED). SPP'de `transact`'in `sender`'ı serbestti;
+CT'de değil.
+
+Relayer ücreti ödeyebilir, ama yetki girişi sahibin adresini **işlemin içinde açıkça
+taşır**. Yani gizleme sağlamıyor.
+
+### Ve asıl sorun: CT bağlantıyı kıramıyor
+
+Tasarımın 4. adımı "gizli katmandan taze bir hesaba çek" idi. CT'de bu iş görmüyor:
+
+| İşlem | Zincirde görünen |
+|---|---|
+| `withdraw(alice → F, N)` | alice, F, **ve N** |
+| `confidential_transfer(alice → F)` | alice, F (tutar gizli) |
+
+CT **adresleri hiçbir zaman gizlemiyor**. Hangi yoldan gidersen git, `alice → F` bağlantısı
+zincirde duruyor. Sonra F anchor'a ödeyince zincir tamamlanıyor: alice → F → anchor.
+
+**Yani CT ile "ödemeyi bana bağlayamasınlar" hedefi tutturulamıyor.** CT'nin verdiği şey
+bakiyenin ve transfer tutarlarının gizliliği — kimlik bağlantısızlığı değil.
+
+### Bu ne anlama geliyor
+
+§4'teki önerim yanlıştı. Hedef "zincir ödemeyi bana bağlayamasın" ise **tek seçenek SPP**,
+çünkü adresleri gizleyen tek katman o:
+
+```
+alice → havuza yatırır            [açık: alice N yatırdı]
+alice → F havuz İÇİNDE gönderir   [görünmez: adres yok, tutar yok]
+F      → havuzdan çeker           [açık: F N çekti]
+F      → anchor'a öder            [açık]
+```
+
+Gözlemci "alice yatırdı, biri çekti" görür. Bağlantı, **anonimlik kümesi kadar** kopar.
+
+Ve bedelleri duruyor: mixer şekli, "local" Groth16 kurulumu, küçük kullanıcı sayısında
+zamanlama korelasyonu.
+
+### Dürüst seçim
+
+| Hedef | Katman |
+|---|---|
+| "Bakiyem ve ödeme tutarlarım görünmesin" | **CT** — çalışır, mixer değil, temiz |
+| "Ödemeyi bana bağlayamasınlar" | **SPP** — tek seçenek, ama mixer ve anonimlik kümesine bağlı |
+
+Hackathon için ikisinden birini seçmek gerekiyor, ve bu **ürün kararı**, teknik değil.
+
 ## 6. Yol haritası
 
 ### Faz 0 — Tek ölçüm, her şeyi belirler *(yarım gün)*

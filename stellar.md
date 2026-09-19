@@ -842,10 +842,31 @@ Stellar tarafı uçtan uca çalıştırıldı:
 Attestation kaydı: `sourceDomain 27 → destinationDomain 6`, `mintRecipient
 0x11fc342e…b279`, `amount 1000000`, `cctpVersion 2`.
 
-**Kalan tek adım:** Base Sepolia'da `receiveMessage(message, attestation)`. Yapılmadı,
-çünkü hedef hesapta gaz yok (0 wei). Mesaj hazır ve süresiz bekliyor; `scripts/cctp-mint.mjs`
-gazı olan herhangi bir anahtarla çalıştırılabilir — alıcı mesajın içinde sabit olduğu için
-kimin gönderdiğinin önemi yok.
+### Mint de yapıldı — zincir uçtan uca kapandı
+
+| Adım | Sonuç |
+|---|---|
+| `receiveMessage` (Base Sepolia) | `0xed96213306bb9d8bfad48f66e9a97e13405cdef72b39d0d03c165b68b6eaafdf`, blok 47030338 |
+| Base Sepolia bakiyesi | **1.0 USDC** |
+| Token | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+
+Ve o adres tesadüf değil: **cüzdanın `SwapService` Base Sepolia listesindeki USDC'nin
+aynısı** (`src/backend/SwapService.ts:167`). Yani gelen varlık, Arfhe'nin zaten tanıdığı
+token.
+
+Tam zincir, ölçülmüş hâliyle:
+
+```
+100 TRY
+  → 2.0396090 USDC (Stellar)   anchor, SEP-6
+  → burn 1 USDC                3ded9d5f…  (Stellar, domain 27)
+  → Circle attestation         status: complete
+  → mint 1 USDC                0xed962133…  (Base Sepolia, domain 6)
+  = 1.0 USDC, cüzdanın tanıdığı token
+```
+
+Kalan tek adım **CoFHE shield** — yani gizli bakiyeye çevirmek. O da Base Sepolia'da
+çalışıyor ve cüzdanda zaten var; zincirin bu son halkası cüzdan arayüzünden denenecek.
 
 ### Yolda öğrenilen iki şey
 

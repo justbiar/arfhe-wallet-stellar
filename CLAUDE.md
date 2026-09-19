@@ -10,6 +10,7 @@ Bir konuya girmeden önce ilgili dosyayı oku. Hepsi Türkçe devir teslim notla
 
 | Dosya | Ne zaman |
 |---|---|
+| `confidential-offramp.md` | **Gizli çıkış rampası** — gizli bakiyeyi IBAN'a TRY olarak gönderme tasarımı ve yol haritası. Kararlar alınmadı, alternatifler yazılı. |
 | `stellar.md` | **Stellar / confidential token / anchor / panel** işlerinde. Tuzaklar bölümü tekrar keşfedilmemesi gereken şeyleri içerir. |
 | `CONTEXT.md` | AI agent (Arfio), VPS agent, x402 entegrasyonu. |
 | `FHE_COMPLETE_GUIDE.md` | EVM tarafındaki FHE/CoFHE shield-unshield mimarisi. |

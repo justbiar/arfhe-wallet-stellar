@@ -322,6 +322,60 @@ aynısı (bkz. §2.1).
 
 ---
 
+## 5.7 İkinci seçenek: Privacy Pools (SPP) — ve Zama düzeltmesi
+
+Kaynak: [Privacy on Stellar](https://developers.stellar.org/docs/build/apps/privacy).
+
+**Düzeltme:** "Zama'nın Stellar'la ilgisi yok" **yanlıştı**. Zama, Confidential Token
+Association'ın üyesi (SDF, Nethermind, OpenZeppelin ile birlikte). Teknolojisi hâlâ EVM'de —
+Stellar'daki uygulama taahhüt+ZK, FHE değil — ama standardı yazan masada oturuyor.
+
+### 7 gün bir uygulama kusuru değil, ekosistem sınırı
+
+Nethermind'ın SPP README'sinin "Limitations" listesindeki **ilk madde**:
+
+> RPC düğümleri event'leri yalnızca 7 gün tutuyor. Kontrat dağıtımından 7 gün sonra katılan
+> kullanıcılar için demo çalışmaz, çünkü event geçmişini yeniden oynatamazlar.
+
+İki bağımsız ekip, iki farklı kriptografi, aynı duvar. **Sırrı event'le taşıyan her Stellar
+gizlilik şeması** buna çarpıyor. Confidential Token'ın SDK'sı en azından hibrit (RPC + Goldsky
+indexer) bir event kaynağı tasarlamış; SPP bunu çözülmemiş sınır olarak listeliyor.
+
+### Karşılaştırma
+
+| | Confidential Token | Privacy Pools (SPP) |
+|---|---|---|
+| Gizlenen | Miktar, bakiye | **Miktar, bakiye ve adresler** |
+| Açık kalan | Gönderen + alıcı adresi | Havuza giriş/çıkış |
+| Uyum | Denetçi (miktarları çözer) | ASP allowlist/blocklist **+** isteğe bağlı GVK "traceable" havuz |
+| Kanıt sistemi | UltraHonk (Noir) — **şeffaf kurulum** | Groth16/BN254 (Circom) — **devre başına güvenilir kurulum** |
+| SDK | `@ctd/sdk`, npm'de **yok** | `stellar-private-payments` 0.1.0, npm'de **var** |
+| Cüzdan arayüzü | — | **SEP-43** |
+| Testnet dağıtımı | var (§5.1) | var — 2 havuz, `deployments/testnet/deployments.json` |
+| Varlık | XLM SAC sarmalayıcısı | XLM havuzları (**USDC havuzu yok**) |
+
+### SPP'nin en büyük riski: kurulum "local"
+
+`deployments/testnet/circuits.json` her devre için `"setup": "local"` diyor. Yani Groth16
+anahtarları **çok taraflı bir törenle değil**, tek makinede üretilmiş. Toksik atığı elinde
+tutan taraf geçerli görünen sahte kanıt üretebilir — bir havuzda bu, yoktan para basmak
+demektir. Referans uygulama için normal; **değer taşıyan hiçbir şey için kabul edilemez**,
+ve düzelmesi bir tören gerektiriyor.
+
+UltraHonk'ta böyle bir tören yok. Bu, Confidential Token'ın lehine olan tek büyük teknik fark.
+
+### Vizyona uyum
+
+"Tüm insanlar görmesin, banka görsün" cümlesine SPP daha yakın: Confidential Token'da
+**kimin kime ödediği herkese açık**, sadece tutar gizli. Maaş ödemesinde tutarı gizlemek,
+tarafları gizlemeden pek bir şey ifade etmiyor. SPP'nin `gvkMode: "traceable"` havuzu ise
+tam olarak "yetkili görebilir" demek — testnet'te dağıtılmış ikinci havuz böyle.
+
+**Henüz seçim yapılmadı.** Doğru sıradaki adım, SPP'yi de §5.1'deki gibi testnet'te
+çalıştırıp ölçmek — karşılaştırma README'lere değil, iki ölçüme dayansın.
+
+---
+
 ## 6. Panel (demo sitesi)
 
 `panel/`, kökün bağımlılıklarını paylaşan ikinci bir Vite girişi (`vite.panel.config.js`).

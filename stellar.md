@@ -725,6 +725,37 @@ durum kaybolur ve event'ler pencereden düşerse, *"paranın var olduğunu gör�
 harcayacak açılımı yeniden kuramazsın"*, ve tohumdan kurtarma **dayanıklı bir event arşivi**
 gerektiriyor. Yani indexer/bootnode bir tercih değil, protokolün sahibi de öyle diyor.
 
+### Inco de Stellar'ı desteklemiyor
+
+Aynı soru Inco için de soruldu. Kendi sitelerindeki liste: **Base Sepolia** (canlı),
+**Solana Devnet** (beta), ayrıca Base mainnet ve Celo. Stellar ve Soroban hiç geçmiyor.
+
+Bu "henüz yok" değil, mimari bir mesele: Inco kendini **EVM ya da SVM** zincirlerine
+takılan bir katman olarak tanımlıyor. Soroban ikisi de değil — kendi WASM VM'i, kendi
+hesap ve yetkilendirme modeli. Yani bir port değil, yeni bir arka uç yazmak demek.
+
+Bir de: canlı olan ürün (Lightning) üçüncü taraf kaynaklara göre **TEE** tabanlı, tam FHE
+(Atlas) geliştirme aşamasında. Inco kendi sayfasında mekanizmayı yazmıyor, o yüzden bu
+doğrulanmış değil — ama "FHE" diye aradığın özelliği Base'de bile bugün alıp almadığın
+ayrıca kontrol edilmeli.
+
+### Bir de bu var: `stellar-huub/stellar-confidential`
+
+Aramada çıktı ve tam bizim iki derdimizi hedefliyor: *"SDKs, indexing, **state recovery**,
+APIs, compliance tooling"*. Yani 7 gün sorunu ve kurtarma.
+
+Ama bugün kullanılabilir değil:
+
+| | |
+|---|---|
+| Oluşturulma | 7 Eylül 2026 |
+| Son commit | 9 Eylül 2026 |
+| Yıldız | 0 |
+| Lisans | **TBD** — yani yasal olarak kullanamayız |
+| Durum | `MILESTONES.md` Faz 0: monorepo kurulumu, CI, README'ler. `packages/{core,crypto,indexer,recovery}` iskelet. |
+
+Niyet doğru yerde, kod yok. Takip etmeye değer, bel bağlamaya değmez.
+
 ### Sonuç
 
 Arfhe'nin FHE'si EVM tarafında (Fhenix CoFHE) ve orada kalıyor. Stellar'a gizlilik eklemek,

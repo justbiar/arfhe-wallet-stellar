@@ -1,12 +1,12 @@
 /**
- * Üç senaryo — tek motor, üç anlatı.
+ * Dört senaryo — tek motor, dört anlatı.
  *
  * Mekanik olarak hepsi `confidential_transfer`. Ayrı ayrı durmalarının sebebi kod değil,
  * gizliliğin **neden** önemli olduğunun her birinde farklı olması. Demo'nun anlattığı şey
  * bu fark.
  */
 
-export type ScenarioId = "bordro" | "tedarik" | "takas";
+export type ScenarioId = "bordro" | "tedarik" | "takas" | "perakende";
 
 export interface ScenarioDef {
   id: ScenarioId;
@@ -47,6 +47,27 @@ export const SCENARIOS: Record<ScenarioId, ScenarioDef> = {
     payer: "Alıcı firma",
     recipients: [{ label: "Tedarikçi A", amount: "42.75" }],
     stillPublic: "İki firmanın ticari ilişkisi ve ödemenin zamanı.",
+  },
+
+  perakende: {
+    id: "perakende",
+    title: "Perakende",
+    why:
+      "Mağaza müşteriyi zaten tanıyor — kargo adresi onda. Soru mağazanın bilmesi " +
+      "değil, dünyanın bilmesi: açık bir defterde sepetin tutarı herkese görünür, " +
+      "ve tek fiyatlı bir üründe tutar ürünün kendisini ele verir.",
+    payer: "Müşteri",
+    recipients: [
+      { label: "Mağaza", amount: "18.4" },
+      { label: "Eczane", amount: "6.25" },
+      { label: "Kitapçı", amount: "4.9" },
+    ],
+    // Bu satır, diğer senaryolardan farklı olarak bir eksikliği de anlatıyor: bordroda
+    // işveren ilişkisinin görünmesi zaten doğru, perakendede değil. CT'nin sınırı tam burada
+    // bitiyor — ilişkiyi de gizlemek havuz (SPP) kulvarının işi.
+    stillPublic:
+      "Müşterinin bu üç mağazaya ödeme yaptığı — yani nereden alışveriş ettiği. Eczane " +
+      "örneği bunun neden yetmediğini gösteriyor.",
   },
 
   takas: {

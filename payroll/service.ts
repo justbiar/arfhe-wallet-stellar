@@ -2,7 +2,7 @@
  * Gizli ödeme demosunun sunucu tarafı.
  *
  *   GET  /health                → dağıtım bilgisi
- *   GET  /scenarios             → üç senaryonun tanımı
+ *   GET  /scenarios             → dört senaryonun tanımı
  *   POST /prepare {scenario}    → tarafları kur, rampadan fonla, gizle  (yavaş)
  *   POST /pay                   → gizli ödemeleri yap                    (yavaş)
  *   GET  /state                 → herkesin bakiyesi

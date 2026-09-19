@@ -9,7 +9,7 @@ npm run payroll     # :8788
 | Uç | İş |
 |---|---|
 | `GET /health` | Dağıtım bilgisi |
-| `GET /scenarios` | Üç senaryonun tanımı ve gerekçesi |
+| `GET /scenarios` | Dört senaryonun tanımı ve gerekçesi |
 | `POST /prepare {scenario}` | Tarafları kur, rampadan fonla, gizle **(yavaş, ~2 dk)** |
 | `POST /pay` | Gizli ödemeleri yap **(ödeme başına ~5 sn)** |
 | `GET /state` | Herkesin bakiyesi |

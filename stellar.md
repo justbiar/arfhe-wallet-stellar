@@ -764,6 +764,88 @@ birlikte. Bu bir engel değil ama sessizce yapılacak bir şey de değil.
 
 ---
 
+## 5.14 CCTP Stellar testnetinde ÇALIŞIYOR — zincir kapanıyor
+
+Soru: TRY rampası Stellar'da, gizlilik (FHE) EVM'de olacaksa arada ne var? Cevap **Circle
+CCTP** — ve testnette canlı olduğu doğrulandı. Dokümandan değil, zincire sorarak.
+
+### Doğrulanan kontratlar (Stellar testnet)
+
+```
+TokenMessengerMinter  CDNG7HXAPBWICI2E3AUBP3YZWZELJLYSB6F5CC7WLDTLTHVM74SLRTHP
+MessageTransmitter    CBJ6MTCKKZG73PMDZCJMSFRD7DQEMI4FKDH7CGDSV4W6FHCRBCQAVVJY
+CctpForwarder         CA66Q2WFBND6V4UEB7RD4SAXSVIWMD6RA4X3U32ELVFGXV5PJK4T4VSZ
+```
+
+Üçü de `stellar contract info interface` ile zincirden okundu — arayüzleri döndü, yani
+gerçekten dağıtılmışlar. `paused()` → **false**.
+
+### Bağlı hedefler — tam bizim üç ağımız
+
+`get_remote_token_messenger(domain)`:
+
+| Domain | Zincir | Uzak messenger |
+|---|---|---|
+| 0 | Ethereum Sepolia | `0x8fe6b999dc680ccfdd5bf7eb0974218be2542daa` |
+| 3 | Arbitrum Sepolia | aynı |
+| 6 | Base Sepolia | aynı |
+
+Stellar'ın kendi domain'i **27**.
+
+**Bu üç ağ, Arfhe'nin desteklediği üç ağın aynısı — ve CoFHE'nin çalıştığı üç ağın da
+aynısı** (`FHE_COMPLETE_GUIDE.md` §2). Tesadüf değil, ikisi de "EVM testnetleri" kümesi;
+ama pratik sonuç şu: arada dönüştürme, ek ağ, ek köprü yok.
+
+### Varlık da eşleşiyor
+
+Anchor'ın ödediği USDC'nin ihraççısı `GBBD47IF…` ve o hesabın `home_domain`'i
+**`centre.io`** — yani Circle'ın resmî testnet USDC'si, uydurma bir token değil.
+
+Aynı varlığın SAC adresi `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA`, ve
+`get_min_fee` bu token için **0** döndürüyor — yani CCTP kontratı onu tanıyor.
+
+Anchor'ın ödediği şey ile CCTP'nin yaktığı şey aynı varlık. Arada takas yok.
+
+### Yakma fonksiyonu
+
+```rust
+fn deposit_for_burn(
+    caller: Address, amount: i128, destination_domain: u32,
+    mint_recipient: BytesN<32>, burn_token: Address,
+    destination_caller: BytesN<32>, max_fee: i128, min_finality_threshold: u32,
+);
+```
+
+CCTP v2 şekli. `deposit_for_burn_with_hook` da var.
+
+### Zincir
+
+```
+TRY → [SEP-6 anchor] → USDC (Stellar) → [CCTP burn/mint] → USDC (Base Sepolia) → [CoFHE shield] → gizli bakiye
+```
+
+Üçü de standart, hiçbiri bizim yazdığımız bir köprü değil. CCTP emanetçi tutmuyor, havuz
+işletmiyor, sarmalanmış token üretmiyor — yakıyor ve basıyor.
+
+### Neyin doğrulanmadığı
+
+**Kontratların varlığı ve yapılandırması doğrulandı; tamamlanmış bir transfer değil.**
+Gerçek bir `deposit_for_burn` → Iris attestation → EVM'de `receiveMessage` turu henüz
+yapılmadı. Sıradaki test bu.
+
+### Gizlilik muhasebesi
+
+| Adım | Görünen |
+|---|---|
+| Anchor ödemesi | Tutar ve adres açık |
+| CCTP | Stellar adresi ile EVM adresi **birbirine bağlanır** |
+| Shield | Buradan sonra bakiye ve transferler **gizli** |
+
+Giriş açık, varış gizli. Ve bu **mixer değil**: karışım kümesi yok, tek kullanıcıyla
+çalışıyor, gizlenen şey kendi bakiyen.
+
+---
+
 ## 6. Panel (demo sitesi)
 
 `panel/`, kökün bağımlılıklarını paylaşan ikinci bir Vite girişi (`vite.panel.config.js`).

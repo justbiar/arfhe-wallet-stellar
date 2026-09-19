@@ -376,6 +376,75 @@ tam olarak "yetkili görebilir" demek — testnet'te dağıtılmış ikinci havu
 
 ---
 
+## 5.8 SPP de testnet'te ölçüldü
+
+19 Eylül 2026. Kaynaktan derlenen `spp` CLI ile, zaten dağıtılmış testnet havuzuna karşı.
+Cüzdana yine hiçbir şey eklenmedi.
+
+Havuz `CCM5G4FCOV7PLKFMEJBCYM5R7JOTZVUXKWBDR3SWCW2IM2LKNNBO4TH5` (XLM, blocklist politikası).
+
+| Adım | Hash | Sonuç |
+|---|---|---|
+| alice kayıt | `4a9d7e56c4262a244c8c2a06e36c6a97cf42b4d53ed3b852af337824fa76baab` | |
+| bob kayıt | `590c1da8eddb50e6c96379a0963735fa8318089456546c1b557f6f117bbf2103` | |
+| alice deposit 10 XLM | `18ee5b760c9aaedf6021a83fbfe86b51440405780cc7e8af08cf52bd46af49ad` | havuz 10 |
+| **alice → bob 4 XLM (gizli)** | `2a91684c6a36bcccd1896a7198cba82fdefa0c3558ceb46686ae75e8b6ef3bdb` | alice 6, bob 4 |
+| bob withdraw 3 XLM | `fbd4aa7dc20851ce886fa1e3e9433e7cab41913fe3c244db2b9d99403271a8cb` | bob havuzda 1, zincirde +3 |
+
+### Zincirde ne görünüyor
+
+Üç işlem de **aynı fonksiyonu** çağırıyor (`transact`), aynı parametre şeklinde. Fark
+içeride, ve çözülünce şu çıkıyor:
+
+| | `public_amount` | `ext_amount` | `recipient` |
+|---|---|---|---|
+| deposit | `100000000` | `100000000` | havuz kontratı |
+| **transfer** | **`0`** | **`0`** | **havuz kontratı — Bob'un adresi yok** |
+| withdraw | negatif alan öğesi | `-30000000` | **Bob'un `G…` adresi** |
+
+Transfer işleminde taşınan her şey: iki `input_nullifier`, iki `output_commitment`, iki
+120 baytlık `encrypted_output`, bir Merkle kökü ve 256 baytlık Groth16 kanıtı. **Ne tutar
+var ne alıcı.**
+
+**Dürüst kısım:** gönderen tamamen gizli değil. Alice işlemin kaynağı ve ücreti ödeyen
+hesap, yani imzası görünüyor. Gizlenen şey *kime* ve *ne kadar*. Tam gönderen gizliliği
+ücreti başkasının ödemesini (relayer) gerektirir. Deponun `docs/src/privacy-tradeoffs.md`
+dosyası bu korelasyon yüzeylerini kendisi de sayıyor.
+
+### CT ile ölçülmüş karşılaştırma
+
+| | Confidential Token | Privacy Pools |
+|---|---|---|
+| Transfer'de açık olan | **Gönderen + alıcı adresi** | Yalnızca ücreti ödeyen |
+| Kanıt boyutu | 14.592 bayt | **256 bayt** (a 64 + b 128 + c 64) |
+| Transfer ücreti | 513.216 stroop | **180.479 stroop** (~2,8× ucuz) |
+| Kanıt üretimi | ~1,3 s (tek iş parçacığı, Node/wasm) | işlem başına ~19–23 s duvar, ~15,4 s CPU (yerel Rust release) |
+
+Süre ölçümleri **aynı cinsten değil**: CT'de saf kanıt süresi ölçüldü, SPP'de CLI'ın tüm
+işi (senkron + tanık + kanıt + gönderim). Yine de mertebe farkı açık ve ters yönde:
+SPP'nin kanıtı çok daha küçük ve ucuz, üretmesi çok daha yavaş. Tarayıcıda WASM ile daha
+da yavaş olacaktır — cüzdan popup'ında 15+ saniye ciddi bir tasarım sorunu.
+
+### Bootnode gerçek ve varsayılan açık
+
+Onboarding, saklama penceresini aşmak için `https://bootnode.dev-nethermind.xyz` adresini
+**varsayılan** öneriyor ve CLI trust varsayımlarını ekrana yazıyor: bütünlük (geçmişi
+çarpıtabilir), erişilebilirlik, IP/zamanlama mahremiyeti, ve hatalı `fromLedger` ile
+senkronu yanlış aralığa yönlendirme.
+
+Yani 7 gün sorununun cevabı SPP'de **zaten var ve çalışıyor** — ama cevabın adı "güvenilen
+bir sunucu". CT'nin indexer'ı ile aynı kategori. Kendi kendine saklayan bir cüzdan için
+ikisinde de aynı soru: **o sunucuyu kim çalıştırıyor.**
+
+### Kurulum
+
+`deployments/testnet/circuits.json` → her devre `"setup": "local"`. Tören yok. Bu, §5.7'de
+yazılan riski doğruluyor: anahtarları üreten taraf sahte kanıt üretebilir, havuzda bunun
+adı yoktan para basmak. Devre yapıtları (107 MB) GitHub Releases'ten indirildi ve **48
+dosyanın hash'i repoda commit'li manifest'e karşı doğrulandı** — sıfır uyuşmazlık.
+
+---
+
 ## 6. Panel (demo sitesi)
 
 `panel/`, kökün bağımlılıklarını paylaşan ikinci bir Vite girişi (`vite.panel.config.js`).

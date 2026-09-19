@@ -1,3 +1,4 @@
+import { pt } from "../lib/language";
 /**
  * The frame both panes sit in — a titled surface with a consistent header row.
  *
@@ -26,11 +27,11 @@ export default function PaneFrame({
       sx={{
         border: "1px solid",
         borderColor: "divider",
-        borderRadius: 0,
+        borderRadius: 3,
         bgcolor: surface ?? "background.paper",
         display: "flex",
         flexDirection: "column",
-        minHeight: 520,
+        minHeight: { xs: 0, md: 460 },
         overflow: "hidden",
       }}
     >
@@ -42,12 +43,12 @@ export default function PaneFrame({
       >
         <Box sx={{ width: 8, height: 8, bgcolor: accent, flexShrink: 0 }} />
         <Typography variant="caption" sx={{ fontWeight: 700, color: "text.secondary" }}>
-          {label}
+          {pt(label)}
         </Typography>
         <Box sx={{ flex: 1 }} />
-        {title}
+        {pt(title)}
       </Stack>
-      <Box sx={{ p: { xs: 2, md: 2.5 }, flex: 1 }}>{children}</Box>
+      <Box sx={{ p: { xs: 2, md: 2.5 }, flex: 1 }}>{pt(children)}</Box>
     </Paper>
   );
 }

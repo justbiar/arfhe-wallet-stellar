@@ -1,3 +1,4 @@
+import { pt } from "../lib/language";
 /**
  * What Arfhe Wallet is, for someone who arrived from the demo and has not met it.
  *
@@ -45,18 +46,18 @@ function LinkCard({ href, label, title, desc }: { href: string; label: string; t
       rel="noopener noreferrer"
       elevation={0}
       sx={{
-        p: 2.5, border: "1px solid", borderColor: "divider", borderRadius: 0,
+        p: 2.5, border: "1px solid", borderColor: "divider", borderRadius: 3,
         textDecoration: "none", color: "inherit", display: "block",
         transition: "border-color .15s",
         "&:hover": { borderColor: "text.primary" },
       }}
     >
-      <Typography variant="caption" color="text.secondary" fontWeight={700}>{label}</Typography>
+      <Typography variant="caption" color="text.secondary" fontWeight={700}>{pt(label)}</Typography>
       <Stack direction="row" alignItems="center" gap={0.8} sx={{ mt: 0.6 }}>
-        <Typography sx={{ fontWeight: 700, fontSize: 15 }}>{title}</Typography>
+        <Typography sx={{ fontWeight: 700, fontSize: 15 }}>{pt(title)}</Typography>
         <OpenInNewIcon sx={{ fontSize: 14, color: "text.secondary" }} />
       </Stack>
-      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.6 }}>{desc}</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.6 }}>{pt(desc)}</Typography>
     </Paper>
   );
 }
@@ -68,10 +69,10 @@ export default function About() {
   return (
     <Box sx={{ maxWidth: 860, mx: "auto", px: { xs: 2, md: 3 }, py: { xs: 6, md: 9 } }}>
       <Chip
-        label="CHROME WEB MAĞAZASINDA YAYINDA"
+        label={pt("CHROME WEB MAĞAZASINDA YAYINDA")}
         size="small"
         sx={{
-          borderRadius: 0, fontWeight: 700, letterSpacing: "0.06em",
+          borderRadius: 3, fontWeight: 700, letterSpacing: "0.06em",
           bgcolor: alpha(accent, 0.1), color: accent, border: "1px solid", borderColor: alpha(accent, 0.3),
         }}
       />
@@ -81,39 +82,34 @@ export default function About() {
           mt: 2.5, fontFamily: "var(--font-arbeit-contrast)", fontWeight: 800,
           fontSize: { xs: 34, md: 46 }, lineHeight: 1.08, letterSpacing: "-0.03em",
         }}
-      >
-        Arfhe Wallet
-      </Typography>
+      >{pt(" Arfhe Wallet ")}</Typography>
 
       <Typography variant="body1" color="text.secondary" sx={{ mt: 2.5, fontSize: 17, lineHeight: 1.65, maxWidth: 640 }}>
-        {FOUNDED_YEAR}'te kuruldu, {THIS_YEAR - FOUNDED_YEAR} yıldır aralıksız geliştiriliyor.
-        Kendi kendine saklayan bir tarayıcı cüzdanı — ve her cüzdanın gösterdiği açık bakiyenin
-        yanında, yalnızca sizin okuyabildiğiniz şifreli bakiyeler tutabiliyor. Mahremiyet
-        sonradan eklenen bir özellik değil, ürünün kurulduğu zemin.
-      </Typography>
+        {pt(`${FOUNDED_YEAR}'te kuruldu, ${THIS_YEAR - FOUNDED_YEAR} yıldır aralıksız geliştiriliyor.`)}{" "}
+        {pt("Kendi kendine saklayan bir tarayıcı cüzdanı — ve her cüzdanın gösterdiği açık bakiyenin yanında, yalnızca sizin okuyabildiğiniz şifreli bakiyeler tutabiliyor. Mahremiyet sonradan eklenen bir özellik değil, ürünün kurulduğu zemin.")}</Typography>
 
       {/* ── Linkler ── */}
       <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, mt: 4 }}>
         <LinkCard
           href={CHROME_STORE_URL}
-          label="KUR"
-          title="Chrome Web Mağazası"
-          desc="Uzantıyı doğrudan tarayıcınıza ekleyin."
+          label={pt("KUR")}
+          title={pt("Chrome Web Mağazası")}
+          desc={pt("Uzantıyı doğrudan tarayıcınıza ekleyin.")}
         />
         <LinkCard
           href={SITE_URL}
-          label="WEB SİTESİ"
-          title="arfhewallet.dev"
-          desc="Ürünün kendi sayfası."
+          label={pt("WEB SİTESİ")}
+          title={pt("arfhewallet.dev")}
+          desc={pt("Ürünün kendi sayfası.")}
         />
       </Box>
 
       {/* ── Özellikler ── */}
       <Stack gap={2} sx={{ mt: 5 }}>
         {POINTS.map((p) => (
-          <Paper key={p.title} elevation={0} sx={{ p: 2.5, border: "1px solid", borderColor: "divider", borderRadius: 0 }}>
-            <Typography sx={{ fontWeight: 700, fontSize: 15 }}>{p.title}</Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 1, lineHeight: 1.65 }}>{p.body}</Typography>
+          <Paper key={p.title} elevation={0} sx={{ p: 2.5, border: "1px solid", borderColor: "divider", borderRadius: 3 }}>
+            <Typography sx={{ fontWeight: 700, fontSize: 15 }}>{pt(p.title)}</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1, lineHeight: 1.65 }}>{pt(p.body)}</Typography>
           </Paper>
         ))}
       </Stack>
@@ -121,44 +117,28 @@ export default function About() {
       <Divider sx={{ my: 5 }} />
 
       {/* ── Stellar ── */}
-      <Typography variant="caption" color="text.secondary" fontWeight={700}>SIRADAKİ · STELLAR</Typography>
+      <Typography variant="caption" color="text.secondary" fontWeight={700}>{pt("SIRADAKİ · STELLAR")}</Typography>
       <Typography
         sx={{ mt: 1, fontFamily: "var(--font-arbeit-contrast)", fontWeight: 800, fontSize: { xs: 24, md: 30 }, letterSpacing: "-0.02em", lineHeight: 1.2 }}
-      >
-        Gönderdiğiniz miktar sizinle kalsın
-      </Typography>
-      <Typography variant="body1" color="text.secondary" sx={{ mt: 2, fontSize: 16, lineHeight: 1.7, maxWidth: 640 }}>
-        Stellar tarafındaki hedef, cüzdanın EVM'de yaptığının aynısı: gizli işlemler. Bir ödeme
-        yapıldığında zincirde bir hareket olduğu görünür, ama <strong>ne kadar</strong> gönderildiği
-        görünmez. Bugün açık bir ağda maaş ödemek, bir tedarikçiye fatura kapatmak ya da birine
-        yardım göndermek, o tutarı herkese ilan etmek demek. Asıl mesele budur.
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mt: 2, lineHeight: 1.65, maxWidth: 640 }}>
-        Bu iş yapım aşamasında. Buradaki köprü demosu onun ilk parçası: önce Türk Lirası ile
-        Stellar arasındaki yol, ardından o yolun üzerinden geçen gizli transferler.
-      </Typography>
+      >{pt(" Gönderdiğiniz miktar sizinle kalsın ")}</Typography>
+      <Typography variant="body1" color="text.secondary" sx={{ mt: 2, fontSize: 16, lineHeight: 1.7, maxWidth: 640 }}>{pt(" Stellar tarafındaki hedef, cüzdanın EVM'de yaptığının aynısı: gizli işlemler. Bir ödeme yapıldığında zincirde bir hareket olduğu görünür, ama ")}<strong>{pt("ne kadar")}</strong>{pt(" gönderildiği görünmez. Bugün açık bir ağda maaş ödemek, bir tedarikçiye fatura kapatmak ya da birine yardım göndermek, o tutarı herkese ilan etmek demek. Asıl mesele budur. ")}</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 2, lineHeight: 1.65, maxWidth: 640 }}>{pt(" Bu iş yapım aşamasında. Buradaki köprü demosu onun ilk parçası: önce Türk Lirası ile Stellar arasındaki yol, ardından o yolun üzerinden geçen gizli transferler. ")}</Typography>
 
       <Divider sx={{ my: 5 }} />
 
       {/* ── Aglar ── */}
-      <Typography variant="caption" color="text.secondary" fontWeight={700}>BUGÜN ÇALIŞTIĞI AĞLAR</Typography>
+      <Typography variant="caption" color="text.secondary" fontWeight={700}>{pt("BUGÜN ÇALIŞTIĞI AĞLAR")}</Typography>
       <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 1.5 }}>
         {LIVE_NETWORKS.map((n) => (
-          <Chip key={n} label={n} size="small" sx={{ borderRadius: 0, border: "1px solid", borderColor: "divider", bgcolor: "transparent" }} />
+          <Chip key={n} label={pt(n)} size="small" sx={{ borderRadius: 3, border: "1px solid", borderColor: "divider", bgcolor: "transparent" }} />
         ))}
       </Stack>
-      <Typography variant="body2" color="text.secondary" sx={{ mt: 2, lineHeight: 1.65 }}>
-        Yayındaki sürüm testnet sürümüdür ve mainnet'e yönlendirilemez — buradaki tokenların
-        gerçek bir değeri yok. Gizli bakiyeler bu üç ağda çalışıyor, çünkü FHE yardımcı
-        işlemcisinin koştuğu ağlar bunlar.
-      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 2, lineHeight: 1.65 }}>{pt(" Yayındaki sürüm testnet sürümüdür ve mainnet'e yönlendirilemez — buradaki tokenların gerçek bir değeri yok. Gizli bakiyeler bu üç ağda çalışıyor, çünkü FHE yardımcı işlemcisinin koştuğu ağlar bunlar. ")}</Typography>
 
       <Button
         component={Link} to="/bridge" variant="contained" size="large" endIcon={<ArrowForwardIcon />}
-        sx={{ mt: 5, borderRadius: 0, px: 3, py: 1.4, fontWeight: 700 }}
-      >
-        Köprüyü gör
-      </Button>
+        sx={{ mt: 5, borderRadius: 3, px: 3, py: 1.4, fontWeight: 700 }}
+      >{pt(" Köprüyü gör ")}</Button>
     </Box>
   );
 }

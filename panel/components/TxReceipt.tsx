@@ -1,3 +1,4 @@
+import { pt } from "../lib/language";
 /**
  * What actually happened on-chain, once the anchor settles.
  *
@@ -35,7 +36,7 @@ export function HashLine({ hash, label }: { hash: string; label: string }) {
 
   return (
     <Box sx={{ border: "1px solid", borderColor: "divider", p: 2 }}>
-      <Typography variant="caption" color="text.secondary" fontWeight={700}>{label}</Typography>
+      <Typography variant="caption" color="text.secondary" fontWeight={700}>{pt(label)}</Typography>
       <Stack direction="row" alignItems="flex-start" gap={0.5} sx={{ mt: 0.8 }}>
         <Typography
           sx={{
@@ -43,9 +44,9 @@ export function HashLine({ hash, label }: { hash: string; label: string }) {
             wordBreak: "break-all", flex: 1,
           }}
         >
-          {hash}
+          {pt(hash)}
         </Typography>
-        <Tooltip title={copied ? "Kopyalandı" : "Kopyala"}>
+        <Tooltip title={pt(copied ? "Kopyalandı" : "Kopyala")}>
           <IconButton size="small" onClick={copy} sx={{ p: 0.3, mt: -0.3 }}>
             {copied ? <CheckIcon sx={{ fontSize: 13 }} /> : <ContentCopyIcon sx={{ fontSize: 13 }} />}
           </IconButton>
@@ -57,8 +58,7 @@ export function HashLine({ hash, label }: { hash: string; label: string }) {
         rel="noopener noreferrer"
         variant="caption"
         sx={{ display: "inline-flex", alignItems: "center", gap: 0.4, mt: 1, textTransform: "none" }}
-      >
-        stellar.expert'te doğrula <OpenInNewIcon sx={{ fontSize: 12 }} />
+      >{pt(" stellar.expert'te doğrula ")}<OpenInNewIcon sx={{ fontSize: 12 }} />
       </MuiLink>
     </Box>
   );
@@ -84,12 +84,10 @@ export default function TxReceipt({ status, hideHash }: { status: TxStatus; hide
   return (
     <Box sx={{ border: "1px solid", borderColor: "divider", p: 2 }}>
       {showHash && (
-        <Typography variant="caption" color="text.secondary" fontWeight={700}>
-          ZİNCİRDEKİ İŞLEM
-        </Typography>
+        <Typography variant="caption" color="text.secondary" fontWeight={700}>{pt(" ZİNCİRDEKİ İŞLEM ")}</Typography>
       )}
 
-      {showHash && status.stellarTxId && (
+      {pt(showHash && status.stellarTxId && (
         <>
           <Stack direction="row" alignItems="flex-start" gap={0.5} sx={{ mt: 0.8 }}>
             <Typography
@@ -98,9 +96,9 @@ export default function TxReceipt({ status, hideHash }: { status: TxStatus; hide
                 wordBreak: "break-all", flex: 1,
               }}
             >
-              {status.stellarTxId}
+              {pt(status.stellarTxId)}
             </Typography>
-            <Tooltip title={copied ? "Kopyalandı" : "Kopyala"}>
+            <Tooltip title={pt(copied ? "Kopyalandı" : "Kopyala")}>
               <IconButton size="small" onClick={copy} sx={{ p: 0.3, mt: -0.3 }}>
                 {copied ? <CheckIcon sx={{ fontSize: 13 }} /> : <ContentCopyIcon sx={{ fontSize: 13 }} />}
               </IconButton>
@@ -113,26 +111,21 @@ export default function TxReceipt({ status, hideHash }: { status: TxStatus; hide
             rel="noopener noreferrer"
             variant="caption"
             sx={{ display: "inline-flex", alignItems: "center", gap: 0.4, mt: 1, textTransform: "none" }}
-          >
-            stellar.expert'te doğrula <OpenInNewIcon sx={{ fontSize: 12 }} />
+          >{pt(" stellar.expert'te doğrula ")}<OpenInNewIcon sx={{ fontSize: 12 }} />
           </MuiLink>
         </>
-      )}
+      ))}
 
-      {status.externalTxId && (
-        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1.2, textTransform: "none" }}>
-          Banka referansı:{" "}
-          <Box component="span" sx={{ fontFamily: "var(--font-arbeit-technik)" }}>{status.externalTxId}</Box>
+      {pt(status.externalTxId && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1.2, textTransform: "none" }}>{pt(" Banka referansı:")}{pt(" ")}
+          <Box component="span" sx={{ fontFamily: "var(--font-arbeit-technik)" }}>{pt(status.externalTxId)}</Box>
         </Typography>
-      )}
+      ))}
 
       {/* Not an error, but the one outcome a user must act on rather than just read. */}
-      {status.claimableBalanceId && (
-        <Alert severity="warning" sx={{ borderRadius: 0, mt: 1.5 }}>
-          Ödeme talep edilebilir bakiye olarak bekliyor — hesapta USDC güven hattı yokmuş.
-          Toplamak için hattı açıp bakiyeyi talep etmeniz gerekiyor.
-        </Alert>
-      )}
+      {pt(status.claimableBalanceId && (
+        <Alert severity="warning" sx={{ borderRadius: 3, mt: 1.5 }}>{pt(" Ödeme talep edilebilir bakiye olarak bekliyor — hesapta USDC güven hattı yokmuş. Toplamak için hattı açıp bakiyeyi talep etmeniz gerekiyor. ")}</Alert>
+      ))}
     </Box>
   );
 }

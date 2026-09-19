@@ -1,3 +1,4 @@
+import { pt } from "../lib/language";
 /**
  * The split screen: a bank on the right, Arfhe Wallet on the left, money crossing between.
  *
@@ -27,12 +28,8 @@ export default function Bridge() {
     <Box sx={{ maxWidth: 1180, mx: "auto", px: { xs: 2, md: 3 }, py: { xs: 3, md: 5 } }}>
       <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ sm: "flex-end" }} gap={1.5} sx={{ mb: 3 }}>
         <Box sx={{ flex: 1 }}>
-          <Typography sx={{ fontFamily: "var(--font-arbeit-contrast)", fontWeight: 800, fontSize: { xs: 28, md: 34 }, letterSpacing: "-0.02em" }}>
-            Köprü
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            Solda cüzdanınız, sağda banka. Para ikisi arasında gidip geliyor.
-          </Typography>
+          <Typography sx={{ fontFamily: "var(--font-arbeit-contrast)", fontWeight: 800, fontSize: { xs: 28, md: 34 }, letterSpacing: "-0.02em" }}>{pt(" Köprü ")}</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{pt(" Solda cüzdanınız, sağda banka. Para ikisi arasında gidip geliyor. ")}</Typography>
         </Box>
         {/*
           * The direction switch lives here, not only in the divider between the panes.
@@ -47,23 +44,23 @@ export default function Bridge() {
           size="small"
           value={direction}
           onChange={(_, v) => { if (v) setDirection(v as Direction); }}
-          aria-label="Yön"
+          aria-label={pt("Yön")}
           sx={{
             "& .MuiToggleButton-root": {
-              borderRadius: 0, px: 1.8, py: 0.6, fontSize: 11, fontWeight: 700,
+              borderRadius: 3, px: 1.8, py: 0.6, fontSize: 11, fontWeight: 700,
               borderColor: "divider",
             },
           }}
         >
-          <ToggleButton value="deposit">Yükleme</ToggleButton>
-          <ToggleButton value="withdraw">Çekme</ToggleButton>
+          <ToggleButton value="deposit">{pt("Yükleme")}</ToggleButton>
+          <ToggleButton value="withdraw">{pt("Çekme")}</ToggleButton>
         </ToggleButtonGroup>
 
         <Chip
           size="small"
-          label={`${ANCHOR_HOME_DOMAIN} · TESTNET`}
+          label={pt(`${ANCHOR_HOME_DOMAIN} · TESTNET`)}
           sx={{
-            borderRadius: 0, fontWeight: 700,
+            borderRadius: 3, fontWeight: 700,
             bgcolor: alpha(theme.palette.primary.main, 0.1),
             color: theme.palette.primary.main,
             border: "1px solid", borderColor: alpha(theme.palette.primary.main, 0.3),
@@ -94,8 +91,8 @@ export default function Bridge() {
             tabIndex={0}
             onClick={() => setDirection((d) => (d === "deposit" ? "withdraw" : "deposit"))}
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setDirection((d) => (d === "deposit" ? "withdraw" : "deposit")); }}
-            aria-label="Yönü değiştir"
-            title="Yönü değiştir"
+            aria-label={pt("Yönü değiştir")}
+            title={pt("Yönü değiştir")}
             sx={{
               my: 1.5, width: 44, height: 44, cursor: "pointer",
               display: "grid", placeItems: "center",
@@ -119,9 +116,9 @@ export default function Bridge() {
       </Box>
 
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 3, textTransform: "none" }}>
-        {direction === "deposit"
+        {pt(direction === "deposit"
           ? `${FIAT_CODE} → ${ANCHOR_ASSET_CODE}: bankadan gelen havale, cüzdanınıza ${ANCHOR_ASSET_CODE} olarak geçer.`
-          : `${ANCHOR_ASSET_CODE} → ${FIAT_CODE}: cüzdanınızdan çıkan ${ANCHOR_ASSET_CODE}, IBAN'ınıza ${FIAT_CODE} olarak döner.`}
+          : `${ANCHOR_ASSET_CODE} → ${FIAT_CODE}: cüzdanınızdan çıkan ${ANCHOR_ASSET_CODE}, IBAN'ınıza ${FIAT_CODE} olarak döner.`)}
       </Typography>
     </Box>
   );

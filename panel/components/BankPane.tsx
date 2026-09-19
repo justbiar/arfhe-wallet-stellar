@@ -53,7 +53,10 @@ export default function BankPane({ direction, ramp }: { direction: Direction; ra
   const connected = ramp.address !== null && ramp.phase !== "connecting";
   const ordering = ramp.phase === "ordering";
   const settling = ramp.phase === "settling";
+  const paying = ramp.phase === "paying";
   const hasOrder = ramp.order !== null;
+
+  const tryAmount = direction === "deposit" ? ramp.status?.amountIn : ramp.status?.amountOut;
 
   return (
     <PaneFrame
@@ -71,14 +74,19 @@ export default function BankPane({ direction, ramp }: { direction: Direction; ra
         <Typography sx={{ fontFamily: "var(--font-arbeit-technik)", fontSize: 13, mt: 0.5, color: "text.secondary" }}>
           TR00 0001 0000 0000 0000 0000 00
         </Typography>
+        {/* Which side of the pair is TRY flips with the direction: on a deposit the user
+            sends fiat (`amount_in`), on a withdrawal they receive it (`amount_out`).
+            Showing the same field in both would print USDC under a TRY label. */}
         <Stack direction="row" alignItems="baseline" gap={0.8} sx={{ mt: 1.5 }}>
           <Typography sx={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em" }}>
-            {ramp.status?.amountIn ?? "—"}
+            {tryAmount ?? "—"}
           </Typography>
           <Typography variant="body2" color="text.secondary" fontWeight={700}>{FIAT_CODE}</Typography>
         </Stack>
         <Typography variant="caption" color="text.secondary" sx={{ textTransform: "none" }}>
-          {ramp.status?.amountIn ? "Bu işlemde gönderilen tutar" : "Bakiye, bir yükleme başlatıldığında görünür"}
+          {tryAmount
+            ? (direction === "deposit" ? "Bu işlemde gönderilen tutar" : "Bu işlemde alınan tutar")
+            : "Bakiye, bir işlem başlatıldığında görünür"}
         </Typography>
       </Box>
 
@@ -176,10 +184,63 @@ export default function BankPane({ direction, ramp }: { direction: Direction; ra
         <>
           <Typography variant="caption" color="text.secondary" fontWeight={700}>GELEN HAVALE</Typography>
           <Stack gap={2} sx={{ mt: 1.5 }}>
-            <Alert severity="info" sx={{ borderRadius: 0 }}>
-              Çekim yönünde banka alıcı taraftır. Bu akış henüz bağlanmadı.
-            </Alert>
-            <Chip label="YAPIM AŞAMASINDA" size="small" sx={{ borderRadius: 0, alignSelf: "flex-start" }} />
+            {/* In this direction the bank does nothing until the chain moves. There is no
+                button on this side on purpose: the order of events is the difference
+                between the two flows, and a control here would suggest otherwise. */}
+            {!ramp.withdrawOrder ? (
+              <Alert severity="info" sx={{ borderRadius: 0 }}>
+                {connected
+                  ? `Soldan bir çekim talebi açın. ${ANCHOR_ASSET_CODE} zincirde gönderildikten sonra ` +
+                    `anchor ${FIAT_CODE} ödemesini buraya yapar.`
+                  : "Önce soldan bir hesap bağlayın."}
+              </Alert>
+            ) : (
+              <>
+                <Filled
+                  label="Alacak IBAN"
+                  value={ramp.withdrawOrder.iban}
+                  help={`${FIAT_CODE} bu hesaba yatar — banka tarafı simüle`}
+                />
+
+                {/* The anchor's own sentence, verbatim. It carries the locked rate and the
+                    exact terms, and paraphrasing them here would be this page speaking for
+                    the anchor about money it is about to pay. */}
+                {ramp.withdrawOrder.message && (
+                  <Box sx={{ border: "1px dashed", borderColor: "divider", p: 1.5 }}>
+                    <Typography variant="caption" color="text.secondary" fontWeight={700} sx={{ display: "block", mb: 0.5 }}>
+                      ANCHOR'IN BEYANI
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ textTransform: "none", lineHeight: 1.6 }}>
+                      {ramp.withdrawOrder.message}
+                    </Typography>
+                  </Box>
+                )}
+              </>
+            )}
+
+            {(paying || settling) && (
+              <Stack direction="row" alignItems="center" gap={1.2}>
+                <CircularProgress size={15} />
+                <Typography variant="body2" color="text.secondary">
+                  {paying
+                    ? `${ANCHOR_ASSET_CODE} gönderiliyor…`
+                    : `Anchor işliyor${ramp.status?.status ? ` — ${ramp.status.status}` : "…"}`}
+                </Typography>
+              </Stack>
+            )}
+
+            {ramp.phase === "done" && (
+              <Alert severity="success" sx={{ borderRadius: 0 }}>
+                {ramp.status?.amountOut} {FIAT_CODE} hesabınıza geçti
+                {ramp.status?.externalTxId ? ` · dekont ${ramp.status.externalTxId}` : ""}.
+              </Alert>
+            )}
+
+            <Chip
+              label="BANKA AYAĞI SİMÜLE"
+              size="small"
+              sx={{ borderRadius: 0, alignSelf: "flex-start" }}
+            />
           </Stack>
         </>
       )}

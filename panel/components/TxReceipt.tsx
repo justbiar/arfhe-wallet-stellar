@@ -15,9 +15,62 @@ import type { TxStatus } from "../lib/sep";
 
 const EXPLORER = "https://stellar.expert/explorer/testnet/tx";
 
-export default function TxReceipt({ status }: { status: TxStatus }) {
+/**
+ * One hash, in full, with a way to copy it and a way to check it.
+ *
+ * Shared by the anchor's payment and the user's own, because the argument is the same in
+ * both directions: the hash is the only part of this page that does not require trusting
+ * this page. Truncating it would make it something to look at rather than something to use.
+ */
+export function HashLine({ hash, label }: { hash: string; label: string }) {
   const [copied, setCopied] = React.useState(false);
-  if (!status.stellarTxId && !status.claimableBalanceId) return null;
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(hash);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch { /* the hash is on screen to select by hand */ }
+  };
+
+  return (
+    <Box sx={{ border: "1px solid", borderColor: "divider", p: 2 }}>
+      <Typography variant="caption" color="text.secondary" fontWeight={700}>{label}</Typography>
+      <Stack direction="row" alignItems="flex-start" gap={0.5} sx={{ mt: 0.8 }}>
+        <Typography
+          sx={{
+            fontFamily: "var(--font-arbeit-technik)", fontSize: 11.5, lineHeight: 1.5,
+            wordBreak: "break-all", flex: 1,
+          }}
+        >
+          {hash}
+        </Typography>
+        <Tooltip title={copied ? "Kopyalandı" : "Kopyala"}>
+          <IconButton size="small" onClick={copy} sx={{ p: 0.3, mt: -0.3 }}>
+            {copied ? <CheckIcon sx={{ fontSize: 13 }} /> : <ContentCopyIcon sx={{ fontSize: 13 }} />}
+          </IconButton>
+        </Tooltip>
+      </Stack>
+      <MuiLink
+        href={`${EXPLORER}/${hash}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        variant="caption"
+        sx={{ display: "inline-flex", alignItems: "center", gap: 0.4, mt: 1, textTransform: "none" }}
+      >
+        stellar.expert'te doğrula <OpenInNewIcon sx={{ fontSize: 12 }} />
+      </MuiLink>
+    </Box>
+  );
+}
+
+export default function TxReceipt({ status, hideHash }: { status: TxStatus; hideHash?: string | null }) {
+  const [copied, setCopied] = React.useState(false);
+  // The caller may already be showing this hash. Printing it again under a second heading
+  // suggests two transactions where there is one.
+  const duplicate = hideHash != null && hideHash === status.stellarTxId;
+  const showHash = status.stellarTxId != null && !duplicate;
+  if (!showHash && !status.externalTxId && !status.claimableBalanceId) return null;
 
   const copy = async () => {
     if (!status.stellarTxId) return;
@@ -30,11 +83,13 @@ export default function TxReceipt({ status }: { status: TxStatus }) {
 
   return (
     <Box sx={{ border: "1px solid", borderColor: "divider", p: 2 }}>
-      <Typography variant="caption" color="text.secondary" fontWeight={700}>
-        ZİNCİRDEKİ İŞLEM
-      </Typography>
+      {showHash && (
+        <Typography variant="caption" color="text.secondary" fontWeight={700}>
+          ZİNCİRDEKİ İŞLEM
+        </Typography>
+      )}
 
-      {status.stellarTxId && (
+      {showHash && status.stellarTxId && (
         <>
           <Stack direction="row" alignItems="flex-start" gap={0.5} sx={{ mt: 0.8 }}>
             <Typography

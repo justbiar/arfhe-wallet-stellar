@@ -1,0 +1,17 @@
+{
+  // The panel is a separate app with its own entry, and it was never type-checked: the root
+  // tsconfig covers `src` and `extension` only, and Vite does not type-check on build. So
+  // the first thing that ever read these files for types was the browser.
+  //
+  // Kept as its own config rather than added to the root include, because the root's error
+  // count is a documented baseline (see CLAUDE.md) that this must not move. Run it with
+  // `npm run typecheck:panel`.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Mirrors vite.panel.config.js — the panel imports the extension's theme rather than
+    // keeping a copy of the brand tokens that drifts.
+    "baseUrl": ".",
+    "paths": { "@wallet/*": ["src/*"] }
+  },
+  "include": ["panel"]
+}

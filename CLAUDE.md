@@ -25,8 +25,9 @@ npm run build:store    # mağaza build'i — `key` SİLİNİR, yükleme için bu
 npm run dev:panel      # panel demo sitesi (5174)
 npm run build:panel    # panel → dist-panel/
 npx vitest run         # tüm testler
-npx tsc --noEmit       # tip kontrolü
-npm run verify:anchor  # Stellar fiat köprüsünü uçtan uca doğrular
+npx tsc --noEmit       # tip kontrolü (src + extension)
+npm run typecheck:panel # tip kontrolü (panel/ — köke dahil DEĞİL)
+npm run verify:anchor  # Stellar fiat köprüsünü iki yönde de uçtan uca doğrular
 ```
 
 ## Bilinmesi gerekenler
@@ -34,6 +35,10 @@ npm run verify:anchor  # Stellar fiat köprüsünü uçtan uca doğrular
 **`npx tsc --noEmit` 6 hata verir ve bu baseline'dır.** X402PaymentService, ConfirmationCard
 ve PortfolioHistoryChart kaynaklı, bu oturumlardan önce de vardı. Sayı 6'nın üstüne çıkarsa
 sen bir şey kırmışsındır.
+
+**Panel kök tip kontrolüne dahil değil.** `tsconfig.json`'ın `include`'u `src` ve
+`extension`; `panel/` için ayrı `tsconfig.panel.json` var. Panelde çalıştıysan
+`npm run typecheck:panel` de çalıştır, yoksa tipleri ilk okuyan şey tarayıcı olur.
 
 **Mağazaya yüklerken `build:store` kullan.** `build:chrome` manifest'te `key` bırakır ve
 mağaza paketi reddeder. Ama `key` geliştirmede gerekli: olmadan uzantı kimliği her profilde

@@ -1,10 +1,16 @@
 /**
- * verify-anchor-ramp.mjs — drives the TRY -> USDC on-ramp end to end against a live anchor.
+ * verify-anchor-ramp.mjs — drives the full TRY <-> USDC round trip against a live anchor.
  *
  * Proves the whole SEP path in one run: SEP-5 derivation, a funded testnet account, a USDC
  * trustline, SEP-10 authentication, a SEP-6 deposit, the sandbox's bank simulation, and the
  * arrival of real testnet USDC — checked against Horizon rather than the anchor's own word
- * for it.
+ * for it. Then the other direction: a SEP-6 withdrawal, the on-chain payment that funds it,
+ * and the fiat leg coming back.
+ *
+ * The withdrawal is the half worth automating. A deposit that goes wrong costs nothing —
+ * the money never moved. A withdrawal sends real value to a treasury account matched only
+ * by memo, so the failure mode is a payment nobody can attribute. This script is what makes
+ * that path something that gets exercised rather than described.
  *
  * Every run creates a throwaway account from a fresh mnemonic. Nothing here touches the
  * user's wallet and nothing has value; the mnemonic is discarded when the process exits.
@@ -16,7 +22,7 @@
  * script prints both sides.
  */
 
-import { Keypair, Horizon, TransactionBuilder, Networks, Operation, Asset, BASE_FEE } from "@stellar/stellar-sdk";
+import { Keypair, Horizon, TransactionBuilder, Networks, Operation, Asset, BASE_FEE, Memo } from "@stellar/stellar-sdk";
 import { Mnemonic } from "ethers";
 import { derivePath } from "ed25519-hd-key";
 
@@ -89,3 +95,58 @@ for (let i = 0; i < 12; i++) {
 acct = await server.loadAccount(kp.publicKey());
 const bal = acct.balances.find(b => b.asset_code === "USDC");
 log("6) ZINCIRDEKI USDC BAKIYESI:", bal ? bal.balance : "yok");
+
+// ══ Ters yon: USDC -> TRY ══════════════════════════════════════════
+//
+// Anchor'in min off-ramp siniri 1 USDC. Depozitten gelen ~2 USDC bunu karsiliyor.
+const WITHDRAW_USDC = "1.5";
+
+const wd = await (await fetch(
+  `${SEP6}/withdraw?asset_code=USDC&type=bank_account&amount=${WITHDRAW_USDC}`, { headers: H }
+)).json();
+if (!wd.account_id || !wd.memo || !wd.memo_type) {
+  log("7) HATA: anchor eksik cekim talimati dondurdu:", JSON.stringify(wd));
+  process.exit(1);
+}
+log("7) SEP-6 withdraw acildi");
+log("   id       :", wd.id);
+log("   hedef    :", wd.account_id);
+log("   memo     :", `${wd.memo} (${wd.memo_type})`);
+
+// Memo turu, odemeyi cekim talebine baglayan tek sey. Yanlis turde gonderilen odeme
+// eslesmez ve geri alinamaz — o yuzden tanimadigimiz bir turde durur, tahmin etmeyiz.
+const memo = wd.memo_type === "id" ? Memo.id(String(wd.memo))
+  : wd.memo_type === "text" ? Memo.text(String(wd.memo))
+  : null;
+if (!memo) {
+  log(`   HATA: taninmayan memo turu "${wd.memo_type}" — odeme gonderilmedi.`);
+  process.exit(1);
+}
+
+acct = await server.loadAccount(kp.publicKey());
+const payTx = new TransactionBuilder(acct, { fee: BASE_FEE, networkPassphrase: Networks.TESTNET })
+  .addOperation(Operation.payment({ destination: wd.account_id, asset: USDC, amount: WITHDRAW_USDC }))
+  .addMemo(memo)
+  .setTimeout(120).build();
+payTx.sign(kp);
+const payRes = await server.submitTransaction(payTx);
+log("8) USDC odemesi gonderildi");
+log("   hash     :", payRes.hash);
+
+// ── Fiat ayagini izle ──
+let wdFinal = null;
+for (let i = 0; i < 12; i++) {
+  await new Promise(r => setTimeout(r, 2500));
+  const t = await (await fetch(`${SEP6}/transaction?id=${wd.id}`, { headers: H })).json();
+  wdFinal = t.transaction;
+  log(`   [${i + 1}] durum: ${wdFinal?.status}`);
+  if (wdFinal?.status === "completed" || wdFinal?.status === "error") break;
+}
+log("9) CEKIM SONUCU:", wdFinal?.status);
+log("   gonderilen :", wdFinal?.amount_in, "USDC");
+log("   alinan     :", wdFinal?.amount_out, "TRY");
+log("   banka ref  :", wdFinal?.external_transaction_id ?? "-");
+
+acct = await server.loadAccount(kp.publicKey());
+const balAfter = acct.balances.find(b => b.asset_code === "USDC");
+log("10) CEKIM SONRASI USDC BAKIYESI:", balAfter ? balAfter.balance : "yok");

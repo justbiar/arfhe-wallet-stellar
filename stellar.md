@@ -89,19 +89,49 @@ Dört kural, dördü de testli (`src/pages/__tests__/Approve.stellar.test.tsx`):
 SDK ve çözümleyici **dinamik import** ile yükleniyor (`StellarService-*.js`,
 `StellarTxDecoder-*.js` ayrı chunk); Stellar'la ilgisi olmayan onaylar bu yükü taşımıyor.
 
-### 2.6 Fiat köprüsü — panel + `scripts/verify-anchor-ramp.mjs`
+### 2.6 Fiat köprüsü — her iki yön
 
-`npm run verify:anchor` — SEP-1 keşif → SEP-10 auth → SEP-6 deposit → banka simülasyonu →
-Horizon'dan bakiye kontrolü.
+`npm run verify:anchor` artık **gidiş-dönüşün tamamını** sürüyor: SEP-1 keşif → SEP-10 auth →
+SEP-6 deposit → banka simülasyonu → Horizon kontrolü → SEP-6 withdraw → zincirde ödeme →
+fiat ayağı.
 
-**Ölçülmüş sonuç:** 100.00 TRY → 2.0396090 USDC.
+**Ölçülmüş — yükleme (TRY → USDC):** 100.00 TRY → 2.0396090 USDC.
 Hash `4dd687757efa24c5681e2801f457321b2102e39af59796ce600ad08301d35aae`,
 Horizon'da `successful: true`, ledger 4757372, tek `payment` operasyonu.
-Tarayıcıda da uçtan uca çalıştırıldı (`/#/bridge`).
+
+**Ölçülmüş — çekme (USDC → TRY):** 1.5000000 USDC → 72.81 TRY.
+Ödeme hash'i `c144b706cf14d147a013a37e185af5944577b07a9b187e10c9853deb269f293f`,
+banka referansı `FAST-P4B9NI27VW`, bakiye 2.0396090 → 0.5396090.
+İki yoklamada sonuçlandı.
+
+**Tarayıcıda da doğrulandı** (`/#/bridge`, demo imzalayıcı): yükleme hash
+`f355bf27270f6ffa4b9394e34e3f9b1827d8ea2d33ad0cd80616da618cf4befe`, çekme hash
+`2f5d5dd9d20316dfc58dc9f39aae55b87dead4fae310ac352bfda0ce41767540` → 72.81 TRY.
+
+Çekme yönü yüklemeden **yapı olarak farklı** ve panel bunu ayırıyor: yüklemede önce fiat
+gelir, çekmede önce kullanıcı zincirde öder. Değer geri dönmeden önce çıktığı için talep
+açma ile ödeme iki ayrı düğme — anchor'ın verdiği hedef hesap ve memo, kullanıcı gönder
+demeden **önce** ekranda.
 
 Anchor: `tr-mock-anchor.fly.dev` (SEP-6 sandbox). Banka ve KYC simüle, **Stellar ayağı
 gerçek**. Kodda **yalnızca ana alan adı sabit**; uçlar, passphrase ve varlık ihraççısı
 `stellar.toml`'dan çalışma anında okunuyor.
+
+### 2.7 Panel imzalayıcısı — `panel/lib/signer.ts`
+
+Panel iki şekilde imzalayabiliyor ve fark, panelin savunduğu şeyin ta kendisi:
+
+| Mod | Anahtar nerede | Ne oluyor |
+|---|---|---|
+| `arfhe` | Uzantıda | Zarf gider, imzalı zarf döner; arada bir insan onaylar |
+| `demo` | Bu sekmede (sessionStorage) | Hiçbir şey kurulu olmayan ziyaretçi de akışı görebilsin |
+
+SEP çağrıları, güven hattı ve çekim ödemesi `PanelSigner` arayüzüne yazılı — yani demo yolu,
+gerçek yoldan **sapabilecek ayrı bir uygulama değil**, aynı yolun farklı imzalayıcısı.
+
+**Uzantı yolu kodda tam ama gerçek tarayıcıda uçtan uca denenmedi** — test edilen ortamda
+uzantı yüklü değildi. Sayfa uzantıyı bulamadığında düğme kapanıyor ve bunu söylüyor; o kısım
+görüldü.
 
 ---
 
@@ -109,9 +139,9 @@ gerçek**. Kodda **yalnızca ana alan adı sabit**; uçlar, passphrase ve varlı
 
 | Konu | Durum |
 |---|---|
-| Çekme (withdraw) yönü | Bağlanmadı, ekranda "yapım aşamasında" yazıyor |
 | Confidential token katmanı | Hiç başlanmadı |
 | Tarayıcıda kanıt üretimi (`bb.js`) ölçümü | Yapılmadı |
+| Panel'in uzantı ile uçtan uca denenmesi | Kod tam, gerçek tarayıcıda çalıştırılmadı |
 
 ---
 
@@ -135,8 +165,25 @@ tersini söyler — hat kaldırılırken "açılacak" yazar.
 **Güven hattı olmadan anchor ödeyemez** — `pending_trust`'ta kalır ya da talep edilebilir
 bakiyeye döner. Panel bunu bağlanırken açıyor.
 
-**Anchor'ın sonuçlanma süresi değişken** — gözlemlenen: 2–4 yoklama. Dar timeout, başarılı
-olacak bir işlemi hata diye raporlar.
+**Anchor'ın sonuçlanma süresi değişken** — gözlemlenen: yüklemede 2–4, çekmede 2 yoklama.
+Dar timeout, başarılı olacak bir işlemi hata diye raporlar.
+
+**`/sep6/info`'daki min/max yanıltıcı.** Deposit için `0.5 – 300` yazıyor, gerçek sınır
+**50 – 3000 TRY** (uçtan doğrulandı: 10 → "amount below minimum (50.00 TRY)", 4000 → "above
+maximum (3000 TRY)"). `info` varlık birimini, `deposit?amount=` TRY'yi konuşuyor. Panel'in
+sabitleri doğru; `info`'ya bakıp "düzeltmek" onları bozar.
+
+**Çekme memo'su tahmin edilmez.** `memo_type` tanınmıyorsa işlem **kurulmaz** (`buildMemo`
+fırlatır). Yanlış türde memo ile hazine hesabına giden ödeme eşleşmez ve geri gelmez —
+burada "makul bir varsayılana düşmek" parayı kaybetmenin adı.
+
+**Panel kök `tsconfig.json`'a dahil değil.** `include` yalnızca `src` ve `extension`, Vite de
+tip kontrolü yapmaz — yani `panel/` dosyalarını tipler açısından ilk okuyan şey tarayıcıydı.
+`npm run typecheck:panel` bunun için var; kök baseline'ı (6) bozmasın diye ayrı config.
+
+**Tema başlıkları Türkçe büyütüyor.** `variant="caption"` üstünde `text-transform: uppercase`
+var ve Türkçe'de `"id"` → `"İD"`. Protokol değerlerini (memo türü, varlık kodu) başlığa
+koymayın; alt açıklama satırı dönüştürmüyor.
 
 ---
 

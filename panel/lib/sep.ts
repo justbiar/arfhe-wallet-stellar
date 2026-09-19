@@ -8,8 +8,9 @@
  * for constants of their own.
  */
 
-import { Keypair, TransactionBuilder } from "@stellar/stellar-sdk";
+import { TransactionBuilder } from "@stellar/stellar-sdk";
 import { ANCHOR_HOME_DOMAIN, ANCHOR_ASSET_CODE } from "./anchor";
+import type { PanelSigner } from "./signer";
 
 export interface AnchorConfig {
   webAuthEndpoint: string;
@@ -50,23 +51,29 @@ export async function discoverAnchor(homeDomain = ANCHOR_HOME_DOMAIN): Promise<A
  * There is no password and no account — the signature over the anchor's challenge IS the
  * login. The challenge is signed locally and only the signed transaction leaves the browser.
  */
-export async function authenticate(cfg: AnchorConfig, kp: Keypair): Promise<string> {
-  const chRes = await fetch(`${cfg.webAuthEndpoint}?account=${encodeURIComponent(kp.publicKey())}`);
+export async function authenticate(cfg: AnchorConfig, signer: PanelSigner): Promise<string> {
+  const chRes = await fetch(`${cfg.webAuthEndpoint}?account=${encodeURIComponent(signer.publicKey)}`);
   const challenge = await chRes.json();
   if (!chRes.ok || !challenge.transaction) {
     throw new Error(challenge.error ?? `Giriş isteği reddedildi (HTTP ${chRes.status}).`);
   }
 
-  const tx = TransactionBuilder.fromXDR(
-    challenge.transaction,
-    challenge.network_passphrase ?? cfg.networkPassphrase
-  );
-  tx.sign(kp);
+  // The anchor states the network it built the challenge for. Signing a challenge for one
+  // network with a key the user believes is on another is exactly the confusion SEP-10's
+  // own spec warns about, so a mismatch stops here rather than being signed and rejected.
+  const challengeNetwork = challenge.network_passphrase ?? cfg.networkPassphrase;
+  if (challengeNetwork !== cfg.networkPassphrase) {
+    throw new Error(
+      `Anchor başka bir ağ için giriş isteği gönderdi: "${challengeNetwork}".`
+    );
+  }
+
+  const signedXdr = await signer.signXdr(challenge.transaction);
 
   const tokRes = await fetch(cfg.webAuthEndpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ transaction: tx.toXDR() }),
+    body: JSON.stringify({ transaction: signedXdr }),
   });
   const body = await tokRes.json();
   if (!tokRes.ok || !body.token) {
@@ -136,6 +143,62 @@ export async function simulateBankTransfer(
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `Havale simülasyonu reddedildi (HTTP ${res.status}).`);
   }
+}
+
+export interface WithdrawOrder {
+  id: string;
+  /** The anchor's treasury. The USDC payment goes here and nowhere else. */
+  destination: string;
+  /** The reference that ties the payment to this order. */
+  memo: string;
+  memoType: string;
+  /** The anchor's own sentence about what it will do, shown verbatim. */
+  message: string;
+  /** Where the fiat lands, when the anchor names an account. */
+  iban: string | null;
+  /** Minimum off-ramp the anchor will accept, in the asset's units. */
+  minAmount: string | null;
+}
+
+/**
+ * SEP-6 withdraw — the opposite direction, and the one where a mistake is unrecoverable.
+ *
+ * Deposit is safe to get wrong: the money has not moved, and a bad order is abandoned. A
+ * withdrawal is the user sending real value to a treasury account, matched to their request
+ * by memo alone. So every field the payment depends on is required here, and a response
+ * missing one fails before anything is sent rather than after.
+ *
+ * `amount` is USDC on this side, unlike deposit's TRY.
+ */
+export async function startWithdraw(
+  cfg: AnchorConfig,
+  jwt: string,
+  amountUsdc: string
+): Promise<WithdrawOrder> {
+  const url =
+    `${cfg.transferServer}/withdraw?asset_code=${ANCHOR_ASSET_CODE}` +
+    `&type=bank_account&amount=${encodeURIComponent(amountUsdc)}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${jwt}` } });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error ?? `Çekim açılamadı (HTTP ${res.status}).`);
+
+  if (!body.id || !body.account_id || !body.memo || !body.memo_type) {
+    throw new Error("Anchor eksik çekim talimatı döndürdü: hesap ya da memo yok.");
+  }
+
+  const message: string = body.extra_info?.message ?? "";
+  return {
+    id: body.id,
+    destination: body.account_id,
+    memo: String(body.memo),
+    memoType: body.memo_type,
+    message,
+    // No structured field carries the destination IBAN, so it is pulled out of the
+    // anchor's sentence for display only — the payment does not depend on it, and a null
+    // here costs nothing but a blank line.
+    iban: message.match(/\b(TR\d{24})\b/)?.[1] ?? null,
+    minAmount: body.min_amount != null ? String(body.min_amount) : null,
+  };
 }
 
 export interface TxStatus {

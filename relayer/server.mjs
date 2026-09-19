@@ -71,8 +71,20 @@ const server = createServer(async (req, res) => {
   if (req.method === "GET" && req.url === "/health") {
     return send(res, 200, { ok: true, publicKey: relayer.publicKey, pools: relayer.allowedPools });
   }
+  // A bare "not found" is what this answered before, and it reads as a broken service to
+  // anyone who opened the port in a browser — which can only ever send a GET. Saying what
+  // the routes are costs nothing and leaks nothing that /health does not already publish.
+  if (req.url === "/relay" && req.method !== "POST") {
+    return send(res, 405, {
+      error: "/relay takes POST with {pool, proof, extData}",
+      code: "method_not_allowed",
+    });
+  }
   if (req.method !== "POST" || req.url !== "/relay") {
-    return send(res, 404, { error: "not found" });
+    return send(res, 404, {
+      error: "not found",
+      endpoints: ["GET /health", "POST /relay {pool, proof, extData}"],
+    });
   }
 
   const source = req.socket.remoteAddress ?? "unknown";

@@ -1107,6 +1107,8 @@
     "notFunded": "This account does not exist on the ledger yet. On Stellar an account is not created until something funds it — on testnet, friendbot can.",
     "noMnemonic": "This account has no recovery phrase. A Stellar key cannot be derived from an account imported from a raw private key, and inventing an unrelated one would hand you an address your backup cannot restore.",
     "readOnly": "Read-only for now. The wallet signs Stellar transactions when a site asks, on the approval screen — there is no send form here.",
-    "settingsDesc": "The Stellar address derived from your recovery phrase, and its balances"
+    "settingsDesc": "The Stellar address derived from your recovery phrase, and its balances",
+    "noAccount": "No active account. If the wallet is locked, unlock it first.",
+    "timedOut": "Stellar data did not arrive in time. The network is not answering, or a module failed to load."
   }
 }

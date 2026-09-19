@@ -27,6 +27,23 @@ import { toUserMessage } from "../backend/UserFacingError.js";
 
 const EXPLORER = "https://stellar.expert/explorer/testnet/account";
 
+/** How long to wait before calling it stuck. Derivation is milliseconds; Horizon is one call. */
+const TIMEOUT_MS = 15_000;
+
+/**
+ * Fails loudly instead of hanging.
+ *
+ * Both steps here are fast when they work. Anything slower than this is not slow, it is
+ * stuck — a module that will not load, a network that will not answer — and a spinner that
+ * never resolves tells the user nothing about which.
+ */
+function withTimeout<T>(work: Promise<T>, message: string): Promise<T> {
+  return Promise.race([
+    work,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(message)), TIMEOUT_MS)),
+  ]);
+}
+
 interface Balance {
   code: string;
   issuer: string | null;
@@ -42,6 +59,8 @@ export default function SettingsStellar() {
   const account = context?.accountManager?.GetActive();
 
   const [address, setAddress] = useState<string | null>(null);
+  /** True when there is no active account at all — a different thing from having no phrase. */
+  const [noAccount, setNoAccount] = useState(false);
   const [balances, setBalances] = useState<Balance[] | null>(null);
   const [exists, setExists] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
@@ -50,15 +69,25 @@ export default function SettingsStellar() {
   const [reloadAt, setReloadAt] = useState(0);
 
   useEffect(() => {
-    if (!account) return;
     let cancelled = false;
 
     void (async () => {
       setLoading(true);
       setError("");
+
+      // The early return here used to sit above `setLoading(false)`, so a render with no
+      // active account — the context is not ready, or the wallet is locked — left the
+      // spinner running for ever with nothing behind it. An absent account is a state to
+      // report, not a wait.
+      if (!account) {
+        if (!cancelled) { setNoAccount(true); setAddress(null); setLoading(false); }
+        return;
+      }
+      if (!cancelled) setNoAccount(false);
+
       try {
         const service = await import("../backend/StellarService.js");
-        const derived = await service.getAddress(account);
+        const derived = await withTimeout(service.getAddress(account), t("stellar.timedOut"));
         if (cancelled) return;
         setAddress(derived);
 
@@ -70,7 +99,7 @@ export default function SettingsStellar() {
           return;
         }
 
-        const read = await service.getBalances(derived);
+        const read = await withTimeout(service.getBalances(derived), t("stellar.timedOut"));
         if (cancelled) return;
         setExists(read.exists);
         setBalances(read.balances);
@@ -123,11 +152,15 @@ export default function SettingsStellar() {
 
       {/* An account with no recovery phrase has no Stellar address, and saying why is the
           whole content of this screen for those users. */}
-      {!loading && !error && address === null && (
+      {!loading && !error && noAccount && (
+        <Alert severity="info" sx={{ borderRadius: 2 }}>{t("stellar.noAccount")}</Alert>
+      )}
+
+      {!loading && !error && !noAccount && address === null && (
         <Alert severity="info" sx={{ borderRadius: 2 }}>{t("stellar.noMnemonic")}</Alert>
       )}
 
-      {!loading && !error && address && (
+      {!loading && !error && !noAccount && address && (
         <>
           <Paper elevation={0} sx={{ p: 2, borderRadius: 3, bgcolor: alpha(theme.palette.primary.main, 0.05), mb: 2 }}>
             <Stack direction="row" alignItems="center" gap={0.5}>

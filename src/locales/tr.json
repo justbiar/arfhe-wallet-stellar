@@ -1107,6 +1107,8 @@
     "notFunded": "Bu hesap henüz zincirde yok. Stellar'da bir hesap, birisi onu fonlayana kadar oluşmaz — testnet için friendbot kullanılabilir.",
     "noMnemonic": "Bu hesabın kurtarma ifadesi yok. Özel anahtarla içe aktarılan hesaplardan Stellar anahtarı türetilemez; ilgisiz bir anahtar üretmek, yedeğinizin geri getiremeyeceği bir adres vermek olurdu.",
     "readOnly": "Şimdilik yalnızca görüntüleme. Cüzdan Stellar işlemlerini bir sitenin isteği üzerine, onay ekranında imzalar — buradan gönderim yapılmaz.",
-    "settingsDesc": "Kurtarma ifadenizden türetilen Stellar adresi ve bakiyeleri"
+    "settingsDesc": "Kurtarma ifadenizden türetilen Stellar adresi ve bakiyeleri",
+    "noAccount": "Aktif hesap yok. Cüzdanın kilidi açık değilse önce açın.",
+    "timedOut": "Stellar bilgileri zamanında gelmedi. Ağ yanıt vermiyor ya da bir modül yüklenemedi."
   }
 }

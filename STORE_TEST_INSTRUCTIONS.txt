@@ -1,0 +1,54 @@
+There is no account and no login. Arfhe Wallet is self-custodial: keys are generated on the
+reviewer's own machine and there is no server to sign in to, so the Username and Password
+fields above are intentionally blank. Everything below can be done without any credentials
+from us.
+
+This is a TESTNET-ONLY build. It runs on Sepolia, Base Sepolia and Arbitrum Sepolia and
+cannot be pointed at Ethereum mainnet. No real funds are involved at any point.
+
+SETUP (about 2 minutes)
+
+1. Install and open the extension. Click "Create Wallet".
+2. Enter any username, tick the two acknowledgements, click "Generate Phrase".
+3. The recovery phrase is shown. Copy it, click "I Saved My Phrase", then re-enter the three
+   requested words to confirm.
+4. Set any password (this encrypts the vault locally; it is not sent anywhere).
+   The wallet opens on Sepolia.
+
+GETTING TEST FUNDS
+
+The wallet starts empty. To see balances and send flows, request free Sepolia ETH from any
+public faucet — the wallet links these itself, and no payment or account is required:
+
+  Sepolia          https://cloud.google.com/application/web3/faucet/ethereum/sepolia
+  Base Sepolia     https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet
+  Arbitrum Sepolia https://faucet.quicknode.com/arbitrum/sepolia
+
+Copy the wallet address from the header, paste it into the faucet, and the balance appears
+within a minute or two.
+
+WHAT TO EXERCISE
+
+- Home: total balance, token list, network switcher (three testnets).
+- Send: the blue button in the bottom bar. Enter any address and amount; the confirmation
+  screen simulates the transaction and shows the resulting balance changes before signing.
+- Privacy (Shield / Unshield): the wallet's distinguishing feature. "Shield" converts a
+  public balance into an FHE-encrypted one held by a wrapper contract; the amount is
+  ciphertext on-chain. "Unshield" converts it back.
+- Explore -> connect to a dApp over WalletConnect v2, or visit any EIP-6963-compatible dApp
+  and pick "Arfhe Wallet" from its wallet list. Only the three testnets above are offered.
+- Arfio (AI assistant): ask "what's my balance". It can read wallet state and PROPOSE a
+  transaction, but it cannot sign or broadcast — every state-changing action ends at a
+  confirmation card the reviewer approves manually. It has no access to the private key.
+- Revoke: lists ERC-20 approvals, connected sites and active WalletConnect sessions, each
+  revocable.
+
+NOTES FOR REVIEW
+
+- Host permissions are used for JSON-RPC to blockchain nodes, the WalletConnect relay, and a
+  content script that announces the wallet to pages via EIP-6963. No page content is read.
+- No remote code is loaded. All JavaScript and the FHE WebAssembly module ship inside the
+  package; the manifest CSP is script-src 'self' 'wasm-unsafe-eval'.
+- Private keys and the recovery phrase never leave the device.
+
+Questions during review: arfhewallet@protonmail.com

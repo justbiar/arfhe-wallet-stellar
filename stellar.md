@@ -908,6 +908,70 @@ Giriş açık, varış gizli. Ve bu **mixer değil**: karışım kümesi yok, te
 
 ---
 
+## 5.15 Bu zincir izlenebilir mi? — evet, ve tamamen
+
+Soru soruldu, cevap anlatılmadı: kendi işlemlerimiz üzerinden **gözlemci gibi** geriye
+yürünedi. Sonuç: **bütün yol açık.**
+
+### Yakma işlemi iki kimliği tek olayda birleştiriyor
+
+`ebc5607f…` işleminin parametreleri Horizon'dan, kimseye sormadan okunuyor:
+
+```
+kaynak (Stellar) : GAZ2BOPKURAS6VD5NMLAFPU2QDPLU4TAOBHVWZB5MIAJJIUFERWC5NOA
+tutar            : 10396090  (= 1.0396090 USDC)
+hedef zincir     : 6 (Base)
+hedef adres      : 0x232bae5d6548f9f01a4152584498497683e24a5a   ← düz metin
+```
+
+**Tek işlem, üç bilgi:** Stellar kimliği, EVM kimliği, ve tutar. CCTP'nin doğası bu —
+mesajın alıcıyı taşıması gerekiyor, yoksa hedef zincir kime basacağını bilemez.
+
+### Base tarafından da yürünüyor
+
+`0x232BAe5D…` adresine gelen USDC transferleri sorgulandığında iki giriş görünüyor: biri
+sıfır adresten (CCTP mint'i), biri ara hesaptan. Mint işleminin çağrı verisi CCTP mesajını
+olduğu gibi taşıyor; içinde kaynak domain 27 yazıyor. Yani hangi uçtan başlarsan başla
+diğer uca varıyorsun.
+
+### Tam iz
+
+| Kim görüyor | Ne görüyor |
+|---|---|
+| Herkes | Stellar hesabı ↔ EVM adresi bağlantısı, tutarıyla |
+| Herkes | Anchor'ın o Stellar hesabına 2.0396090 USDC ödediğini |
+| Herkes | Ara hesap ile cüzdan arasındaki transferi |
+| **Anchor** | Bunların üstüne **IBAN, isim, KYC** |
+
+Yani "kim kime kaç dolar attı" sorusunun cevabı bu zincirde **tamamen açık**, ve fiat
+ucunda gerçek bir kimliğe bağlanıyor.
+
+### Shield ne değiştirir — ve ne değiştirmez
+
+**Geçmişi değiştirmez.** Shield işleminin kendisi de açık: "şu adres şu kadar USDC
+gizledi" zincirde yazar.
+
+Değişen şey **sonrası**: gizlendikten sonraki bakiye ve transferler görünmez. Yani
+
+> Shield geleceği gizler, geçmişi değil.
+
+Rampa yolu, doğası gereği gizlenemez: anchor bilinen bir adrese bilinen bir tutar ödemek
+zorunda. Bunu hiçbir kripto çözmez, çünkü sorun kriptografik değil.
+
+### Tasarım sonucu
+
+Kullanıcının gizlilik beklentisi "param nereden geldi görünmesin" ise bu zincir onu
+karşılamıyor ve karşılayamaz. "Ne kadarım var ve kime ödüyorum görünmesin" ise karşılıyor
+— shield'den sonrası için.
+
+Ürün metninin bu ayrımı açıkça yapması gerekiyor. Aksi halde kullanıcı, sahip olmadığı bir
+korumaya güvenerek davranır — ve bu, hiç gizlilik vaat etmemekten kötüdür.
+
+Pratik hafifletme: her rampa için **taze bir EVM adresi** kullanmak, giriş ile ana kimliği
+ayırır. Anchor yine bilir; zincirdeki gözlemci bilmez.
+
+---
+
 ## 6. Panel (demo sitesi)
 
 `panel/`, kökün bağımlılıklarını paylaşan ikinci bir Vite girişi (`vite.panel.config.js`).

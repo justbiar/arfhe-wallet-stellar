@@ -1,155 +1,136 @@
-# Gizli çıkış rampası — tasarım ve yol haritası
+# Gizli çıkış rampası — Stellar hackathon tasarımı
 
-> 19 Eylül 2026. Bu dosya bir bulgu kaydı değil, bir **tasarım önerisi**. Kararlar
-> alınmadı; alternatifler ve gerekçeleri yazılı.
+> 19 Eylül 2026. Tasarım önerisi, karar değil.
 
-## 1. İstenen
+## 1. Kısıtlar (değiştirilemez)
 
-> Base'deki gizli USDC bakiyemi bir IBAN'a TRY olarak göndermek istiyorum.
-> **Bakiye gizli olsun, harcama da gizli olsun.**
+1. **Stellar hackathonu.** Stellar merkezde olmak zorunda. EVM'e kaçmak proje dışı.
+2. **Anchor sabit:** `tr-mock-anchor.fly.dev`, SEP-6, TRY ⇄ USDC. Değiştiremiyoruz,
+   gizli ödeme kabul etmesini sağlayamıyoruz.
+3. **Hedef:** bakiye gizli, harcama gizli, sonuç bir IBAN'a TRY.
 
-Bunun kesin sınırı şu: **anchor tutarı ve IBAN'ı bilmek zorunda.** Bankaya para
-gönderiyor. Yani "gizli harcama" ancak şu anlama gelebilir:
+## 2. Sabit anchor ne dayatıyor
 
-> Anchor görür. **Başka kimse görmez.**
+Anchor gizli token kabul etmiyor. Çekim için ona **açık bir USDC ödemesi** gitmek zorunda,
+memo'suyla birlikte. Bu ödemenin tutarı zincirde görünür ve bunu değiştiremeyiz.
 
-Bu, en baştan beri söylenen vizyonun aynısı — ve ulaşılabilir bir hedef.
+Yani "harcamayı gizlemek" burada şu anlama **gelemez**: "anchor'a ne kadar gittiği
+görünmesin."
 
-## 2. Bugün ne sızıyor
+Gelebileceği anlam şu, ve bu zayıf bir hedef değil:
 
-Mevcut çıkış yolu:
+> Zincire bakan biri, **o ödemeyi sana bağlayamaz**, ve **bakiyeni göremez**.
 
-| Adım | Zincirde görünen |
-|---|---|
-| Unshield N USDC | Adresin, **tutar** |
-| Anchor hazinesine gönder | Adresin → **bilinen hazine adresi**, **tutar** |
-
-Gözlemci şunu okur: *"X adresi, tanınan bir anchor'a N dolar bozdurdu."* Anchor'ın
-KYC'siyle birleşince kimlik de belli. **İstenen şeyin tam tersi.**
-
-## 3. Mekanizma: ERC-7984
-
-Aranan özellik bir standartta zaten var.
-
-**ERC-7984** — gizli fungible token standardı. Bakiyeler ve transfer tutarları `euint64`
-şifreli tutamaçlar. Kritik davranış:
-
-> Bir transfer gerçekleştiğinde kontrat, tutar tutamacının **çözme hakkını gönderene ve
-> alıcıya** verir. Başka kimse okuyamaz.
-
-Yani **alıcı olarak anchor tutarı çözebilir, zincir çözemez.** İhtiyaç duyulan şey tam
-olarak bu ve uydurmaya gerek yok — OpenZeppelin'in `openzeppelin-confidential-contracts`
-deposunda uygulaması var (v0.4.0).
-
-## 4. Önerilen akış
+## 3. Tasarım
 
 ```
-[Arfhe · Base]                      [Confidential Anchor]        [Banka]
- cUSDC (ERC-7984)
-   │ 1. çekim isteği: tutar + IBAN (HTTPS, SEP-6 şeklinde)
-   │───────────────────────────────────►
-   │ 2. anchor TAZE bir alıcı adresi döner
-   │◄───────────────────────────────────
-   │ 3. confidentialTransfer(tazeAdres, sifreliTutar)
-   │══ zincir: "X → bir adres, tutar gizli" ══►
-   │                                     4. anchor alıcı olarak
-   │                                        tutarı çözer (ACL hakkı)
-   │                                     5. IBAN'a TRY ──────────────►
-   │ 6. durum: completed
+1. TRY → USDC            anchor, SEP-6            [açık — banka ayağı, kaçınılmaz]
+2. USDC → gizli katman   shield / deposit          [bundan sonra bakiye gizli]
+3. gizli transferler     kullanıcılar arası        [tutar gizli]
+4. çıkış: gizli katmandan TAZE bir hesaba çek
+5. taze hesap anchor'a öder, SEP-6 withdraw       [tutar açık, ama kimlik bağlantısız]
+6. anchor IBAN'a TRY öder
 ```
 
-### Ne sızar, ne sızmaz
+Kilit nokta **4. adım**: çıkış, geçmişi olmayan bir hesaba yapılır. Zincirde görünen son
+hareket *"tanımadığım bir adres anchor'a X dolar ödedi"* olur. Ana hesabın anchor'a hiç
+dokunmaz.
+
+Anchor yine kim olduğunu bilir — SEP-10 ile giriş yapıyorsun, KYC onda. **Bilmesi gereken
+zaten o.**
+
+### Ne gizli, ne değil
 
 | | |
 |---|---|
-| **Gizli** | Tutar. Bakiyen. Ödemenin büyüklüğü |
-| **Gizli** | Karşı tarafın anchor olduğu — **her çekimde taze adres** kullanılırsa |
-| Açık | Bir gizli transfer yaptığın, ve zamanı |
-| Anchor bilir | Tutar, IBAN, kimlik. **Tasarım gereği** |
+| **Gizli** | Bakiyen. Gizli katman içindeki transferler ve tutarları |
+| **Gizli** | Çıkış yapan kişinin sen olduğun (zincire göre) |
+| Açık | Anchor'a giden son ödemenin tutarı |
+| Açık | TRY girişinin tutarı |
+| Anchor bilir | Her şey. Tasarım gereği |
 
-Taze adres detayı önemsiz görünür ama akışın yarısı odur: sabit bir hazine adresine
-gönderirsen, tutar gizli olsa bile *"bu kişi anchor'a bir şey gönderdi"* herkese açıktır.
-SEP-6'nın memo'yla yaptığı ayrımın EVM karşılığı.
+Bu, sabit bir anchor'la ulaşılabilecek en iyi nokta. Daha fazlası ancak anchor'ın kendisi
+gizli ödeme kabul ederse mümkün — ve o, bu hackathonun kapsamı dışında ama **doğal devamı**
+(bkz. §7).
 
-## 5. Hangi FHE?
+## 4. Hangi gizli katman
 
-Üçü de "alıcı çözebilir" özelliğini veriyor. Fark, bizim için pratikte:
+İki seçenek de Stellar'da, ikisi de testnette dağıtılmış durumda, ikisi de ölçüldü
+(`stellar.md` §5.1 ve §5.8).
 
-| | Zama | **Fhenix CoFHE** | Inco |
-|---|---|---|---|
-| Ağlar | Ethereum mainnet + Sepolia | **Sepolia, Base, Arbitrum Sepolia** | Base, Solana devnet, Celo |
-| Arfhe'de durumu | — | **Zaten kurulu ve çalışıyor** | — |
-| Standart | ERC-7984 (OZ uygulaması) | FHERC-20 | ERC-7984'e katkıda bulunuyor |
-| Olgunluk | Mainnet, cUSDC canlı, ~$40M TVL | Koprosesör canlı | Lightning canlı (TEE), tam FHE geliştirmede |
+| | **Confidential Token** | **Privacy Pools (SPP)** |
+|---|---|---|
+| Gizlenen | Tutar, bakiye | Tutar, bakiye, **adresler** |
+| Açık kalan | Gönderen + alıcı adresi | Ücreti ödeyen |
+| Şekil | Şifreli bakiye | **Mixer** |
+| Uyum hikâyesi | Denetçi anahtarı | ASP listeleri / GVK |
+| Kurulum riski | UltraHonk — **tören yok** | Groth16 — **"local" kurulum** |
+| SDF'nin yönü | Aktif olarak bunu itiyor | Yan dal |
+| USDC havuzu | Yok, kurmak gerek | Yok, kurmak gerek |
 
-**Öneri: Fhenix CoFHE ile başla.** Sebep mühendislik: cüzdanda zaten var, tam bizim üç
-ağımızda çalışıyor, shield/unshield akışı yazılmış durumda. Zama daha olgun ve standardı
-o taşıyor, ama Arfhe'yi başka bir zincire taşımak gerekir.
+**Öneri: Confidential Token.** Üç sebep:
 
-**Faz 0'da cevaplanacak soru:** Fhenix ERC-7984 uyumlu bir token destekliyor mu, yoksa
-kendi FHERC-20'si mi? Standarda uymak, yarın Zama'ya geçmeyi ucuzlatır.
+1. **Mixer değil.** Türkiye'de banka ile konuşacak bir üründe mixer ciddi bir yük.
+2. **Tören sorunu yok.** SPP'nin Groth16 anahtarları tek makinede üretilmiş; UltraHonk
+   şeffaf kurulum kullanıyor, güvenilecek kimse yok.
+3. **SDF'nin kendi yönü bu.** Hackathon jürisi için önemsiz değil.
 
-## 6. Ciddi bir risk: ihraççı dondurması
+Bedeli: adresler açık kalıyor. Ama 4. adımdaki taze hesap numarası bu açığı zaten
+kapatıyor — çıkışta kimlik bağlantısı kurulamıyor.
 
-Mayıs 2026'da **Circle, Zama'nın cUSDC kontratını kara listeye aldı ve ~12,6 milyon
-dolar donduruldu** (basına yansıdığı kadarıyla).
+## 5. Bilinen engeller ve çözümleri
 
-Ders açık: **USDC'yi gizli bir sarmalayıcıya koymak, ihraççının dondurma yetkisini ortadan
-kaldırmıyor — tam tersine dikkat çekiyor.** Bizim tasarımda da gizli token'ın altında
-gerçek USDC yatacak.
+**CT'nin token'ı XLM sarmalıyor, USDC değil.** Anchor USDC ödüyor. Kendi sarmalayıcımızı
+anchor'ın USDC'si için dağıtmamız gerekiyor — SAC adresi
+`CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA`. Demo deposunda
+`pnpm deploy:contracts` var, mekanik iş.
 
-Hafifletme seçenekleri, hiçbiri bedava:
-- Testnet'te kalmak (bugünkü durum)
-- USDC yerine ihraççısı daha esnek bir varlık
-- İhraççıyla önceden konuşmak
-- Riski kabul edip kullanıcıya **açıkça** söylemek
+**7 gün event saklama.** Gizli bakiyenin açılımları event'lerde. Hackathon demosunda sorun
+değil; üründe indexer şart (SDF de aynı şeyi söylüyor, `stellar.md` §5.13).
 
-Bu, teknik değil kurumsal bir risk ve yol haritasının en başında karara bağlanmalı.
+**Tarayıcıda kanıt üretimi.** Ölçüldü: izolasyon açıkken ~4,9 sn, panelde çalışıyor.
 
-## 7. Yol haritası
+**`@ctd/sdk` npm'de yok.** Kaynaktan derlenir; e2e akışı zaten çalıştırıldı.
 
-### Faz 0 — Karar ve ölçüm (küçük)
-- [ ] Fhenix ERC-7984 destekliyor mu, yoksa FHERC-20 mü? Standarda uymanın maliyeti ne?
-- [ ] Base Sepolia'da bir ERC-7984 (ya da FHERC-20) token deploy et, **alıcı tarafın
-      tutarı çözebildiğini ölç** — tüm tasarım bu tek davranışa dayanıyor
-- [ ] İhraççı riski kararı: hangi varlık, hangi ağ, kime söylüyoruz
+## 6. Yol haritası
 
-### Faz 1 — Cüzdan tarafı
-- [ ] Mevcut shield/unshield akışını ERC-7984'e taşı (ya da yanına ekle)
-- [ ] **Gizli transfer** arayüzü: alıcı adres + şifreli tutar
-- [ ] Onay ekranında gizli transferi anlamlı göster — tutar kullanıcıya açık, zincire değil
+### Faz 0 — Tek ölçüm, her şeyi belirler *(yarım gün)*
+- [ ] CT'nin `withdraw` işlemini **üçüncü bir taraf gönderebiliyor mu?** SPP'de
+      `transact`'in `sender`'ı serbestti ve relayer'ımız bunu kullandı. CT'de aynı boşluk
+      varsa çıkış tamamen bağlantısız olur; yoksa taze hesap yeterli.
+- [ ] Anchor'ın USDC'si için bir confidential token sarmalayıcısı dağıt
 
-### Faz 2 — Anchor (asıl eksik parça)
-- [ ] HTTP servisi, SEP-6 şeklinde: `/info`, `/withdraw`, `/transaction`
-- [ ] **Çekim başına taze alıcı adresi** üretimi ve eşleştirme
-- [ ] Çözme istemcisi: gelen gizli transferin tutarını alıcı olarak çöz
-- [ ] Tutar ↔ çekim talebi eşleştirme, tutarsızlıkta reddetme
-- [ ] TRY ödemesi: önce simüle, sonra gerçek banka entegrasyonu
-- [ ] Anahtar yönetimi: çözme anahtarı anchor'ın en kritik sırrı
+### Faz 1 — Cüzdan *(çekirdek)*
+- [ ] `register` / `deposit` / `merge` akışı — USDC'yi gizli katmana al
+- [ ] Gizli bakiyeyi göster (Stellar hesabı ekranının yanında)
+- [ ] Gizli transfer arayüzü + onay ekranı desteği (`StellarTxDecoder` hazır)
 
-### Faz 3 — Giriş yönü
-- [ ] TRY → cUSDC: anchor gizli token'ı **doğrudan mint edebilir**, böylece giriş bile
-      tutar açığa çıkarmadan yapılabilir. Çıkıştan daha kolay, sonraya bırakılabilir.
+### Faz 2 — Çıkış akışı *(hikâyenin tamamlandığı yer)*
+- [ ] Gizli katmandan taze bir hesaba çekme
+- [ ] Taze hesapla SEP-10 + SEP-6 withdraw (panelde iki yön de çalışıyor)
+- [ ] Ekranda **ne gizlendiğini göster** — jüri için en önemli kısım bu
 
-### Faz 4 — Uyum
-- [ ] Denetçi/görüntüleme anahtarı: ERC-7984 ACL'i buna uygun
-- [ ] Kayıt tutma, MASAK beklentileri, KVKK konumlandırması
+### Faz 3 — Anlatı
+- [ ] Panelde yan yana karşılaştırma: aynı işlem, açık defterde ne görünüyor / bizde ne
+- [ ] Denetçi anahtarı: uyum hikâyesi, KVKK konumlandırması
 
-## 8. Stellar bu tabloda nerede
+## 7. Doğal devamı (hackathon sonrası)
 
-**Bu akışta yok.** Çıkış rampası baştan sona EVM: gizli token EVM'de, FHE EVM'de, anchor
-EVM'de dinliyor.
+Gerçek hedef, anchor'ın **kendisinin** gizli ödeme kabul etmesi. O zaman 4–5. adımdaki
+taze hesap numarasına gerek kalmaz ve anchor'a giden tutar da gizlenir.
 
-Stellar yalnızca **giriş** yönünde, ve yalnızca gerçek bir Türk SEP-6 anchor'ı çıkarsa
-anlamlı. Bugün için: cüzdandaki Stellar desteği ucuz, dursun; gizlilik ondan beklenmesin.
+Mekanizma hazır: EVM tarafında **ERC-7984**, bir transferin tutarını **yalnızca gönderen ve
+alıcıya** çözdürüyor. Stellar'ın Confidential Token'ı da aynı şeyi denetçi anahtarıyla
+yapıyor — yani anchor'ı denetçi olarak kaydetmek teknik olarak mümkün.
 
-CCTP zinciri (§5.14, `stellar.md`) yine de değerli — Stellar'dan EVM'e para taşımanın
-ölçülmüş, güvenilir bir yolu olduğunu gösteriyor.
+Bu, "Confidential Anchor" adının gerçekten hak edildiği nokta. Hackathonda vaat edilebilir,
+teslim edilemez.
 
-## 9. Bu tasarımın dürüst sınırı
+## 8. Dürüstlük notu
 
-Gizlenen: **ne kadar**.
-Gizlenmeyen: **bir şey yaptığın**, ve anchor'a karşı **kim olduğun**.
+Kullanıcıya ve jüriye söylenecek cümle:
 
-Kullanıcıya bu cümleyle anlatılmalı. "Tamamen anonim" değil; **"bakiyeniz ve ödemeleriniz
-kamuya kapalı, anchor yasal olarak bilmek zorunda olduğunu bilir."**
+> Bakiyeniz ve ödemeleriniz kamuya kapalı. Anchor, yasal olarak bilmek zorunda olduğunu
+> bilir. Zincire bakan biri ise paranın size ait olduğunu göremez.
+
+"Tamamen anonim" değil. Bu ayrımı kendimiz söylemezsek, jüri soracak.

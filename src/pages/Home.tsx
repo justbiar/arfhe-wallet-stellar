@@ -17,6 +17,8 @@ import {
   Drawer,
 } from "@mui/material";
 import {
+  SendOutlined,
+  CallReceivedOutlined,
   TrendingUp,
   LinkOff,
   History,
@@ -44,6 +46,8 @@ import { useTranslation } from "react-i18next";
 import { NetworkId, isFheNetwork as isFheCapableNetwork } from "../backend/NetworkTypes.js";
 import { onTxConfirmed } from "../backend/TxNotifier.js";
 import { DailyChangeBadge } from "../components/PortfolioHistoryChart.js";
+import WalletModeSwitch from "../components/WalletModeSwitch.js";
+import StellarNetworkPanel from "../components/StellarNetworkPanel.js";
 import { getAddress } from "ethers";
 import type { TypographyProps } from "@mui/material";
 import type { DisplayToken, BalanceMap, WrappedBalance } from "../types/index.js";
@@ -123,7 +127,7 @@ const stringToColor = (str: string): string => {
 };
 
 /** Renders a balance value with Matrix-style scramble animation on privacy toggle */
-function MatrixBalance({ value, isHidden, variant = "h3" }: {
+export function MatrixBalance({ value, isHidden, variant = "h3" }: {
   value: string;
   isHidden: boolean;
   variant?: TypographyProps["variant"];
@@ -199,9 +203,31 @@ function Home() {
     setAnchorEl(event.currentTarget);
   };
 
+  /**
+   * Stellar is chosen from the same menu as the EVM chains, but it is not one of them.
+   *
+   * `NetworkProvider` feeds ethers, the RPC client and the token list; a Stellar entry in
+   * there would be a network most of the wallet cannot read. So the menu sets a view, the
+   * active EVM network stays whatever it was, and switching back needs no repair.
+   *
+   * Remembered across navigation because a person who picked Stellar and walked to another
+   * screen did not mean to pick Sepolia again on the way back.
+   */
+  const [stellarMode, setStellarMode] = useState(() => {
+    try { return localStorage.getItem("arfhe_home_stellar") === "1"; } catch { return false; }
+  });
+
+  const chooseStellar = () => {
+    setAnchorEl(null);
+    setStellarMode(true);
+    try { localStorage.setItem("arfhe_home_stellar", "1"); } catch { /* private mode */ }
+  };
+
   const handleNetworkClose = (networkId: NetworkId | null) => {
     setAnchorEl(null);
     if (networkId && wallet_context) {
+      setStellarMode(false);
+      try { localStorage.removeItem("arfhe_home_stellar"); } catch { /* private mode */ }
       wallet_context.networkProvider.switchNetwork(networkId);
     }
   };
@@ -699,10 +725,12 @@ function Home() {
   if (!active_context) return null;
 
   return (
-    <Box sx={{ pb: 2 }}>
+    <Box sx={{ pb: 3, maxWidth: 560, mx: 'auto' }}>
+
+      <WalletModeSwitch mode="web3" />
 
       {/* Network Switcher & Header */}
-      <Box sx={{ px: 2, pt: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <Box sx={{ px: 2, pt: 2, pb: 1, gap: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Button
           onClick={handleNetworkClick}
           endIcon={<ExpandMore />}
@@ -720,7 +748,7 @@ function Home() {
             width: 8,
             height: 8,
             borderRadius: '50%',
-            bgcolor:
+            bgcolor: stellarMode ? '#7c3aed' :
               activeNetworkId === NetworkId.Ethereum_Mainnet ? '#10b981' :
                 activeNetworkId === NetworkId.Ethereum_Sepolia ? '#f59e0b' :
                   activeNetworkId === NetworkId.Arbitrum_One ? '#2563eb' :
@@ -737,7 +765,7 @@ function Home() {
                                         (wallet_context?.networkProvider?.getCustomNetworks()?.find(cn => cn.chainId === (activeNetworkId as number))?.iconColor) || '#404040',
             mr: 1
           }} />
-          {activeNetwork?.network_name}
+          {stellarMode ? t('stellar.networkName') : activeNetwork?.network_name}
         </Button>
         <Menu
           anchorEl={anchorEl}
@@ -761,6 +789,16 @@ function Home() {
             <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#93c5fd', mr: 1 }} /> Base Sepolia
           </MenuItem>
 
+          {/* Not an EVM chain, so it sits under its own heading rather than pretending to
+              be one more row in a list of chain ids. */}
+          <Divider sx={{ my: 0.5 }} />
+          <MenuItem disabled sx={{ opacity: 0.6, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, py: 0.5, minHeight: 0 }}>
+            {t('stellar.menuHeading')}
+          </MenuItem>
+          <MenuItem onClick={chooseStellar} selected={stellarMode}>
+            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#7c3aed', mr: 1 }} /> {t('stellar.networkName')}
+          </MenuItem>
+
           {/* Custom Networks */}
           {(wallet_context?.networkProvider?.getCustomNetworks() ?? []).length > 0 && (
             <Divider sx={{ my: 0.5 }} />
@@ -776,7 +814,7 @@ function Home() {
         <IconButton
           onClick={() => { setFetchError(null); fetchData(true); }}
           disabled={loading}
-          aria-label="Refresh balances"
+          aria-label={t('home.refreshBalances')}
           sx={{
             bgcolor: 'background.paper',
             ml: 1,
@@ -793,12 +831,18 @@ function Home() {
         </IconButton>
       </Box>
 
+      {stellarMode && <StellarNetworkPanel />}
+
+      {/* The EVM body is hidden rather than unmounted: it holds fetched balances and the
+          token list, and tearing it down on every switch would re-fetch them for nothing. */}
+      <Box sx={{ display: stellarMode ? 'none' : 'block' }}>
+
       {/* 1. Main Balance Card */}
       <Box sx={{ p: 2, pt: 1 }}>
         <Paper elevation={0} sx={{
           p: 0,
-          borderRadius: '0px',
-          background: 'transparent',
+          borderRadius: '20px',
+          background: `linear-gradient(145deg, ${theme.palette.background.paper}, ${alpha(theme.palette.primary.main, 0.06)})`,
           color: 'text.primary',
           boxShadow: 'none',
           display: 'flex',
@@ -812,7 +856,7 @@ function Home() {
         }}>
 
           {/* ── Card content ─────────────────────────────────── */}
-          <Box sx={{ position: 'relative', zIndex: 2, p: 2, pt: 1.5, pb: 1.5, width: '100%', textAlign: 'center' }}>
+          <Box sx={{ position: 'relative', zIndex: 2, p: 2.5, width: '100%', textAlign: 'center' }}>
             {/* Total Balance label with subtle icon */}
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.75, mb: 0.75 }}>
               <Box sx={{
@@ -830,12 +874,12 @@ function Home() {
                 fontSize: '0.7rem',
                 opacity: 0.8,
               }}>
-                Total Balance
+                {t('home.totalBalance')}
               </Typography>
             </Box>
 
             {/* Balance with Matrix privacy toggle */}
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5, '& h3': { fontSize: 'clamp(1.6rem, 8vw, 2.6rem)', overflowWrap: 'anywhere', minWidth: 0 } }}>
               <MatrixBalance
                 value={`$${totalBalanceUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                 isHidden={isBalanceHidden}
@@ -869,8 +913,21 @@ function Home() {
               <DailyChangeBadge {...dailyChange} hidden={isBalanceHidden} compact />
             </Box>
 
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1, mt: 2.5 }}>
+              <Button variant="contained" startIcon={<SendOutlined />}
+                onClick={() => window.dispatchEvent(new CustomEvent('open-arf-menu', { detail: { tab: 0 } }))}
+                sx={{ minHeight: 44, borderRadius: '12px', textTransform: 'none', fontWeight: 700 }}>
+                {t('common.send')}
+              </Button>
+              <Button variant="outlined" startIcon={<CallReceivedOutlined />}
+                onClick={() => window.dispatchEvent(new CustomEvent('open-arf-menu', { detail: { tab: 1 } }))}
+                sx={{ minHeight: 44, borderRadius: '12px', textTransform: 'none', fontWeight: 700 }}>
+                {t('common.receive')}
+              </Button>
+            </Box>
+
             {/* Action Buttons */}
-            <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1, mt: 2 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1, mt: 1, flexWrap: 'wrap' }}>
               {/* Everything confidential lives behind this: what is shielded, what is
                   still owed from an interrupted unshield, and the shield form itself.
                   It takes the slot Portfolio used to hold — Portfolio moved next to the
@@ -885,7 +942,8 @@ function Home() {
                   boxShadow: 'none',
                   border: '1px solid',
                   borderColor: 'divider',
-                  borderRadius: '0px',
+                  borderRadius: '10px',
+                  minHeight: 40,
                   textTransform: 'none',
                   fontWeight: 600,
                   fontSize: '0.75rem',
@@ -899,7 +957,7 @@ function Home() {
                   },
                 }}
               >
-                Privacy
+                {t('privacy.title')}
               </Button>
               <Button
                 variant="contained"
@@ -911,7 +969,8 @@ function Home() {
                   boxShadow: 'none',
                   border: '1px solid',
                   borderColor: 'divider',
-                  borderRadius: '0px',
+                  borderRadius: '10px',
+                  minHeight: 40,
                   textTransform: 'none',
                   fontWeight: 600,
                   fontSize: '0.75rem',
@@ -925,7 +984,7 @@ function Home() {
                   },
                 }}
               >
-                Revoke
+                {t('revoke.title')}
               </Button>
             </Box>
           </Box>
@@ -1010,11 +1069,11 @@ function Home() {
               />
             )}
           </Stack>
-          <Tooltip title="Portfolio">
+          <Tooltip title={t('home.portfolio')}>
             <IconButton
               size="small"
               onClick={() => navigate('/portfolio')}
-              aria-label="Portfolio"
+              aria-label={t('home.portfolio')}
               sx={{ borderRadius: '0px', color: 'text.primary', opacity: 0.6, '&:hover': { opacity: 1 } }}
             >
               <TrendingUp sx={{ fontSize: 18 }} />
@@ -1123,6 +1182,8 @@ function Home() {
 
       </Box>
 
+      </Box>
+
       {/* Onboarding Tour (first-time users) */}
       <OnboardingTour
         open={showOnboarding}
@@ -1133,7 +1194,7 @@ function Home() {
   );
 }
 
-function AssetItem({ symbol, name, balance, value, icon, isShielded = false, isLast = false, isSuspicious = false, isSpamHidden = false, onToggleHide, onClick }: {
+export function AssetItem({ symbol, name, balance, value, icon, isShielded = false, isLast = false, isSuspicious = false, isSpamHidden = false, onToggleHide, onClick }: {
   symbol: string,
   name: string,
   balance: string,
@@ -1152,19 +1213,29 @@ function AssetItem({ symbol, name, balance, value, icon, isShielded = false, isL
 
   return (
     <Box
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={(event: React.KeyboardEvent) => {
+        if (event.target !== event.currentTarget) return;
+        if (onClick && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          onClick();
+        }
+      }}
       onClick={onClick}
       sx={{
         display: 'flex',
         alignItems: 'center',
         gap: 1.5,
         px: 1.5,
-        py: 1,
+        py: 1.5,
+        minHeight: 72,
         borderRadius: 2.5,
         cursor: onClick ? 'pointer' : 'default',
         transition: 'background-color 0.15s ease, opacity 0.2s ease',
         opacity: isSpamHidden ? 0.45 : 1,
         '&:hover': {
-          bgcolor: 'rgba(37, 99, 235, 0.03)',
+          bgcolor: 'action.hover',
         },
         ...(!isLast && {
           borderBottom: '1px solid',
@@ -1212,7 +1283,7 @@ function AssetItem({ symbol, name, balance, value, icon, isShielded = false, isL
 
       {/* Token Info */}
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
           <Typography
             variant="body2"
             sx={{ fontWeight: 700, color: 'text.primary', letterSpacing: '-0.01em' }}
@@ -1281,7 +1352,7 @@ function AssetItem({ symbol, name, balance, value, icon, isShielded = false, isL
       </Box>
 
       {/* Balance & Value */}
-      <Box sx={{ textAlign: 'right', flexShrink: 0 }}>
+      <Box sx={{ textAlign: 'right', minWidth: 0, maxWidth: '48%', overflowWrap: 'anywhere', fontVariantNumeric: 'tabular-nums' }}>
         <Typography
           variant="body2"
           sx={{ fontWeight: 700, color: isSpamHidden ? 'text.disabled' : 'text.primary', letterSpacing: '-0.01em', lineHeight: 1.3 }}

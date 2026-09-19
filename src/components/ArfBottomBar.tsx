@@ -12,7 +12,6 @@ import { SvgIcon } from "@mui/material";
 import { History, Home, Send, Explore } from "@mui/icons-material";
 import ArfBottomMenu from "./ArfBottomMenu";
 import { useNavigate, useLocation } from "react-router";
-import { useTheme } from "@mui/material";
 import { useTranslation } from "react-i18next";
 
 /**
@@ -58,7 +57,6 @@ const SafeBox = ({ showLabel: _sl, onChange: _oc, value: _v, ...props }: SafeBox
 function ArfBottomBar() {
   const navigate = useNavigate();
   const location = useLocation();
-  const theme = useTheme();
   const { t } = useTranslation();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -88,14 +86,14 @@ function ArfBottomBar() {
       case '/explore': return 1;
       case '/history': return 3;
       case '/agent': return 4;
-      default: return 0;
+      default: return -1;
     }
   };
 
   return (
     <Box sx={{
-      width: '100%',
-      maxWidth: '400px',
+      width: 'calc(100% - 24px)',
+      maxWidth: '440px',
       position: 'fixed',
       bottom: 12,
       left: '50%',
@@ -107,11 +105,12 @@ function ArfBottomBar() {
       <Paper
         elevation={4}
         sx={{
-          borderRadius: '0px',
+          borderRadius: '18px',
+          width: '100%',
           overflow: 'hidden',
           pointerEvents: 'auto', // Re-enable clicks
           backgroundColor: 'background.paper',
-          borderTop: '1px solid',
+          border: '1px solid',
           borderColor: 'divider',
           display: 'flex',
           alignItems: 'center',
@@ -126,17 +125,20 @@ function ArfBottomBar() {
           showLabels
           sx={{
             backgroundColor: 'transparent',
-            height: 52,
-            minWidth: 300,
+            height: 60,
+            width: '100%',
+            minWidth: 0,
             '& .MuiBottomNavigationAction-root': { 
               minWidth: 'auto', 
               padding: '4px 0',
               color: 'text.primary',
-              opacity: 0.5,
+              opacity: 0.7,
             },
-            '& .Mui-selected': {
+            '& .MuiBottomNavigationAction-root.Mui-selected': {
               color: 'text.primary !important',
               opacity: 1,
+              bgcolor: 'action.selected',
+              borderRadius: '12px',
             },
             '& .MuiBottomNavigationAction-label': { fontSize: '0.65rem' },
           }}
@@ -152,11 +154,12 @@ function ArfBottomBar() {
             onClick={() => navigate('explore')}
           />
 
-          <SafeBox sx={{ width: 56, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+          <SafeBox sx={{ width: 52, flexShrink: 0, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
             <Fab
               color="primary"
-              aria-label="Send transaction"
-              onClick={() => setDrawerOpen(true)}
+              aria-label={t('common.send')}
+              title={t('common.send')}
+              onClick={() => window.dispatchEvent(new CustomEvent('open-arf-menu', { detail: { tab: 0 } }))}
               sx={{
                 width: 44,
                 height: 44,
@@ -189,7 +192,7 @@ function ArfBottomBar() {
         anchor="bottom"
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        aria-label="Send transaction menu"
+        aria-label={`${t('common.send')} / ${t('common.receive')}`}
         PaperProps={{
           sx: {
             borderTopLeftRadius: 24,
@@ -201,7 +204,7 @@ function ArfBottomBar() {
           }
         }}
       >
-        <ArfBottomMenu />
+        <ArfBottomMenu onClose={() => setDrawerOpen(false)} />
       </Drawer>
 
     </Box>

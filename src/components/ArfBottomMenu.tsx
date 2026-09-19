@@ -4,11 +4,14 @@ import {
   Tabs,
   Tab,
   Stack,
+  IconButton,
 } from "@mui/material";
 import {
   Send as SendIcon,
   CallReceived,
+  Close,
 } from "@mui/icons-material";
+import { useTranslation } from "react-i18next";
 import { CustomTabPanel } from "./panels/shared.js";
 import SendPanel from "./panels/SendPanel.js";
 import ReceivePanel from "./panels/ReceivePanel.js";
@@ -17,7 +20,8 @@ import ReceivePanel from "./panels/ReceivePanel.js";
  *  no longer exists — swap was removed rather than hidden, so it must not be reachable. */
 const TAB_COUNT = 2;
 
-export default function ArfBottomMenu() {
+export default function ArfBottomMenu({ onClose }: { onClose?: () => void }) {
+  const { t } = useTranslation();
   const [value, setValue] = React.useState(0);
 
   React.useEffect(() => {
@@ -46,7 +50,7 @@ export default function ArfBottomMenu() {
   };
 
   return (
-    <Box sx={{ px: 1.5, pt: 0.5, pb: 1, height: '75vh', maxHeight: 470, overflowY: 'auto' }}>
+    <Box sx={{ px: 2, pt: 1, pb: 'max(16px, env(safe-area-inset-bottom))', height: 'min(80dvh, 560px)', overflowY: 'auto' }}>
       {/* Drawer Handle */}
       <Stack direction="row" justifyContent="center" sx={{ mb: 0.5 }}>
         <Box sx={{
@@ -55,14 +59,21 @@ export default function ArfBottomMenu() {
         }} />
       </Stack>
 
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <IconButton onClick={onClose} aria-label={t('common.close')} sx={{ width: 44, height: 44 }}>
+          <Close fontSize="small" />
+        </IconButton>
+      </Box>
+
       {/* Tabs — Send and Receive */}
       <Tabs
         value={value}
         onChange={handleChange}
-        centered
+        variant="fullWidth"
+        aria-label={`${t('common.send')} / ${t('common.receive')}`}
         sx={{
-          minHeight: 28,
-          mb: 0.25,
+          minHeight: 44,
+          mb: 1.5,
           '& .MuiTabs-indicator': {
             height: 2,
             borderRadius: '2px 2px 0 0',
@@ -70,8 +81,8 @@ export default function ArfBottomMenu() {
           },
           '& .MuiTab-root': {
             fontWeight: 700,
-            fontSize: '0.72rem',
-            minHeight: 28,
+            fontSize: '0.85rem',
+            minHeight: 44,
             py: 0.25,
             px: 1.5,
             textTransform: 'none',
@@ -80,8 +91,8 @@ export default function ArfBottomMenu() {
           },
         }}
       >
-        <Tab icon={<SendIcon sx={{ fontSize: 14 }} />} iconPosition="start" label="Send" />
-        <Tab icon={<CallReceived sx={{ fontSize: 14 }} />} iconPosition="start" label="Receive" />
+        <Tab icon={<SendIcon sx={{ fontSize: 14 }} />} iconPosition="start" id="action-tab-0" aria-controls="action-tabpanel-0" label={t('common.send')} />
+        <Tab icon={<CallReceived sx={{ fontSize: 14 }} />} iconPosition="start" id="action-tab-1" aria-controls="action-tabpanel-1" label={t('common.receive')} />
       </Tabs>
 
       <CustomTabPanel value={value} index={0}>

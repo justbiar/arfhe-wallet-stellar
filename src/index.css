@@ -114,7 +114,7 @@ body {
 
 /* ── Accessibility: focus-visible ring for keyboard navigation ── */
 *:focus-visible {
-  outline: 2px solid var(--color-charcoal-vein);
+  outline: 2px solid #7985d9;
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -153,7 +153,7 @@ body {
 #root {
   width: 100% !important;
   max-width: 400px !important;
-  height: 100vh !important;
+  height: 100dvh !important;
   position: absolute !important;
   left: 50% !important;
   transform: translateX(-50%) !important;
@@ -185,4 +185,26 @@ html[data-surface="sidepanel"] #root {
   max-width: 100% !important;
   border-left: none;
   border-right: none;
+}
+
+/* Keep resizable side panels usable when browser chrome leaves little vertical space. */
+html[data-surface="sidepanel"],
+html[data-surface="sidepanel"] body {
+  min-height: 0;
+}
+
+#main-content {
+  overscroll-behavior-y: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #85857f transparent;
+}
+
+#main-content::-webkit-scrollbar {
+  display: block;
+  width: 4px;
+}
+
+#main-content::-webkit-scrollbar-thumb {
+  background: #85857f;
+  border-radius: 8px;
 }

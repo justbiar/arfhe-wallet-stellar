@@ -146,6 +146,30 @@ export default class AccountManager {
       // Fallback to plaintext until encryption is set up
       this.linkedStorageManager.setLocal("active", this.active);
     }
+    void this.publishActiveAddress();
+  }
+
+  /**
+   * Publish which address the wallet would sign with, for the service worker to read.
+   *
+   * The worker gates `eth_requestAccounts` on the origin's stored grant, and without this
+   * it cannot tell whether that grant covers the account in front of the user: a site
+   * connected to account A got A's address handed back while the wallet was on account B,
+   * so the site believed it was connected and every signature after that was refused, with
+   * no way to reconnect from the site.
+   *
+   * An address is public — it is what the site is given on connect — so this is a hint, not
+   * a secret. It is deliberately outside the encrypted store: the worker must be able to
+   * read it while the wallet is locked, and there is nothing here worth protecting.
+   */
+  private async publishActiveAddress(): Promise<void> {
+    try {
+      const address = this.GetActive()?.GetAddress()?.toLowerCase() ?? null;
+      await chrome.storage.local.set({ arfhe_active_address: address });
+    } catch {
+      // No extension storage (tests, or a page outside the extension). The worker falls
+      // back to its previous behaviour when the hint is missing.
+    }
   }
 
   /**

@@ -38,6 +38,7 @@
         'wallet_addEthereumChain',
         // Waits on a person, so it gets the long deadline rather than the RPC one.
         'stellar_signTransaction',
+        'stellar_signMessage',
     ]);
 
     /** EIP-1193 error for a provider that is present but cannot service the request. */
@@ -347,6 +348,23 @@
             return provider.request({
                 method: 'stellar_signTransaction',
                 params: [{ xdr, networkPassphrase }],
+            });
+        },
+
+        /**
+         * Signs a message the SEP-53 way and returns `{ signature, address }`, the
+         * signature base64-encoded. Opens the approval screen like any other signature.
+         *
+         * This exists for the privacy layers: they derive their encryption keys from a
+         * signature over a fixed message rather than from the secret key, so a wallet can
+         * keep the key and still let a site build a confidential balance. A message is not
+         * a transaction and cannot become one — SEP-53 prefixes and hashes it precisely so
+         * that a signature made here can never be replayed as a payment.
+         */
+        signMessage(message) {
+            return provider.request({
+                method: 'stellar_signMessage',
+                params: [{ message }],
             });
         },
     });

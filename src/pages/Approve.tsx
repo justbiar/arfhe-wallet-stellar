@@ -76,15 +76,46 @@ const LOOKUP_INTERVAL_MS = 300;
 /** Matches the worker's own expiry for a parked request. */
 const PARKED_MAX_AGE_MS = 5 * 60 * 1000;
 
-/** Ask the service worker something. Extension pages reach the privileged handler. */
-function askWorker<T = unknown>(message: Record<string, unknown>): Promise<T> {
+/**
+ * Ask the service worker something. Extension pages reach the privileged handler.
+ *
+ * Always settles, and never later than `timeoutMs`. The earlier version waited for the
+ * callback with nothing behind it, which is fine until the channel is gone: reloading the
+ * extension — during development, or when Chrome updates it — orphans any approval window
+ * that is already open, and `sendMessage` then throws "Extension context invalidated" or
+ * simply never calls back. The screen had already disabled both buttons by that point, so
+ * the window sat there unanswerable, and the site it belonged to waited with it.
+ *
+ * `lastError` is read rather than ignored: leaving it unread makes Chrome log a warning for
+ * a case this function is deliberately handling.
+ */
+function askWorker<T = unknown>(message: Record<string, unknown>, timeoutMs = 4000): Promise<T> {
   return new Promise((resolve) => {
-    const runtime = (window as unknown as { chrome?: { runtime?: { sendMessage?: typeof chrome.runtime.sendMessage } } }).chrome?.runtime;
+    const runtime = (window as unknown as {
+      chrome?: { runtime?: { sendMessage?: typeof chrome.runtime.sendMessage; lastError?: unknown } };
+    }).chrome?.runtime;
     if (!runtime?.sendMessage) {
       resolve(undefined as T);
       return;
     }
-    runtime.sendMessage(message, (response: T) => resolve(response));
+
+    let settled = false;
+    const finish = (value: T) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(undefined as T), timeoutMs);
+
+    try {
+      runtime.sendMessage(message, (response: T) => {
+        void runtime.lastError;
+        finish(response);
+      });
+    } catch {
+      finish(undefined as T);
+    }
   });
 }
 
@@ -336,16 +367,25 @@ export default function Approve() {
    */
   const inline = new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("inline") === "1";
 
-  /** Report the outcome, then leave. Leaving without this would strand the site. */
+  /**
+   * Report the outcome, then leave. Leaving without this would strand the site.
+   *
+   * The departure is not conditional on the report landing. If the worker cannot be reached
+   * the site is already going to be told the wallet went away — by the worker's own
+   * `onRemoved` handler, or by the port dying — and holding the window open on the chance
+   * that a dead channel revives only traps the person who already answered.
+   */
   const respond = useCallback(async (payload: { result?: unknown; error?: { code: number; message: string } }) => {
     if (!request) return;
     setAnswered(true);
-    await askWorker({
-      type: "APPROVAL_RESULT",
-      requestId: request.id,
-      origin: request.origin,
-      ...payload,
-    });
+    try {
+      await askWorker({
+        type: "APPROVAL_RESULT",
+        requestId: request.id,
+        origin: request.origin,
+        ...payload,
+      });
+    } catch { /* the window still closes; see above */ }
     if (inline) {
       // Back to the wallet the user was already in, not a closed window.
       window.location.hash = "#/home";
@@ -416,6 +456,32 @@ export default function Approve() {
 
         const { signTransactionXdr } = await import("../backend/StellarService.js");
         await respond({ result: await signTransactionXdr(account, xdr, networkPassphrase) });
+        return;
+      }
+
+      /**
+       * SEP-53 message signing.
+       *
+       * Above the EVM checks for the same reason as the envelope above: it needs no RPC, no
+       * chain id and no ethers wallet. The grant is checked the same way — a signature is a
+       * signature, whatever it is over — but there is nothing to decode here: the message is
+       * text, and the screen shows it verbatim rather than interpreting it.
+       */
+      if (method === "stellar_signMessage") {
+        const { message } = (request.params?.[0] ?? {}) as { message?: string };
+        if (typeof message !== "string" || message.length === 0) {
+          throw new ApprovalError("The site did not provide a message to sign.");
+        }
+
+        const signingAs = account.GetAddress() ?? "";
+        if (!(await context.sitePermissions.canUseAccount(request.origin, signingAs))) {
+          throw new ApprovalError(
+            `This site is connected to a different account. Switch to the connected account, or reconnect.`
+          );
+        }
+
+        const { signMessage } = await import("../backend/StellarService.js");
+        await respond({ result: await signMessage(account, message) });
         return;
       }
 
@@ -594,6 +660,10 @@ export default function Approve() {
 
   const isConnect = request.method === "eth_requestAccounts" || request.method === "wallet_requestPermissions";
   const isStellar = request.method === "stellar_signTransaction";
+  const isStellarMessage = request.method === "stellar_signMessage";
+  const stellarMessage = isStellarMessage
+    ? String((request.params?.[0] as { message?: string } | undefined)?.message ?? "")
+    : "";
   /** Nothing is signed while the screen cannot say what it would be signing. */
   const stellarUnreadable = isStellar && !stellarTx;
   const isTx = request.method === "eth_sendTransaction";
@@ -746,8 +816,37 @@ export default function Approve() {
           {t("approve.requestLabel")}
         </Typography>
         <Typography variant="body2" fontWeight={700} sx={{ mt: 0.5 }}>
-          {isConnect ? t("approve.connectTitle") : isStellar ? t("approve.stellarTitle") : request.method}
+          {isConnect ? t("approve.connectTitle")
+            : isStellar ? t("approve.stellarTitle")
+            : isStellarMessage ? t("approve.stellarMessageTitle")
+            : request.method}
         </Typography>
+
+        {/* The message, verbatim and unstyled. A wallet that reformats what it is about to
+            sign shows the user one thing and signs another; the only safe rendering is the
+            bytes themselves. The note underneath is the part people cannot check for
+            themselves: that SEP-53 hashes this with a prefix, so no signature made here can
+            be replayed as a payment. */}
+        {isStellarMessage && (
+          <>
+            <Divider sx={{ my: 1.5 }} />
+            <Typography variant="caption" color="text.secondary" fontWeight={700}>
+              {t("approve.stellarMessageLabel")}
+            </Typography>
+            <Box
+              sx={{
+                mt: 0.8, p: 1.5, borderRadius: 1.5, bgcolor: "action.hover",
+                fontFamily: "monospace", fontSize: 12.5, whiteSpace: "pre-wrap",
+                wordBreak: "break-word", maxHeight: 180, overflow: "auto",
+              }}
+            >
+              {stellarMessage}
+            </Box>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
+              {t("approve.stellarMessageNote")}
+            </Typography>
+          </>
+        )}
 
         {isConnect && (
           <>

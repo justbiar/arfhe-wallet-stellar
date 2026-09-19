@@ -389,6 +389,17 @@ const RevokeAlchemyPage = () => {
   const [sessions, setSessions] = useState<WCSessionInfo[]>([]);
   /** Sites connected through the injected provider (`window.ethereum`). */
   const [sites, setSites] = useState<SitePermission[]>([]);
+  /**
+   * Grants that belong to the wallet's *other* accounts.
+   *
+   * Kept apart rather than merged: the scoping below is right, but hiding these entirely
+   * left no way out of a real dead end. A site connected to account A refuses to sign for
+   * account B ("switch to the connected account, or reconnect"), and `eth_requestAccounts`
+   * hands back A's grant without prompting — so from account B the site is unusable and,
+   * until now, invisible. Showing it, named by the account it belongs to, is what makes
+   * "reconnect" something a person can actually do.
+   */
+  const [otherSites, setOtherSites] = useState<SitePermission[]>([]);
   const [loading, setLoading] = useState(false);
   const [disconnectingAll, setDisconnectingAll] = useState(false);
   const hunt = useHuntState();
@@ -434,9 +445,12 @@ const RevokeAlchemyPage = () => {
     }
     try {
       const all = await sitePermissions.getAll();
-      setSites(all.filter((p) => p.accounts.some((a) => a.toLowerCase() === address)));
+      const mine = (p: SitePermission) => p.accounts.some((a) => a.toLowerCase() === address);
+      setSites(all.filter(mine));
+      setOtherSites(all.filter((p) => !mine(p) && p.accounts.length > 0));
     } catch {
       setSites([]);
+      setOtherSites([]);
     }
   }, [sitePermissions, activeAccount]);
 
@@ -447,6 +461,21 @@ const RevokeAlchemyPage = () => {
       runtime?.sendMessage?.({ type: 'PERMISSIONS_CHANGED' });
     } catch {
       // Worker restarting; pages pick it up on their next request.
+    }
+  };
+
+  /** Revokes every account's access for this origin — used only from the "other" list. */
+  const handleDisconnectOther = async (site: SitePermission) => {
+    if (!sitePermissions) return;
+    try {
+      for (const address of site.accounts) {
+        await sitePermissions.revokeAccount(site.origin, address);
+      }
+      notifyPermissionChange();
+      setSuccess(`${site.origin} disconnected`);
+      await fetchSites();
+    } catch (err) {
+      setError('Failed to disconnect: ' + (err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -799,6 +828,53 @@ const RevokeAlchemyPage = () => {
                     color="error"
                     variant="outlined"
                     onClick={() => handleDisconnectSite(site.origin)}
+                    sx={{ borderRadius: '0px', fontWeight: 700, textTransform: 'none', fontSize: '0.7rem', flexShrink: 0 }}
+                  >
+                    {t('revoke.disconnect')}
+                  </Button>
+                </Stack>
+              </Paper>
+            ))}
+          </Stack>
+        </Box>
+      )}
+
+      {/* ── Grants that belong to another account ───────────────
+          Not actionable as this account, and that is the point: the site is refusing to
+          work here precisely because it is connected over there. Shown so the state is
+          legible and escapable, rather than a site that neither works nor appears. */}
+      {otherSites.length > 0 && (
+        <Box sx={{ mb: 2 }}>
+          <SectionTitle>{t('revoke.otherAccountSites', { count: otherSites.length })}</SectionTitle>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+            {t('revoke.otherAccountSitesHint')}
+          </Typography>
+
+          <Stack spacing={1}>
+            {otherSites.map((site) => (
+              <Paper key={site.origin} elevation={0} sx={{ ...cardSx, opacity: 0.85 }}>
+                <Stack direction="row" alignItems="center" spacing={1.5}>
+                  <Avatar
+                    variant="square"
+                    sx={{ width: 32, height: 32, bgcolor: 'action.hover', color: 'text.secondary' }}
+                  >
+                    <LanguageRounded sx={{ fontSize: 17 }} />
+                  </Avatar>
+
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography variant="body2" fontWeight={700} noWrap>
+                      {site.origin.replace(/^https?:\/\//, '')}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" noWrap sx={{ fontSize: '0.65rem' }}>
+                      {t('revoke.connectedAs', { accounts: site.accounts.map(shortAddress).join(', ') })}
+                    </Typography>
+                  </Box>
+
+                  <Button
+                    size="small"
+                    color="error"
+                    variant="outlined"
+                    onClick={() => void handleDisconnectOther(site)}
                     sx={{ borderRadius: '0px', fontWeight: 700, textTransform: 'none', fontSize: '0.7rem', flexShrink: 0 }}
                   >
                     {t('revoke.disconnect')}

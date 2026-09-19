@@ -1,6 +1,8 @@
 /// <reference types="vitest/globals" />
 import Account from '../Account';
-import { getKeypair, getAddress, signTransactionXdr, forgetDerivedKeys, STELLAR_TESTNET_PASSPHRASE } from '../StellarService';
+import { getKeypair, getAddress, signTransactionXdr, signMessage, forgetDerivedKeys, STELLAR_TESTNET_PASSPHRASE } from '../StellarService';
+import { Keypair } from '@stellar/stellar-sdk';
+import { createHash } from 'node:crypto';
 
 /**
  * @vitest-environment node
@@ -18,6 +20,38 @@ const EXPECTED = 'GDRXE2BQUC3AZNPVFSCEZ76NJ3WWL25FYFK6RGZGIEKWE4SOOHSUJUJ6';
 function hdAccount(): Account {
   return Account.FromMnemonic(PHRASE, 'Test');
 }
+
+describe('SEP-53 mesaj imzası', () => {
+  beforeEach(() => forgetDerivedKeys());
+
+  /**
+   * İmzanın doğrulanabilir olması burada tek başına yetmez: SEP-53 mesajı DEĞİL, sabit bir
+   * önekle alınmış SHA-256 özetini imzalıyor. Önek ya da özet atlanırsa imza burada üretilir,
+   * karşı taraf reddeder — sessizce yanlış olan türden bir hata.
+   */
+  it('önek + SHA-256 özeti üzerinden imzalar ve doğrulanır', async () => {
+    const message = 'stellar-private-payments key derivation v1';
+    const { signature, address } = await signMessage(hdAccount(), message);
+
+    expect(address).toBe(EXPECTED);
+
+    const digest = createHash('sha256').update(`Stellar Signed Message:\n${message}`).digest();
+    expect(Keypair.fromPublicKey(EXPECTED).verify(digest, Buffer.from(signature, 'base64'))).toBe(true);
+  });
+
+  it('öneksiz özetle doğrulanmaz', async () => {
+    const message = 'aynı mesaj';
+    const { signature } = await signMessage(hdAccount(), message);
+
+    const bare = createHash('sha256').update(message).digest();
+    expect(Keypair.fromPublicKey(EXPECTED).verify(bare, Buffer.from(signature, 'base64'))).toBe(false);
+  });
+
+  it('ifadesi olmayan hesapta imzalamaz', async () => {
+    const imported = Account.FromPrivateKey('0x' + '11'.repeat(32), 'Imported');
+    await expect(signMessage(imported, 'merhaba')).rejects.toThrow(/Stellar adresi/);
+  });
+});
 
 describe('StellarService', () => {
   beforeEach(() => forgetDerivedKeys());

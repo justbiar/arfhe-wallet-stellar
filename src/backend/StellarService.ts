@@ -103,6 +103,38 @@ export async function getBalances(
 }
 
 /**
+ * Signs an arbitrary message the SEP-53 way, and returns the signature base64-encoded.
+ *
+ * SEP-53 does not sign the message: it signs the SHA-256 digest of
+ * `"Stellar Signed Message:\n" + message`. The prefix is what keeps a signed message from
+ * ever being a valid transaction envelope, and the digest is what the verifiers on the
+ * other side check — getting either wrong produces a signature that looks fine here and is
+ * rejected everywhere else.
+ *
+ * Callers needing this: privacy-layer SDKs derive their keys from such a signature rather
+ * than from the secret key itself, which is the whole reason a wallet can hold the key and
+ * still let a site build an encrypted balance.
+ */
+export async function signMessage(
+  account: Account,
+  message: string,
+  index = 0
+): Promise<{ signature: string; address: string }> {
+  const kp = await getKeypair(account, index);
+  if (!kp) throw new Error("Bu hesabın Stellar adresi yok.");
+
+  const payload = new TextEncoder().encode(`Stellar Signed Message:\n${message}`);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", payload as BufferSource));
+  // `Keypair.sign` is typed for Node's Buffer; the value is a Uint8Array at runtime and the
+  // SDK is happy with it, the same cast the panel's signer makes.
+  const signed = kp.sign(digest as unknown as Parameters<typeof kp.sign>[0]);
+
+  let binary = "";
+  for (const b of new Uint8Array(signed)) binary += String.fromCharCode(b);
+  return { signature: btoa(binary), address: kp.publicKey() };
+}
+
+/**
  * Signs a transaction envelope and returns the signed XDR.
  *
  * The network passphrase is part of what gets signed, so a signature made against the wrong

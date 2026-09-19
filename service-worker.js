@@ -937,6 +937,7 @@ const APPROVAL_METHODS = new Set([
   // Stellar. Signing is gated the same way an EVM signature is: a site may ask, a person
   // decides. Reading the address is not here — see stellar_getAddress below for why.
   "stellar_signTransaction",
+  "stellar_signMessage",
 ]);
 
 // ─── Permission reads ───────────────────────────────────────────────
@@ -944,6 +945,17 @@ const APPROVAL_METHODS = new Set([
 // Writes belong to SitePermissionService (src/backend), which owns normalisation and the
 // replace-not-merge rule. This side only looks a grant up by the exact origin Chrome
 // reports, so there is no second copy of that logic to drift.
+
+/** The address the wallet would sign with, as the wallet publishes it. Null when unknown. */
+async function getActiveAddress() {
+  try {
+    const result = await chrome.storage.local.get("arfhe_active_address");
+    const value = result?.arfhe_active_address;
+    return typeof value === "string" && value ? value.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
 
 async function getGrantedAccounts(origin) {
   if (!origin) return [];
@@ -1009,7 +1021,18 @@ async function handleDappRequest(message, sender) {
 
   if (method === "eth_requestAccounts" || method === "wallet_requestPermissions") {
     const existing = await getGrantedAccounts(origin);
-    if (existing.length > 0) {
+    const active = await getActiveAddress();
+
+    // Answering from the grant is right only while the grant covers the account the wallet
+    // would sign with. A site connected to account A, asked again while the user is on
+    // account B, used to get A's address back without a prompt — so the site reported
+    // itself connected and then had every signature refused ("switch to the connected
+    // account, or reconnect"), with no way to reconnect from the site itself. Prompting
+    // here is what makes "reconnect" mean something.
+    //
+    // A missing hint (locked wallet, storage unavailable) keeps the old behaviour rather
+    // than raising a window the user did not ask for.
+    if (existing.length > 0 && (!active || existing.includes(active))) {
       touchPermission(origin);
       return { result: method === "eth_requestAccounts" ? existing : [{ parentCapability: "eth_accounts" }] };
     }

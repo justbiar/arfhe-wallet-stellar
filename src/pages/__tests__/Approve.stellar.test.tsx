@@ -33,8 +33,10 @@ const ORIGIN = 'https://anchor.example';
 const SIGNED_XDR = 'SIGNED_ENVELOPE';
 
 const signTransactionXdr = vi.fn(async () => SIGNED_XDR);
+const signMessage = vi.fn(async () => ({ signature: 'BASE64SIG', address: SRC }));
 vi.mock('../../backend/StellarService.js', () => ({
   signTransactionXdr: (...args: unknown[]) => signTransactionXdr(...(args as [])),
+  signMessage: (...args: unknown[]) => signMessage(...(args as [])),
 }));
 
 // Ağa çıkan oltalama kontrolü ve süsleme katmanı bu testin konusu değil.
@@ -80,11 +82,26 @@ function park(xdr: string, networkPassphrase: string) {
   });
 }
 
+/** Park a SEP-53 message request the way the worker would. */
+function parkMessage(message: string) {
+  const chromeApi = (globalThis as unknown as { chrome: typeof chrome }).chrome;
+  return chromeApi.storage.session.set({
+    arfhe_pending_approvals: [{
+      id: 'req-1',
+      method: 'stellar_signMessage',
+      params: [{ message }],
+      origin: ORIGIN,
+      createdAt: Date.now(),
+    }],
+  });
+}
+
 let sentMessages: Record<string, unknown>[] = [];
 
 beforeEach(() => {
   sentMessages = [];
   signTransactionXdr.mockClear();
+  signMessage.mockClear();
   canUseAccount.mockClear();
   const chromeApi = (globalThis as unknown as { chrome: { runtime: Record<string, unknown> } }).chrome;
   chromeApi.runtime.sendMessage = vi.fn((message: Record<string, unknown>, cb?: (r: unknown) => void) => {
@@ -129,6 +146,73 @@ describe('Approve — Stellar imzalama', () => {
     expect(signTransactionXdr).toHaveBeenCalledTimes(1);
     const result = sentMessages.find((m) => m.type === 'APPROVAL_RESULT');
     expect(result).toMatchObject({ requestId: 'req-1', origin: ORIGIN, result: SIGNED_XDR });
+  });
+
+  /**
+   * Bir uzantı yeniden yüklendiğinde açık kalan onay penceresi ölü bir bağlamda kalır:
+   * `sendMessage` ya patlar ya da geri çağırmaz. Ekran ilk tıklamada iki düğmeyi de
+   * kilitlediği için, cevabı süresiz beklemek pencereyi cevaplanamaz hale getiriyordu —
+   * kullanıcı ne onaylayabiliyor ne vazgeçebiliyordu.
+   */
+  it('cevap kanalı öldüyse bile vazgeçme penceresi kapatır', async () => {
+    await park(envelope(Networks.TESTNET), Networks.TESTNET);
+    await renderApprove();
+
+    const chromeApi = (globalThis as unknown as { chrome: { runtime: Record<string, unknown> } }).chrome;
+    chromeApi.runtime.sendMessage = vi.fn(() => { throw new Error('Extension context invalidated.'); });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: i18n.t('common.cancel') }));
+    });
+
+    await waitFor(() => expect(window.close).toHaveBeenCalled());
+  });
+
+  it('geri çağrı hiç gelmezse zaman aşımıyla yine kapanır', async () => {
+    await park(envelope(Networks.TESTNET), Networks.TESTNET);
+    await renderApprove();
+
+    // Kanal açık kalıp hiç cevap vermeyen hal: worker MV3 tarafından toparlanmış olabilir.
+    const chromeApi = (globalThis as unknown as { chrome: { runtime: Record<string, unknown> } }).chrome;
+    chromeApi.runtime.sendMessage = vi.fn(() => { /* geri çağrı hiç çağrılmıyor */ });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: i18n.t('common.cancel') }));
+    });
+    expect(window.close).not.toHaveBeenCalled();
+
+    await act(async () => { await new Promise((r) => setTimeout(r, 4100)); });
+    await waitFor(() => expect(window.close).toHaveBeenCalled());
+  });
+
+  /**
+   * Gizlilik katmanları anahtarlarını bu imzadan türetiyor, yani bu ekran o akışın tek
+   * kapısı. İki şey doğrulanıyor: mesaj ekranda AYNEN görünüyor mu, ve imza gerçekten
+   * isteniyor mu.
+   */
+  it('imzalanacak mesajı aynen gösterir ve onaylanınca imzalar', async () => {
+    const message = 'stellar-private-payments key derivation v1';
+    await parkMessage(message);
+    await renderApprove();
+
+    await waitFor(() => expect(screen.getByText(message)).toBeInTheDocument());
+
+    await act(async () => { fireEvent.click(confirmButton()); });
+
+    expect(signMessage).toHaveBeenCalledTimes(1);
+    const result = sentMessages.find((m) => m.type === 'APPROVAL_RESULT');
+    expect(result).toMatchObject({ requestId: 'req-1', result: { signature: 'BASE64SIG' } });
+  });
+
+  it('izni olmayan hesap için mesaj imzalamaz', async () => {
+    canUseAccount.mockResolvedValueOnce(false);
+    await parkMessage('anything');
+    await renderApprove();
+
+    await act(async () => { fireEvent.click(confirmButton()); });
+
+    expect(signMessage).not.toHaveBeenCalled();
+    expect(screen.getByText(/connected to a different account/i)).toBeInTheDocument();
   });
 
   it('mainnet zarfını reddeder, imzalama yoluna hiç girmez', async () => {

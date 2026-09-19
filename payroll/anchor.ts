@@ -54,10 +54,27 @@ async function ensureTrustline(kp: Keypair, issuer: string): Promise<void> {
   await horizon.submitTransaction(tx as Parameters<typeof horizon.submitTransaction>[0]);
 }
 
-export async function fundWithFriendbot(publicKey: string): Promise<void> {
-  const res = await fetch(`https://friendbot.stellar.org?addr=${encodeURIComponent(publicKey)}`);
-  // 400 genellikle "zaten fonlanmış" demek — çağıran açısından hata değil.
-  if (!res.ok && res.status !== 400) throw new Error(`friendbot ${res.status}`);
+/**
+ * Friendbot, art arda çağrıldığında bağlantıyı düşürüyor.
+ *
+ * Dört hesabı peş peşe fonlarken "fetch failed" ile patladı — ağ sorunu değil, servisin
+ * kendisi. Tek denemede bırakmak, kurulumun rastgele başarısız olması demek; o yüzden
+ * geri çekilerek tekrar deniyor.
+ */
+export async function fundWithFriendbot(publicKey: string, attempts = 4): Promise<void> {
+  let lastError = "";
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 1500 * i));
+    try {
+      const res = await fetch(`https://friendbot.stellar.org?addr=${encodeURIComponent(publicKey)}`);
+      // 400 genellikle "zaten fonlanmış" demek — çağıran açısından hata değil.
+      if (res.ok || res.status === 400) return;
+      lastError = `HTTP ${res.status}`;
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : String(e);
+    }
+  }
+  throw new Error(`friendbot ${publicKey.slice(0, 8)}… fonlayamadı: ${lastError}`);
 }
 
 /**

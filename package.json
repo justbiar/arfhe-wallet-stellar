@@ -13,6 +13,7 @@
     "build:panel": "vite build --config vite.panel.config.js",
     "typecheck:panel": "tsc --noEmit -p tsconfig.panel.json",
     "relayer": "node relayer/server.mjs",
+    "payroll": "tsx payroll/service.ts",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest",

@@ -33,6 +33,7 @@ import { WalletContext } from "../AppContext.js";
 import { toChainId, wellKnownChainName } from "../backend/NetworkTypes.js";
 import { analyzeFheRisk } from "../backend/DAppConnectionService.js";
 import { PhishingDetector, type PhishingCheckResult } from "../backend/PhishingDetector.js";
+import type { DecodedTransaction } from "../backend/StellarTxDecoder.js";
 import { toUserMessage } from "../backend/UserFacingError.js";
 import HuntSurface from "../components/HuntSurface.js";
 
@@ -154,6 +155,10 @@ export default function Approve() {
   const [siteHistory, setSiteHistory] = useState<{ known: boolean; when: string } | null>(null);
   /** Which account the connection will be granted to. Defaults to the active one. */
   const [selectedAccountIndex, setSelectedAccountIndex] = useState(0);
+  /** The decoded Stellar envelope, once it has been read. Null means it has not been. */
+  const [stellarTx, setStellarTx] = useState<DecodedTransaction | null>(null);
+  /** Why the envelope could not be read — the wrong network, or something unparseable. */
+  const [stellarRefusal, setStellarRefusal] = useState("");
 
   const requestId = new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("requestId") ?? undefined;
 
@@ -276,6 +281,40 @@ export default function Approve() {
     return () => { cancelled = true; };
   }, [request?.origin, context]);
 
+  // ── Read the Stellar envelope ─────────────────────────────────────
+  //
+  // Decoding is asynchronous — the Stellar SDK is loaded on demand rather than sitting in
+  // the popup's main bundle for the majority of approvals that have nothing to do with
+  // Stellar — so it cannot happen inline in the render.
+  //
+  // A failure here is not a display problem to shrug off. It is the one case where this
+  // screen cannot say what is about to be signed, so the reason is kept and shown, and the
+  // Confirm button stays off until something decodes. The wrong network arrives through
+  // this same path: `UnsupportedNetworkError` carries its own sentence and needs no
+  // special case, because the outcome is identical — nothing gets signed.
+  useEffect(() => {
+    if (request?.method !== "stellar_signTransaction") return;
+    const { xdr, networkPassphrase } = (request.params?.[0] ?? {}) as {
+      xdr?: string; networkPassphrase?: string;
+    };
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { decodeTransactionXdr } = await import("../backend/StellarTxDecoder.js");
+        const decoded = await decodeTransactionXdr(String(xdr ?? ""), String(networkPassphrase ?? ""));
+        if (cancelled) return;
+        setStellarTx(decoded);
+        setStellarRefusal("");
+      } catch (e) {
+        if (cancelled) return;
+        setStellarTx(null);
+        setStellarRefusal(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [request]);
+
   // The account list only exists once the wallet is unlocked, so the selector's starting
   // value has to follow that rather than being fixed at mount.
   useEffect(() => {
@@ -343,6 +382,40 @@ export default function Approve() {
             ? [address.toLowerCase()]
             : [{ parentCapability: "eth_accounts" }],
         });
+        return;
+      }
+
+      // ── Stellar ───────────────────────────────────────────────────
+      //
+      // Above the EVM checks below because not one of them applies: a Stellar signature
+      // needs no RPC endpoint, no ethers wallet and no chain id. Falling through to them
+      // would refuse the request for the want of things it never uses.
+      if (method === "stellar_signTransaction") {
+        const { xdr, networkPassphrase } = (request.params?.[0] ?? {}) as {
+          xdr?: string; networkPassphrase?: string;
+        };
+        if (!xdr || !networkPassphrase) {
+          throw new ApprovalError("The site did not provide a transaction and a network passphrase.");
+        }
+        // Signing something this screen could not read would defeat the point of the
+        // screen. The button is already disabled in that state; this is the same rule
+        // written where it is enforced rather than where it is displayed.
+        if (!stellarTx) {
+          throw new ApprovalError(stellarRefusal || "The transaction has not been decoded yet.");
+        }
+
+        // The grant is per origin and names the EVM address, because that is the identity
+        // a site connects to. The Stellar key is derived from the same account, so the
+        // same permission governs both.
+        const connectedTo = account.GetAddress() ?? "";
+        if (!(await context.sitePermissions.canUseAccount(request.origin, connectedTo))) {
+          throw new ApprovalError(
+            `This site is connected to a different account. Switch to the connected account, or reconnect.`
+          );
+        }
+
+        const { signTransactionXdr } = await import("../backend/StellarService.js");
+        await respond({ result: await signTransactionXdr(account, xdr, networkPassphrase) });
         return;
       }
 
@@ -472,7 +545,7 @@ export default function Approve() {
       setError(e instanceof ApprovalError ? e.message : toUserMessage(e, t));
       setBusy(false);
     }
-  }, [request, context, account, network, respond, t]);
+  }, [request, context, account, network, respond, t, stellarTx, stellarRefusal]);
 
   // ── Render ────────────────────────────────────────────────────────
 
@@ -520,6 +593,9 @@ export default function Approve() {
   }
 
   const isConnect = request.method === "eth_requestAccounts" || request.method === "wallet_requestPermissions";
+  const isStellar = request.method === "stellar_signTransaction";
+  /** Nothing is signed while the screen cannot say what it would be signing. */
+  const stellarUnreadable = isStellar && !stellarTx;
   const isTx = request.method === "eth_sendTransaction";
   const txParams = isTx ? (request.params[0] ?? {}) as { to?: string; value?: string; data?: string } : null;
   const fheRisk = isTx ? analyzeFheRisk(txParams?.data, txParams?.to) : null;
@@ -592,7 +668,14 @@ export default function Approve() {
         </Typography>
 
         <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" justifyContent="center" useFlexGap>
-          <Chip size="small" label={network?.network_name ?? "—"} sx={{ fontWeight: 600, fontSize: "0.7rem" }} />
+          {/* The EVM network is the wrong answer for a Stellar request: the wallet's active
+              chain has nothing to do with the envelope being signed, and naming it here
+              would tell the user they are on Sepolia while they sign on Stellar. */}
+          <Chip
+            size="small"
+            label={isStellar ? t("approve.stellarNetworkValue") : (network?.network_name ?? "—")}
+            sx={{ fontWeight: 600, fontSize: "0.7rem" }}
+          />
           {/* Whether this site is new is the cheapest useful safety signal there is, and
               the wallet already knows it. A first connection to a site the user believes
               they use daily is worth a second look. */}
@@ -630,13 +713,40 @@ export default function Approve() {
         </Alert>
       )}
 
+      {/* An envelope that would not decode — including one for a network this wallet does
+          not sign on. Shown as an error rather than a note, because it is not advice: the
+          request cannot proceed, and the Confirm button below is off. */}
+      {isStellar && stellarRefusal && (
+        <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>
+          {t("approve.stellarUndecodable", { reason: stellarRefusal })}
+        </Alert>
+      )}
+
+      {stellarTx && stellarTx.unknownCount > 0 && (
+        <Alert severity="warning" sx={{ mb: 2, borderRadius: 2 }}>
+          {t("approve.stellarUnknownWarning", { n: stellarTx.unknownCount })}
+        </Alert>
+      )}
+
+      {stellarTx?.hasElevatedOperation && (
+        <Alert severity="warning" icon={<ShieldIcon fontSize="inherit" />} sx={{ mb: 2, borderRadius: 2 }}>
+          {t("approve.stellarElevatedWarning")}
+        </Alert>
+      )}
+
+      {stellarTx?.isFeeBump && (
+        <Alert severity="info" sx={{ mb: 2, borderRadius: 2 }}>
+          {t("approve.stellarFeeBump")}
+        </Alert>
+      )}
+
       {/* What is being asked */}
       <Paper elevation={0} sx={{ p: 2, borderRadius: 3, bgcolor: alpha(theme.palette.primary.main, 0.05), mb: 2 }}>
         <Typography variant="caption" color="text.secondary" fontWeight={700}>
           {t("approve.requestLabel")}
         </Typography>
         <Typography variant="body2" fontWeight={700} sx={{ mt: 0.5 }}>
-          {isConnect ? t("approve.connectTitle") : request.method}
+          {isConnect ? t("approve.connectTitle") : isStellar ? t("approve.stellarTitle") : request.method}
         </Typography>
 
         {isConnect && (
@@ -729,6 +839,63 @@ export default function Approve() {
           </>
         )}
 
+        {stellarTx && (
+          <>
+            <Divider sx={{ my: 1.5 }} />
+            <Row label={t("approve.stellarNetwork")} value={t("approve.stellarNetworkValue")} />
+            <Row label={t("approve.stellarSource")} value={stellarTx.source} mono />
+            <Row label={t("approve.stellarFee")} value={`${stellarTx.feeXlm} XLM`} />
+            {stellarTx.memo && (
+              <Row
+                label={t("approve.stellarMemo", { type: stellarTx.memo.type })}
+                value={stellarTx.memo.value}
+                mono
+              />
+            )}
+
+            <Divider sx={{ my: 1.5 }} />
+            <Typography variant="caption" color="text.secondary">
+              {t("approve.stellarOperations")}
+            </Typography>
+            <Stack spacing={1} sx={{ mt: 0.75 }}>
+              {stellarTx.operations.map((op, index) => (
+                <Paper
+                  key={`${op.type}-${index}`}
+                  elevation={0}
+                  sx={{
+                    p: 1,
+                    borderRadius: 2,
+                    bgcolor: "action.hover",
+                    // An operation nobody could decode is drawn as a warning, not as one
+                    // more grey row. It is the one the user most needs to stop at.
+                    border: op.summary === null ? `1px solid ${theme.palette.warning.main}` : undefined,
+                  }}
+                >
+                  <Typography variant="caption" color="text.secondary" sx={{ fontFamily: "monospace" }}>
+                    {op.type}
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    sx={{ display: "block", textTransform: "none", fontWeight: 600, lineHeight: 1.4 }}
+                    color={op.summary === null ? "warning.main" : "text.primary"}
+                  >
+                    {op.summary ?? t("approve.stellarUnknownOp")}
+                  </Typography>
+                  {op.destination && (
+                    <Typography
+                      variant="caption"
+                      sx={{ display: "block", fontFamily: "monospace", wordBreak: "break-all", mt: 0.25 }}
+                      color="text.secondary"
+                    >
+                      → {op.destination}
+                    </Typography>
+                  )}
+                </Paper>
+              ))}
+            </Stack>
+          </>
+        )}
+
         {(request.method === "personal_sign") && (
           <>
             <Divider sx={{ my: 1.5 }} />
@@ -773,7 +940,7 @@ export default function Approve() {
           variant="contained"
           color={dangerous ? "error" : "primary"}
           onClick={approve}
-          disabled={busy || answered || blocked}
+          disabled={busy || answered || blocked || stellarUnreadable}
           sx={{ borderRadius: 2.5, py: 1.2, fontWeight: 700 }}
         >
           {busy ? <CircularProgress size={20} color="inherit" /> : t("approve.confirm")}

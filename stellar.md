@@ -66,7 +66,30 @@ await window.arfheWallet.stellar.signTransaction(xdr, networkPassphrase);
   `content-script.js`, `service-worker.js`. Üçü farklı sebeple var (zaman aşımı, port
   düşerse iptal etmeme, pencere açma); biri atlanırsa "çalışıyor gibi" görünür.
 
-### 2.5 Fiat köprüsü — panel + `scripts/verify-anchor-ramp.mjs`
+### 2.5 Onay ekranı — `src/pages/Approve.tsx`
+
+`stellar_signTransaction` isteği geldiğinde ekran zarfı **çözümleyip** gösteriyor: kaynak
+hesap, ücret (XLM), memo ve operasyon listesi. Onaylanınca `signTransactionXdr` imzalıyor;
+imzalı XDR siteye dönüyor, **gönderilmiyor**.
+
+Dal, EVM kontrollerinin **üstünde**: Stellar imzası için RPC ucu, ethers cüzdanı ve chain id
+gerekmiyor; aşağıya düşseydi istek hiç kullanmadığı şeyler yüzünden reddedilirdi.
+
+Dört kural, dördü de testli (`src/pages/__tests__/Approve.stellar.test.tsx`):
+
+1. **Çözümlenmeyen zarf imzalanmaz.** Onay düğmesi kapalı, sebep ekranda. Desteklenmeyen ağ
+   da bu yoldan gelir — `UnsupportedNetworkError` kendi cümlesini taşır.
+2. **Çözümlenemeyen operasyon uyarı olarak çizilir**, gri bir satır olarak değil. İmzayı
+   engellemez; engellenen şey, öyle bir operasyonun olduğundan başka türlü görünmesi.
+3. **Kalıcı yetki veren operasyon** (`setOptions`, `accountMerge`, `invokeHostFunction`…)
+   ayrı bir uyarı alır.
+4. **Ağ rozeti "Stellar testnet" yazar.** Cüzdanın aktif EVM ağını yazmak, Stellar'da imza
+   atarken kullanıcıya Sepolia'da olduğunu söylemek olurdu.
+
+SDK ve çözümleyici **dinamik import** ile yükleniyor (`StellarService-*.js`,
+`StellarTxDecoder-*.js` ayrı chunk); Stellar'la ilgisi olmayan onaylar bu yükü taşımıyor.
+
+### 2.6 Fiat köprüsü — panel + `scripts/verify-anchor-ramp.mjs`
 
 `npm run verify:anchor` — SEP-1 keşif → SEP-10 auth → SEP-6 deposit → banka simülasyonu →
 Horizon'dan bakiye kontrolü.
@@ -86,7 +109,6 @@ gerçek**. Kodda **yalnızca ana alan adı sabit**; uçlar, passphrase ve varlı
 
 | Konu | Durum |
 |---|---|
-| `Approve.tsx`'te Stellar işlemi gösterimi | **Yok** — bu yüzden imzalama uçtan uca kullanılamıyor |
 | Çekme (withdraw) yönü | Bağlanmadı, ekranda "yapım aşamasında" yazıyor |
 | Confidential token katmanı | Hiç başlanmadı |
 | Tarayıcıda kanıt üretimi (`bb.js`) ölçümü | Yapılmadı |

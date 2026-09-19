@@ -210,7 +210,19 @@
     "canSeeAddress": "See your wallet address and balance",
     "canAsk": "Ask you to approve transactions and signatures",
     "cannotDo": "It cannot move funds, or sign anything, without your approval each time.",
-    "chainUnsupported": "{{chain}} is not supported. Arfhe runs on Sepolia, Base Sepolia and Arbitrum Sepolia — the chains its confidential balances exist on. Confirming will tell the site the network is unavailable."
+    "chainUnsupported": "{{chain}} is not supported. Arfhe runs on Sepolia, Base Sepolia and Arbitrum Sepolia — the chains its confidential balances exist on. Confirming will tell the site the network is unavailable.",
+    "stellarTitle": "Sign a Stellar transaction",
+    "stellarNetwork": "Network",
+    "stellarNetworkValue": "Stellar testnet",
+    "stellarSource": "Source account",
+    "stellarFee": "Fee",
+    "stellarMemo": "Memo ({{type}})",
+    "stellarOperations": "Operations",
+    "stellarUnknownOp": "This operation type could not be decoded — what it does cannot be shown.",
+    "stellarUnknownWarning": "{{n}} operation(s) in this envelope could not be decoded. What you see is not all of what you would sign.",
+    "stellarElevatedWarning": "This is not a one-off transfer: it grants lasting authority over your account. Be sure of what is being asked before you sign.",
+    "stellarFeeBump": "This is a fee-bump envelope. You pay the fee; what gets signed is the inner transaction below.",
+    "stellarUndecodable": "The transaction could not be decoded, so it cannot be signed: {{reason}}"
   },
   "auth": {
     "acceptNoRecoveryHelp": "I understand that if I lose my recovery phrase, Arfhe Wallet cannot help me get my wallet back.",

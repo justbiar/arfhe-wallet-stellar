@@ -210,7 +210,19 @@
     "canSeeAddress": "Cüzdan adresinizi ve bakiyenizi görmek",
     "canAsk": "İşlem ve imza onayı istemek",
     "cannotDo": "Her seferinde onayınız olmadan para taşıyamaz, hiçbir şey imzalayamaz.",
-    "chainUnsupported": "{{chain}} desteklenmiyor. Arfhe; Sepolia, Base Sepolia ve Arbitrum Sepolia üzerinde çalışır — gizli bakiyelerin var olduğu zincirler bunlar. Onaylarsanız siteye ağın kullanılamadığı bildirilecek."
+    "chainUnsupported": "{{chain}} desteklenmiyor. Arfhe; Sepolia, Base Sepolia ve Arbitrum Sepolia üzerinde çalışır — gizli bakiyelerin var olduğu zincirler bunlar. Onaylarsanız siteye ağın kullanılamadığı bildirilecek.",
+    "stellarTitle": "Stellar işlemini imzala",
+    "stellarNetwork": "Ağ",
+    "stellarNetworkValue": "Stellar testnet",
+    "stellarSource": "Kaynak hesap",
+    "stellarFee": "Ücret",
+    "stellarMemo": "Memo ({{type}})",
+    "stellarOperations": "İşlemler",
+    "stellarUnknownOp": "Bu işlem türü çözümlenemedi — ne yaptığı gösterilemiyor.",
+    "stellarUnknownWarning": "Bu zarftaki {{n}} işlem çözümlenemedi. Ekranda gördüğünüz, imzalayacağınızın tamamı değil.",
+    "stellarElevatedWarning": "Bu, tek seferlik bir transfer değil: hesabınız üzerinde kalıcı yetki veriyor. İmzalamadan önce ne istendiğinden emin olun.",
+    "stellarFeeBump": "Bu bir ücret artırma zarfı. Ücreti siz ödeyeceksiniz; imzalanacak olan aşağıdaki iç işlem.",
+    "stellarUndecodable": "İşlem çözümlenemedi, bu yüzden imzalanamaz: {{reason}}"
   },
   "auth": {
     "acceptNoRecoveryHelp": "Kurtarma ifademi (seed phrase) kaybetmem durumunda Arfhe Wallet'ın cüzdanımı geri kazanmama yardımcı olamayacağını kabul ediyorum.",

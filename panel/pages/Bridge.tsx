@@ -9,7 +9,7 @@
  * live in lib/ so the same code can be pointed at a production anchor later.
  */
 import React from "react";
-import { Box, Stack, Typography, Paper, Chip, Divider, useTheme, alpha } from "@mui/material";
+import { Box, Stack, Typography, Chip, Divider, ToggleButton, ToggleButtonGroup, useTheme, alpha } from "@mui/material";
 import SwapHorizIcon from "@mui/icons-material/SwapHoriz";
 import { ANCHOR_HOME_DOMAIN, FIAT_CODE, ANCHOR_ASSET_CODE } from "../lib/anchor";
 import BankPane from "../components/BankPane";
@@ -32,6 +32,31 @@ export default function Bridge() {
             Solda cüzdanınız, sağda banka. Para ikisi arasında gidip geliyor.
           </Typography>
         </Box>
+        {/*
+          * The direction switch lives here, not only in the divider between the panes.
+          *
+          * That divider is hidden below the md breakpoint, which left narrow screens with the
+          * arrow as the only control and therefore no way to switch at all. Direction is the
+          * page's primary choice; it belongs somewhere always visible, and the arrow between
+          * the panes is the echo of it rather than the other way round.
+          */}
+        <ToggleButtonGroup
+          exclusive
+          size="small"
+          value={direction}
+          onChange={(_, v) => { if (v) setDirection(v as Direction); }}
+          aria-label="Yön"
+          sx={{
+            "& .MuiToggleButton-root": {
+              borderRadius: 0, px: 1.8, py: 0.6, fontSize: 11, fontWeight: 700,
+              borderColor: "divider",
+            },
+          }}
+        >
+          <ToggleButton value="deposit">Yükleme</ToggleButton>
+          <ToggleButton value="withdraw">Çekme</ToggleButton>
+        </ToggleButtonGroup>
+
         <Chip
           size="small"
           label={`${ANCHOR_HOME_DOMAIN} · TESTNET`}
@@ -68,6 +93,7 @@ export default function Bridge() {
             onClick={() => setDirection((d) => (d === "deposit" ? "withdraw" : "deposit"))}
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setDirection((d) => (d === "deposit" ? "withdraw" : "deposit")); }}
             aria-label="Yönü değiştir"
+            title="Yönü değiştir"
             sx={{
               my: 1.5, width: 44, height: 44, cursor: "pointer",
               display: "grid", placeItems: "center",

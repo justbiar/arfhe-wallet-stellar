@@ -8,6 +8,7 @@ import { Box, Stack, Typography, Button, IconButton, Tooltip, useTheme, alpha } 
 import LightModeIcon from "@mui/icons-material/LightModeOutlined";
 import DarkModeIcon from "@mui/icons-material/DarkModeOutlined";
 import { Link, useLocation } from "react-router";
+import { CHROME_STORE_URL } from "../lib/product";
 
 const NAV = [
   { to: "/", label: "Ana Sayfa" },
@@ -78,6 +79,17 @@ export default function Shell({
               );
             })}
           </Stack>
+
+          <Button
+            href={CHROME_STORE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            variant="contained"
+            size="small"
+            sx={{ borderRadius: 0, px: 1.8, py: 0.7, fontSize: 11, fontWeight: 700, flexShrink: 0, display: { xs: "none", sm: "inline-flex" } }}
+          >
+            Chrome'a ekle
+          </Button>
 
           <Tooltip title={mode === "light" ? "Koyu tema" : "Açık tema"}>
             <IconButton onClick={onToggleMode} size="small" sx={{ color: "text.secondary" }}>

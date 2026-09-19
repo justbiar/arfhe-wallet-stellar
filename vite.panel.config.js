@@ -30,5 +30,14 @@ export default defineConfig({
     alias: {
       "@wallet": path.resolve(__dirname, "src"),
     },
+    /**
+     * One React, one ReactDOM.
+     *
+     * The Vite root is panel/ but the dependencies live in the repo root's node_modules, and
+     * the @wallet alias reaches back into src/ — two resolution paths into the same packages.
+     * Without dedupe that loaded React twice and every hook threw "Invalid hook call", which
+     * reads like a mistake in the component and is not one.
+     */
+    dedupe: ["react", "react-dom", "@mui/material", "@emotion/react", "@emotion/styled"],
   },
 });

@@ -9,6 +9,7 @@ import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import SyncAltIcon from "@mui/icons-material/SyncAlt";
 import { Link } from "react-router";
 import { ANCHOR_HOME_DOMAIN, DEPOSIT_MIN_TRY, DEPOSIT_MAX_TRY } from "../lib/anchor";
+import { CHROME_STORE_URL, FOUNDED_YEAR } from "../lib/product";
 
 function Section({ children, sx }: { children: React.ReactNode; sx?: object }) {
   return <Box sx={{ maxWidth: 1180, mx: "auto", px: { xs: 2, md: 3 }, ...sx }}>{children}</Box>;
@@ -77,12 +78,20 @@ export default function Landing() {
             Köprüyü aç
           </Button>
           <Button
-            component={Link} to="/about" variant="outlined" size="large"
+            href={CHROME_STORE_URL} target="_blank" rel="noopener noreferrer"
+            variant="outlined" size="large"
             sx={{ borderRadius: 0, px: 3, py: 1.4, fontSize: 14, fontWeight: 700, borderColor: "divider", color: "text.primary" }}
           >
-            Arfhe Wallet nedir?
+            Chrome'a ekle
           </Button>
         </Stack>
+
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 2.5, textTransform: "none" }}>
+          Arfhe Wallet {FOUNDED_YEAR}'ten beri geliştiriliyor ve Chrome Web Mağazası'nda yayında.{" "}
+          <Box component={Link} to="/about" sx={{ color: "text.primary", textUnderlineOffset: 3 }}>
+            Cüzdan hakkında →
+          </Box>
+        </Typography>
       </Section>
 
       {/* ── İki yön ── */}

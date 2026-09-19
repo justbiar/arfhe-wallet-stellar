@@ -1,3 +1,5 @@
+import { pt } from "../lib/language";
+import { CHROME_STORE_URL } from "../lib/product";
 /**
  * The Arfhe side: the account, its balances, and the leg of the ramp the wallet owns.
  *
@@ -33,9 +35,9 @@ const ACCENT = "#4338CA";
 function Amount({ value, code }: { value: string | null; code: string }) {
   return (
     <Box>
-      <Typography variant="caption" color="text.secondary">{code}</Typography>
+      <Typography variant="caption" color="text.secondary">{pt(code)}</Typography>
       <Typography sx={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1.2 }}>
-        {value === null ? "—" : trimZeros(value)}
+        {pt(value === null ? "—" : trimZeros(value))}
       </Typography>
     </Box>
   );
@@ -50,20 +52,20 @@ function trimZeros(v: string): string {
 function Instruction({ label, value, help }: { label: string; value: string; help?: string }) {
   return (
     <Box>
-      <Typography variant="caption" color="text.secondary">{label}</Typography>
+      <Typography variant="caption" color="text.secondary">{pt(label)}</Typography>
       <Box
         sx={{
           mt: 0.5, px: 1.5, py: 1.2, border: "1px solid", borderColor: "text.primary",
           fontFamily: "var(--font-arbeit-technik)", fontSize: 12.5, wordBreak: "break-all",
         }}
       >
-        {value}
+        {pt(value)}
       </Box>
-      {help && (
+      {pt(help && (
         <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5, textTransform: "none" }}>
-          {help}
+          {pt(help)}
         </Typography>
-      )}
+      ))}
     </Box>
   );
 }
@@ -108,18 +110,18 @@ export default function WalletPane({ direction, ramp }: { direction: Direction; 
 
   return (
     <PaneFrame
-      label="ARFHE WALLET"
+      label={pt("ARFHE WALLET")}
       accent={ACCENT}
       title={
         <Chip
           size="small"
           label={
-            !connected ? "BAĞLI DEĞİL"
+            pt(!connected ? "BAĞLI DEĞİL"
               : ramp.signerKind === "arfhe" ? "UZANTI"
-              : "DEMO HESAP"
+              : "DEMO HESAP")
           }
           sx={{
-            borderRadius: 0, height: 20, fontSize: 10, fontWeight: 700,
+            borderRadius: 3, height: 20, fontSize: 10, fontWeight: 700,
             bgcolor: connected ? `${ACCENT}1A` : "action.hover",
             color: connected ? ACCENT : "text.secondary",
           }}
@@ -128,14 +130,14 @@ export default function WalletPane({ direction, ramp }: { direction: Direction; 
     >
       <Box sx={{ border: "1px solid", borderColor: "divider", p: 2 }}>
         <Stack direction="row" alignItems="center" gap={0.5}>
-          <Typography variant="caption" color="text.secondary">STELLAR ADRESİ</Typography>
-          {ramp.address && (
-            <Tooltip title={copied ? "Kopyalandı" : "Kopyala"}>
+          <Typography variant="caption" color="text.secondary">{pt("STELLAR ADRESİ")}</Typography>
+          {pt(ramp.address && (
+            <Tooltip title={pt(copied ? "Kopyalandı" : "Kopyala")}>
               <IconButton size="small" onClick={copy} sx={{ p: 0.3 }}>
                 {copied ? <CheckIcon sx={{ fontSize: 13 }} /> : <ContentCopyIcon sx={{ fontSize: 13 }} />}
               </IconButton>
             </Tooltip>
-          )}
+          ))}
         </Stack>
         <Typography
           sx={{
@@ -143,7 +145,7 @@ export default function WalletPane({ direction, ramp }: { direction: Direction; 
             color: ramp.address ? "text.primary" : "text.disabled", wordBreak: "break-all",
           }}
         >
-          {ramp.address ? shortAddress(ramp.address, 10, 6) : "G···"}
+          {pt(ramp.address ? shortAddress(ramp.address, 10, 6) : "G···")}
         </Typography>
 
         <Stack direction="row" gap={3} sx={{ mt: 2 }}>
@@ -151,42 +153,41 @@ export default function WalletPane({ direction, ramp }: { direction: Direction; 
           <Amount value={ramp.balances?.xlm ?? null} code="XLM" />
         </Stack>
 
-        {ramp.address && (
+        {pt(ramp.address && (
           <MuiLink
             href={`https://stellar.expert/explorer/testnet/account/${ramp.address}`}
             target="_blank" rel="noopener noreferrer"
             variant="caption"
             sx={{ display: "inline-flex", alignItems: "center", gap: 0.4, mt: 1.5, color: "text.secondary", textTransform: "none" }}
-          >
-            Zincirde gör <OpenInNewIcon sx={{ fontSize: 12 }} />
+          >{pt(" Zincirde gör ")}<OpenInNewIcon sx={{ fontSize: 12 }} />
           </MuiLink>
-        )}
+        ))}
       </Box>
 
       <Divider sx={{ my: 2.5 }} />
 
       <Typography variant="caption" color="text.secondary" fontWeight={700}>
-        {direction === "deposit" ? "YÜKLEME ALACAK" : `${ANCHOR_ASSET_CODE} GÖNDER`}
+        {pt(direction === "deposit" ? "YÜKLEME ALACAK" : `${ANCHOR_ASSET_CODE} GÖNDER`)}
       </Typography>
 
       <Stack gap={2} sx={{ mt: 1.5 }}>
         {ramp.phase === "done" && (
-          <Alert severity="success" sx={{ borderRadius: 0 }}>
-            {direction === "deposit"
+          <Alert severity="success" sx={{ borderRadius: 3 }}>
+            {pt(direction === "deposit"
               ? `${trimZeros(ramp.status?.amountOut ?? "")} ${ANCHOR_ASSET_CODE} hesabınıza geçti.`
               : `${trimZeros(ramp.status?.amountIn ?? "")} ${ANCHOR_ASSET_CODE} gönderildi, ` +
-                `${ramp.status?.amountOut ?? "—"} ${FIAT_CODE} IBAN'a geçti.`}
+                `${ramp.status?.amountOut ?? "—"} ${FIAT_CODE} IBAN'a geçti.`)}
           </Alert>
         )}
 
-        {ramp.error && (
-          <Alert severity="error" sx={{ borderRadius: 0 }}>{ramp.error}</Alert>
-        )}
+        {pt(ramp.error && (
+          <Alert severity="error" sx={{ borderRadius: 3 }}>{pt(ramp.error)}</Alert>
+        ))}
 
         {/* The user's own payment, shown the moment it lands on the ledger — before the
             anchor has done anything. It is irreversible from that point, so the proof of
             it should not wait on the other side's word. */}
-        {ramp.paymentHash && <HashLine hash={ramp.paymentHash} label="GÖNDERDİĞİNİZ ÖDEME" />}
+        {pt(ramp.paymentHash && <HashLine hash={ramp.paymentHash} label={pt("GÖNDERDİĞİNİZ ÖDEME")} />)}
 
         {/* On a withdrawal the anchor's `stellar_transaction_id` IS the payment above —
             the same hash under two headings, which reads as two transactions. The receipt
@@ -195,15 +196,12 @@ export default function WalletPane({ direction, ramp }: { direction: Direction; 
 
         {direction === "deposit" ? (
           <Box sx={{ border: "1px dashed", borderColor: "divider", p: 2 }}>
-            <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
-              Havale onaylandığında USDC bu hesaba geçer. Güven hattı bağlanırken açıldı, yani
-              ödeme doğrudan düşer — bekleyen bir talep olarak kalmaz.
-            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>{pt(" Havale onaylandığında USDC bu hesaba geçer. Güven hattı bağlanırken açıldı, yani ödeme doğrudan düşer — bekleyen bir talep olarak kalmaz. ")}</Typography>
           </Box>
         ) : (
           <>
             <TextField
-              label="Gönderilecek tutar"
+              label={pt("Gönderilecek tutar")}
               value={usdcAmount}
               onChange={(e) => setUsdcAmount(e.target.value)}
               inputMode="decimal"
@@ -211,39 +209,37 @@ export default function WalletPane({ direction, ramp }: { direction: Direction; 
               disabled={!connected || ramp.withdrawOrder !== null}
               error={belowMin || overBalance}
               helperText={
-                belowMin ? `En az ${WITHDRAW_MIN_USDC} ${ANCHOR_ASSET_CODE}`
+                pt(belowMin ? `En az ${WITHDRAW_MIN_USDC} ${ANCHOR_ASSET_CODE}`
                   : overBalance ? "Bakiyeden fazla"
-                  : `En az ${WITHDRAW_MIN_USDC} ${ANCHOR_ASSET_CODE} · bakiye ${trimZeros(ramp.balances?.usdc ?? "0")}`
+                  : `En az ${WITHDRAW_MIN_USDC} ${ANCHOR_ASSET_CODE} · bakiye ${trimZeros(ramp.balances?.usdc ?? "0")}`)
               }
               InputProps={{
-                endAdornment: <InputAdornment position="end">{ANCHOR_ASSET_CODE}</InputAdornment>,
-                sx: { borderRadius: 0 },
+                endAdornment: <InputAdornment position="end">{pt(ANCHOR_ASSET_CODE)}</InputAdornment>,
+                sx: { borderRadius: 3 },
               }}
             />
 
             {ramp.withdrawOrder && (
               <>
                 <Instruction
-                  label="ANCHOR HESABI"
+                  label={pt("ANCHOR HESABI")}
                   value={ramp.withdrawOrder.destination}
-                  help="Ödeme bu hesaba gider"
+                  help={pt("Ödeme bu hesaba gider")}
                 />
                 {/* The memo type stays out of the label: captions are upper-cased by the
                     theme, and Turkish upper-case turns "id" into "İD" — a protocol value
                     rendered as something that is not it. The help line does not transform. */}
                 <Instruction
-                  label="MEMO"
+                  label={pt("MEMO")}
                   value={ramp.withdrawOrder.memo}
-                  help={`Tür: ${ramp.withdrawOrder.memoType} · bu memo olmadan ödeme hangi çekim ` +
-                    "talebine ait olduğu anlaşılamaz — geri alınamaz"}
+                  help={pt(`Tür: ${ramp.withdrawOrder.memoType} · bu memo olmadan ödeme hangi çekim ` +
+                    "talebine ait olduğu anlaşılamaz — geri alınamaz")}
                 />
               </>
             )}
 
             {!connected && (
-              <Alert severity="info" sx={{ borderRadius: 0 }}>
-                Çekim için önce bir hesap bağlayın.
-              </Alert>
+              <Alert severity="info" sx={{ borderRadius: 3 }}>{pt(" Çekim için önce bir hesap bağlayın. ")}</Alert>
             )}
           </>
         )}
@@ -256,23 +252,27 @@ export default function WalletPane({ direction, ramp }: { direction: Direction; 
               onClick={() => ramp.connect("arfhe")}
               disabled={busy || arfheFound === false}
               startIcon={busy ? <CircularProgress size={14} color="inherit" /> : null}
-              sx={{ borderRadius: 0, py: 1.2, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" } }}
+              sx={{ borderRadius: 3, py: 1.2, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" } }}
             >
-              {busy ? "Bağlanılıyor…" : "Arfhe Wallet ile bağlan"}
+              {pt(busy ? "Bağlanılıyor…" : "Arfhe Wallet ile bağlan")}
             </Button>
+            {/* The throwaway-account path is gone on purpose. It made the demo work for a
+                visitor with nothing installed, and in exchange the thing being demonstrated
+                — a wallet holding the keys — was the one part they never saw. Without the
+                extension there is now an install link rather than a substitute for it. */}
             {arfheFound === false && (
-              <Typography variant="caption" color="text.secondary" sx={{ textTransform: "none", textAlign: "center" }}>
-                Uzantı bu sayfada bulunamadı. Demo hesapla devam edebilirsiniz.
-              </Typography>
+              <Stack gap={1}>
+                <Typography variant="caption" color="text.secondary" sx={{ textTransform: "none", textAlign: "center" }}>{pt(" Uzantı bu sayfada bulunamadı. Bu akış Arfhe Wallet ile çalışıyor. ")}</Typography>
+                <Button
+                  href={CHROME_STORE_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  variant="outlined"
+                  sx={{ borderRadius: 3, py: 1.2, borderColor: "divider", color: "text.primary" }}
+                >{pt(" Arfhe Wallet'ı kur ")}</Button>
+              </Stack>
             )}
-            <Button
-              variant="outlined"
-              onClick={() => ramp.connect("demo")}
-              disabled={busy}
-              sx={{ borderRadius: 0, py: 1.2, borderColor: "divider", color: "text.primary" }}
-            >
-              Demo cüzdanı oluştur
-            </Button>
+            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "none", textAlign: "center" }}>{pt(" Denemek için testnet USDC gerekiyor: faucet.circle.com üzerinden Stellar testnet'i seçip cüzdanınızın Stellar adresine 20 USDC isteyin. ")}</Typography>
           </Stack>
         ) : direction === "withdraw" && ramp.phase !== "done" ? (
           !ramp.withdrawOrder ? (
@@ -281,9 +281,9 @@ export default function WalletPane({ direction, ramp }: { direction: Direction; 
               disabled={belowMin || overBalance || usdcAmount === "" || ramp.phase === "ordering"}
               onClick={() => ramp.openWithdraw(usdcAmount)}
               startIcon={ramp.phase === "ordering" ? <CircularProgress size={14} color="inherit" /> : null}
-              sx={{ borderRadius: 0, py: 1.2, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" } }}
+              sx={{ borderRadius: 3, py: 1.2, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" } }}
             >
-              {ramp.phase === "ordering" ? "Talep açılıyor…" : "Çekim talebi aç"}
+              {pt(ramp.phase === "ordering" ? "Talep açılıyor…" : "Çekim talebi aç")}
             </Button>
           ) : (
             <Button
@@ -291,36 +291,32 @@ export default function WalletPane({ direction, ramp }: { direction: Direction; 
               disabled={paying || settling}
               onClick={() => ramp.sendWithdrawal(usdcAmount)}
               startIcon={paying || settling ? <CircularProgress size={14} color="inherit" /> : null}
-              sx={{ borderRadius: 0, py: 1.2, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" } }}
+              sx={{ borderRadius: 3, py: 1.2, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" } }}
             >
-              {paying
+              {pt(paying
                 ? (ramp.signerKind === "arfhe" ? "Cüzdanda onaylayın…" : "Gönderiliyor…")
                 : settling ? "Anchor bekleniyor…"
-                : `${usdcAmount} ${ANCHOR_ASSET_CODE} gönder`}
+                : `${usdcAmount} ${ANCHOR_ASSET_CODE} gönder`)}
             </Button>
           )
         ) : ramp.phase === "done" ? (
           <Button
             variant="outlined"
             onClick={ramp.reset}
-            sx={{ borderRadius: 0, py: 1.2, borderColor: "divider", color: "text.primary" }}
-          >
-            Yeni işlem
-          </Button>
+            sx={{ borderRadius: 3, py: 1.2, borderColor: "divider", color: "text.primary" }}
+          >{pt(" Yeni işlem ")}</Button>
         ) : (
           <Button
             variant="outlined"
             onClick={ramp.refreshBalances}
-            sx={{ borderRadius: 0, py: 1.2, borderColor: "divider", color: "text.primary" }}
-          >
-            Bakiyeleri yenile
-          </Button>
+            sx={{ borderRadius: 3, py: 1.2, borderColor: "divider", color: "text.primary" }}
+          >{pt(" Bakiyeleri yenile ")}</Button>
         )}
 
         <Typography variant="caption" color="text.secondary" sx={{ textTransform: "none", textAlign: "center", lineHeight: 1.5 }}>
           {ramp.signerKind === "arfhe"
-            ? <>Anahtar uzantıda kalır; her imza cüzdanda onaylanır.<br />Kurtarma ifadeniz hiçbir zaman istenmez.</>
-            : <>Bu sekme için üretilmiş tek kullanımlık testnet hesabı.<br />Kurtarma ifadeniz hiçbir zaman istenmez.</>}
+            ? <>{pt("Anahtar uzantıda kalır; her imza cüzdanda onaylanır.")}<br />{pt("Kurtarma ifadeniz hiçbir zaman istenmez.")}</>
+            : <>{pt("Bu sekme için üretilmiş tek kullanımlık testnet hesabı.")}<br />{pt("Kurtarma ifadeniz hiçbir zaman istenmez.")}</>}
         </Typography>
       </Stack>
     </PaneFrame>

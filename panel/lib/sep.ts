@@ -9,7 +9,7 @@
  */
 
 import { TransactionBuilder } from "@stellar/stellar-sdk";
-import { ANCHOR_HOME_DOMAIN, ANCHOR_ASSET_CODE } from "./anchor";
+import { ANCHOR_HOME_DOMAIN, ANCHOR_ASSET_CODE, anchorOrigin } from "./anchor";
 import type { PanelSigner } from "./signer";
 
 export interface AnchorConfig {
@@ -21,7 +21,7 @@ export interface AnchorConfig {
 
 /** SEP-1: everything else is discovered from here. */
 export async function discoverAnchor(homeDomain = ANCHOR_HOME_DOMAIN): Promise<AnchorConfig> {
-  const res = await fetch(`https://${homeDomain}/.well-known/stellar.toml`);
+  const res = await fetch(`${anchorOrigin(homeDomain)}/.well-known/stellar.toml`);
   if (!res.ok) throw new Error(`Anchor bulunamadı: stellar.toml okunamadı (HTTP ${res.status}).`);
   const toml = await res.text();
 

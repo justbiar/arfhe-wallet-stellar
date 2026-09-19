@@ -1,3 +1,4 @@
+import { pt } from "../lib/language";
 /**
  * Gizlilik havuzu — the privacy pool, run from this page.
  *
@@ -32,13 +33,13 @@ const RELAYER_URL = "http://localhost:8787";
 function Fact({ label, value, tone }: { label: string; value: React.ReactNode; tone?: "ok" | "warn" }) {
   return (
     <Stack direction="row" justifyContent="space-between" alignItems="baseline" gap={2} sx={{ py: 0.6 }}>
-      <Typography variant="caption" color="text.secondary">{label}</Typography>
+      <Typography variant="caption" color="text.secondary">{pt(label)}</Typography>
       <Typography
         variant="caption"
         sx={{ fontFamily: "var(--font-arbeit-technik)", textAlign: "right", wordBreak: "break-all" }}
         color={tone === "warn" ? "warning.main" : tone === "ok" ? "success.main" : "text.primary"}
       >
-        {value}
+        {pt(value)}
       </Typography>
     </Stack>
   );
@@ -47,8 +48,8 @@ function Fact({ label, value, tone }: { label: string; value: React.ReactNode; t
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <Box sx={{ border: "1px solid", borderColor: "divider", p: 2.5, mb: 2 }}>
-      <Typography variant="caption" color="text.secondary" fontWeight={700}>{title}</Typography>
-      <Box sx={{ mt: 1.5 }}>{children}</Box>
+      <Typography variant="caption" color="text.secondary" fontWeight={700}>{pt(title)}</Typography>
+      <Box sx={{ mt: 1.5 }}>{pt(children)}</Box>
     </Box>
   );
 }
@@ -172,9 +173,15 @@ export default function Privacy() {
       // The SDK reports what it actually did. Reporting "done" without looking is how a
       // call that submitted nothing reads as a success — which is exactly what happened
       // the first time this page ran.
-      const hashes = (Array.isArray(result) ? result : [result])
-        .map((r) => (r as { txHash?: string; hash?: string })?.txHash ?? (r as { hash?: string })?.hash)
-        .filter(Boolean) as string[];
+      // The hashes live on the result itself (`{status, hashes}`), not one per element.
+      // Reading `txHash`/`hash` off it found nothing, so a deposit that did land on-chain
+      // was reported as producing no transaction — the original bug with the sign flipped,
+      // and just as misleading.
+      const hashes = (Array.isArray(result) ? result : [result]).flatMap((r) => {
+        const o = r as { hashes?: string[]; txHash?: string; hash?: string };
+        if (Array.isArray(o?.hashes)) return o.hashes;
+        return [o?.txHash ?? o?.hash].filter(Boolean) as string[];
+      });
       note(
         hashes.length > 0
           ? `${kind} · ${((performance.now() - started) / 1000).toFixed(1)} sn · ${hashes.join(", ")}`
@@ -188,122 +195,101 @@ export default function Privacy() {
 
   return (
     <Box sx={{ maxWidth: 820, mx: "auto", px: { xs: 2, md: 3 }, py: { xs: 3, md: 5 } }}>
-      <Typography sx={{ fontFamily: "var(--font-arbeit-contrast)", fontWeight: 800, fontSize: { xs: 28, md: 34 }, letterSpacing: "-0.02em" }}>
-        Gizlilik havuzu
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 3 }}>
-        Havuz içindeki transferlerde tutar, bakiye <b>ve alıcı</b> gizli. Havuza giriş ve
-        çıkış zincirde açık kalır — gizlenen, aradaki hareket.
-      </Typography>
+      <Typography sx={{ fontFamily: "var(--font-arbeit-contrast)", fontWeight: 800, fontSize: { xs: 28, md: 34 }, letterSpacing: "-0.02em" }}>{pt(" Gizlilik havuzu ")}</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 3 }}>{pt(" Havuz içindeki transferlerde tutar, bakiye ")}<b>{pt("ve alıcı")}</b>{pt(" gizli. Havuza giriş ve çıkış zincirde açık kalır — gizlenen, aradaki hareket. ")}</Typography>
 
-      <Alert severity="warning" sx={{ borderRadius: 0, mb: 2 }}>
-        Nethermind'ın referans uygulaması: <b>denetlenmemiş</b>, yalnızca testnet, Groth16
-        kurulumu törensiz. Değer taşımaz.
-      </Alert>
+      <Alert severity="warning" sx={{ borderRadius: 3, mb: 2 }}>{pt(" Nethermind'ın referans uygulaması: ")}<b>{pt("denetlenmemiş")}</b>{pt(", yalnızca testnet, Groth16 kurulumu törensiz. Değer taşımaz. ")}</Alert>
 
-      {/* Not a caveat to bury. The SDK loads, derives keys and proves; what it cannot do
-          is produce a proof the deployed contract accepts, because the contract's ext-data
-          hash was bound to the pool and token after the package was published. */}
-      <Alert severity="error" sx={{ borderRadius: 0, mb: 3 }}>
-        <b>İşlemler şu an başarısız oluyor (kontrat hatası #10, WrongExtHash).</b> npm'deki
-        SDK 3 Eylül'de yayınlandı; zincirdeki kontrat 16 Eylül'de <code>ext_data_hash</code>'i
-        havuz ve token kimliğine bağladı. Yayınlanmış istemci eski şemayla hash'liyor, kontrat
-        reddediyor. Çözüm SDK'yı depodan derlemek; bkz. <code>stellar.md</code> §5.11.
-      </Alert>
+      {/* Where the SDK comes from, because it is not what `npm install` gives you.
+          The published 0.1.0 predates the contract binding its ext-data hash to the pool
+          and token, so every transaction it signs is rejected with #10 WrongExtHash. This
+          panel resolves the package to a local build of the repo instead, and with it the
+          pool transacts — measured on testnet, not assumed. Worth stating on the page: a
+          visitor who clones this and installs from npm will see the old failure. */}
+      <Alert severity="info" sx={{ borderRadius: 3, mb: 3 }}>
+        <b>{pt("npm'deki SDK zincirdeki kontrattan eski")}</b>{pt(" (0.1.0, 3 Eylül). Kontrat 16 Eylül'de ")}<code>{pt("ext_data_hash")}</code>{pt("'i havuz ve token kimliğine bağladı; o istemci eski şemayla hash'liyor ve her işlem #10 ")}<code>{pt("WrongExtHash")}</code>{pt(" ile reddediliyor. Depodan derlenmiş bir kopyayla yatırma testnette çalıştı — nasıl derlendiği ")}<code>{pt("stellar.md")}</code>{pt(" §5.11'de. ")}</Alert>
 
       {/* ── Ortam ── */}
-      <Section title="ORTAM">
+      <Section title={pt("ORTAM")}>
         {!session ? (
           <Stack gap={1.5}>
             <Stack direction="row" alignItems="center" gap={1.2}>
-              {busy && <CircularProgress size={15} />}
+              {pt(busy && <CircularProgress size={15} />)}
               <Typography variant="body2" color="text.secondary">
-                {busy
+                {pt(busy
                   ? "Gizlilik katmanı yükleniyor — wasm, devreler ve kanıtlayıcı işçi."
-                  : "Yüklenemedi."}
+                  : "Yüklenemedi.")}
               </Typography>
             </Stack>
             {!busy && (
               <Button
                 variant="contained" onClick={start}
-                sx={{ borderRadius: 0, py: 1.2, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" }, alignSelf: "flex-start" }}
-              >
-                Yeniden dene
-              </Button>
+                sx={{ borderRadius: 3, py: 1.2, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" }, alignSelf: "flex-start" }}
+              >{pt(" Yeniden dene ")}</Button>
             )}
           </Stack>
         ) : (
           <>
             <Fact
-              label="Tarayıcı izolasyonu (kanıt üretimi için)"
+              label={pt("Tarayıcı izolasyonu (kanıt üretimi için)")}
               value={session.crossOriginIsolated ? "var" : "YOK — kanıt yavaş ya da imkânsız"}
               tone={session.crossOriginIsolated ? "ok" : "warn"}
             />
             <Fact
-              label="Bootnode (7 günden eski geçmiş)"
+              label={pt("Bootnode (7 günden eski geçmiş)")}
               value={session.bootnodeNeeded ? "gerekli — Nethermind'ın sunucusu kullanılıyor" : "gerekmiyor"}
               tone={session.bootnodeNeeded ? "warn" : "ok"}
             />
-            <Fact label="Havuz" value={shortAddress(POOL, 8, 6)} />
-            <Fact label="Politika" value={String(SPP_DEPLOYMENT.pools[0].policyFlags)} />
+            <Fact label={pt("Havuz")} value={shortAddress(POOL, 8, 6)} />
+            <Fact label={pt("Politika")} value={String(SPP_DEPLOYMENT.pools[0].policyFlags)} />
           </>
         )}
       </Section>
 
       {/* ── Relayer ── */}
-      <Section title="RELAYER">
+      <Section title={pt("RELAYER")}>
         {relayer ? (
           <>
-            <Fact label="Durum" value="çalışıyor" tone="ok" />
-            <Fact label="Ödeyen hesap" value={shortAddress(relayer.publicKey, 8, 6)} />
-            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1, textTransform: "none", lineHeight: 1.6 }}>
-              Bu sayfa şu an işlemleri <b>kendi</b> anahtarıyla gönderiyor, yani gönderen
-              zincirde görünüyor. Relayer'ı devreye almak SDK'da bir "hazırla ama gönderme"
-              adımı istiyor; bkz. <code>stellar.md</code> §5.10.
-            </Typography>
+            <Fact label={pt("Durum")} value="çalışıyor" tone="ok" />
+            <Fact label={pt("Ödeyen hesap")} value={shortAddress(relayer.publicKey, 8, 6)} />
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1, textTransform: "none", lineHeight: 1.6 }}>{pt(" Bu sayfa şu an işlemleri ")}<b>{pt("kendi")}</b>{pt(" anahtarıyla gönderiyor, yani gönderen zincirde görünüyor. Relayer'ı devreye almak SDK'da bir \"hazırla ama gönderme\" adımı istiyor; bkz. ")}<code>{pt("stellar.md")}</code>{pt(" §5.10. ")}</Typography>
           </>
         ) : (
-          <Typography variant="caption" color="text.secondary" sx={{ textTransform: "none" }}>
-            Çalışmıyor. <code>npm run relayer</code> ile başlatılır.
-          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ textTransform: "none" }}>{pt(" Çalışmıyor. ")}<code>{pt("npm run relayer")}</code>{pt(" ile başlatılır. ")}</Typography>
         )}
       </Section>
 
       {/* ── Hesap ── */}
       {session && (
-        <Section title="HESAP">
+        <Section title={pt("HESAP")}>
           {!account ? (
             <Stack gap={1.5}>
-              <Typography variant="body2" color="text.secondary">
-                Bu sekme için tek kullanımlık bir testnet hesabı üretilir ve gizlilik
-                anahtarları ondan türetilir. Kurtarma ifadesi istenmez.
-              </Typography>
+              <Typography variant="body2" color="text.secondary">{pt(" Bu sayfa kendi testnet hesabını kullanıyor ve gizlilik anahtarlarını ondan türetiyor; hesap tarayıcıda saklanıyor, her ziyarette yenisi üretilmiyor. Kurtarma ifadesi istenmez. Arfhe Wallet hesabıyla bağlanmak henüz mümkün değil: havuz SDK'sı anahtarları SEP-53 imzalı bir mesajdan türetiyor, uzantının siteye açtığı yüzeyde ise yalnızca adres okuma ve işlem imzalama var. ")}</Typography>
               <Button
                 variant="contained" onClick={connect} disabled={busy !== null}
                 startIcon={busy ? <CircularProgress size={14} color="inherit" /> : null}
-                sx={{ borderRadius: 0, py: 1.2, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" }, alignSelf: "flex-start" }}
+                sx={{ borderRadius: 3, py: 1.2, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" }, alignSelf: "flex-start" }}
               >
-                {busy ?? "Hesabı bağla"}
+                {pt(busy ?? "Hesabı bağla")}
               </Button>
             </Stack>
           ) : (
             <>
-              <Fact label="Adres" value={shortAddress(account.userAddress, 10, 6)} />
+              <Fact label={pt("Adres")} value={shortAddress(account.userAddress, 10, 6)} />
               <Fact
-                label="Adres defteri kaydı"
+                label={pt("Adres defteri kaydı")}
                 value={registered ? "kayıtlı" : "kayıtlı değil"}
                 tone={registered ? "ok" : "warn"}
               />
               <Fact
-                label="Havuzdaki bakiye"
+                label={pt("Havuzdaki bakiye")}
                 value={balance === null ? "—" : `${stroopsToXlm(balance)} XLM`}
               />
               <MuiLink
                 href={`https://stellar.expert/explorer/testnet/account/${account.userAddress}`}
                 target="_blank" rel="noopener noreferrer" variant="caption"
                 sx={{ display: "inline-flex", alignItems: "center", gap: 0.4, mt: 1, textTransform: "none" }}
-              >
-                Zincirde gör <OpenInNewIcon sx={{ fontSize: 12 }} />
+              >{pt(" Zincirde gör ")}<OpenInNewIcon sx={{ fontSize: 12 }} />
               </MuiLink>
 
               <Divider sx={{ my: 2 }} />
@@ -311,14 +297,10 @@ export default function Privacy() {
               <Stack direction="row" gap={1} flexWrap="wrap" useFlexGap>
                 {!registered && (
                   <Button variant="outlined" onClick={register} disabled={busy !== null}
-                    sx={{ borderRadius: 0, borderColor: "divider", color: "text.primary" }}>
-                    Adres defterine kaydol
-                  </Button>
+                    sx={{ borderRadius: 3, borderColor: "divider", color: "text.primary" }}>{pt(" Adres defterine kaydol ")}</Button>
                 )}
                 <Button variant="outlined" onClick={refresh} disabled={busy !== null}
-                  sx={{ borderRadius: 0, borderColor: "divider", color: "text.primary" }}>
-                  Yenile
-                </Button>
+                  sx={{ borderRadius: 3, borderColor: "divider", color: "text.primary" }}>{pt(" Yenile ")}</Button>
               </Stack>
             </>
           )}
@@ -327,59 +309,50 @@ export default function Privacy() {
 
       {/* ── İşlemler ── */}
       {pool && (
-        <Section title="İŞLEMLER">
+        <Section title={pt("İŞLEMLER")}>
           <Stack gap={2}>
             <TextField
-              label="Tutar" value={amount} onChange={(e) => setAmount(e.target.value)}
+              label={pt("Tutar")} value={amount} onChange={(e) => setAmount(e.target.value)}
               size="small" inputMode="decimal" fullWidth
-              InputProps={{ sx: { borderRadius: 0 } }}
-              helperText="XLM"
+              InputProps={{ sx: { borderRadius: 3 } }}
+              helperText={pt("XLM")}
             />
             <TextField
-              label="Alıcı (yalnızca transfer için)" value={recipient}
+              label={pt("Alıcı (yalnızca transfer için)")} value={recipient}
               onChange={(e) => setRecipient(e.target.value)}
-              size="small" fullWidth placeholder="G…"
-              InputProps={{ sx: { borderRadius: 0 } }}
-              helperText="Adres defterine kayıtlı bir Stellar adresi"
+              size="small" fullWidth placeholder={pt("G…")}
+              InputProps={{ sx: { borderRadius: 3 } }}
+              helperText={pt("Adres defterine kayıtlı bir Stellar adresi")}
             />
             <Stack direction="row" gap={1} flexWrap="wrap" useFlexGap>
               <Button variant="contained" disabled={busy !== null} onClick={() => act("deposit")}
-                sx={{ borderRadius: 0, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" } }}>
-                Yatır
-              </Button>
+                sx={{ borderRadius: 3, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" } }}>{pt(" Yatır ")}</Button>
               <Button variant="contained" disabled={busy !== null || recipient.trim() === ""} onClick={() => act("transfer")}
-                sx={{ borderRadius: 0, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" } }}>
-                Gizli gönder
-              </Button>
+                sx={{ borderRadius: 3, bgcolor: ACCENT, "&:hover": { bgcolor: "#3730A3" } }}>{pt(" Gizli gönder ")}</Button>
               <Button variant="outlined" disabled={busy !== null} onClick={() => act("withdraw")}
-                sx={{ borderRadius: 0, borderColor: "divider", color: "text.primary" }}>
-                Çek
-              </Button>
+                sx={{ borderRadius: 3, borderColor: "divider", color: "text.primary" }}>{pt(" Çek ")}</Button>
             </Stack>
-            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "none", lineHeight: 1.6 }}>
-              Yatırma ve çekme zincirde <b>açık</b>: tutar ve adres görünür. Gizli olan,
-              havuzun içindeki gönderim.
-            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "none", lineHeight: 1.6 }}>{pt(" Yatırma ve çekme zincirde ")}<b>{pt("açık")}</b>{pt(": tutar ve adres görünür. Gizli olan, havuzun içindeki gönderim. ")}</Typography>
           </Stack>
         </Section>
       )}
 
-      {busy && <LinearProgress sx={{ mb: 2 }} />}
-      {error && <Alert severity="error" sx={{ borderRadius: 0, mb: 2 }}>{error}</Alert>}
+      {pt(busy && <LinearProgress sx={{ mb: 2 }} />)}
+      {pt(error && <Alert severity="error" sx={{ borderRadius: 3, mb: 2 }}>{pt(error)}</Alert>)}
 
       {log.length > 0 && (
-        <Section title="OLAN BİTEN">
+        <Section title={pt("OLAN BİTEN")}>
           <Stack gap={0.4}>
             {log.map((line, i) => (
               <Typography key={i} variant="caption" sx={{ fontFamily: "var(--font-arbeit-technik)", textTransform: "none" }}>
-                {line}
+                {pt(line)}
               </Typography>
             ))}
           </Stack>
         </Section>
       )}
 
-      <Chip label="TESTNET · DENETLENMEMİŞ" size="small" sx={{ borderRadius: 0 }} />
+      <Chip label={pt("TESTNET · DENETLENMEMİŞ")} size="small" sx={{ borderRadius: 3 }} />
     </Box>
   );
 }

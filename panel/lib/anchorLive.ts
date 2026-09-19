@@ -10,9 +10,9 @@
  * as not answering rather than replaced with a plausible number.
  */
 
-import { ANCHOR_HOME_DOMAIN, ANCHOR_ASSET_CODE, FIAT_CODE } from "./anchor";
+import { ANCHOR_HOME_DOMAIN, ANCHOR_ASSET_CODE, FIAT_CODE, anchorOrigin } from "./anchor";
 
-const BASE = `https://${ANCHOR_HOME_DOMAIN}`;
+const BASE = anchorOrigin(ANCHOR_HOME_DOMAIN);
 
 export interface AnchorHealth {
   ok: boolean;

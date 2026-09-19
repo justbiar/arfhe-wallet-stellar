@@ -68,17 +68,24 @@ export async function waitForArfhe(timeoutMs = 1500): Promise<boolean> {
 const SESSION_KEY = "arfhe_panel_demo_secret";
 
 /**
- * The throwaway account for this tab, created on first use.
+ * The throwaway account for this browser, created on first use.
  *
- * sessionStorage: it survives a reload while someone works through the flow, and is gone
- * when the tab closes. It holds testnet assets with no value.
+ * It used to live in sessionStorage, which is per tab: opening the panel in a second tab —
+ * or on a second dev port — minted a fresh account, and the page looked like it was
+ * generating a new wallet on every connect. The funding, the trustline and any pool notes
+ * stayed with the tab that made them, so the flow restarted from nothing each time.
+ *
+ * localStorage instead, so the demo account is the same one across tabs and visits. It is a
+ * testnet key holding assets with no value, and the page says so; the cost of keeping it is
+ * nothing next to a demo that forgets itself.
  */
 export function demoSigner(): PanelSigner & { keypair: Keypair } {
   let kp: Keypair;
   try {
-    const stored = sessionStorage.getItem(SESSION_KEY);
+    // Read the old per-tab key first so a session already in progress is not orphaned.
+    const stored = sessionStorage.getItem(SESSION_KEY) ?? localStorage.getItem(SESSION_KEY);
     kp = stored ? Keypair.fromSecret(stored) : Keypair.random();
-    if (!stored) sessionStorage.setItem(SESSION_KEY, kp.secret());
+    localStorage.setItem(SESSION_KEY, kp.secret());
   } catch {
     // Private window, or storage blocked. A memory-only key still completes the flow for
     // the length of this page view, which is the whole life of a demo account anyway.
@@ -118,9 +125,14 @@ export async function connectArfhe(): Promise<PanelSigner> {
 
   const address = await provider.stellar.getAddress();
   if (!address) {
+    // Two ways out, both named. The first version stated the cause and stopped there,
+    // which leaves someone staring at a button that will keep failing: the demo account
+    // sitting right under it is a perfectly good way to see the rest of the page.
     throw new Error(
-      "Bu hesabın Stellar adresi yok. Özel anahtarla içe aktarılmış hesapların türetilecek " +
-      "kurtarma ifadesi bulunmaz; kurtarma ifadesiyle oluşturulmuş bir hesaba geçin."
+      "Bu hesabın Stellar adresi yok. Özel anahtarla içe aktarılan hesaplarda türetilecek bir " +
+      "kurtarma ifadesi bulunmuyor — ilgisiz bir Stellar anahtarı üretmek ise yedeğinizin geri " +
+      "getiremeyeceği bir adres demek olurdu. Uzantıda kurtarma ifadesiyle oluşturulmuş bir hesaba " +
+      "geçin, ya da bu sayfadaki demo hesabıyla devam edin."
     );
   }
 

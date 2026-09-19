@@ -11,7 +11,32 @@
  */
 
 /** The anchor's home domain. SEP-1 discovery starts here. */
-export const ANCHOR_HOME_DOMAIN = "tr-mock-anchor.fly.dev";
+/**
+ * Where the anchor lives.
+ *
+ * Build-time, not hardcoded: the sandbox anchor runs wherever it is convenient — on this
+ * machine during development, on a forwarded Codespaces port for a demo — and each of those
+ * is a different host. `VITE_ANCHOR_DOMAIN` moves it without touching source, and the
+ * default keeps `npm run anchor` working with no configuration at all.
+ *
+ * Only the domain. Everything else — auth endpoint, transfer server, asset issuer — is read
+ * from the anchor's own TOML at runtime, which is what makes swapping one in this cheap.
+ */
+export const ANCHOR_HOME_DOMAIN =
+  (import.meta.env?.VITE_ANCHOR_DOMAIN as string | undefined) ?? "localhost:8790";
+
+/**
+ * `http` for a local anchor, `https` for anything else.
+ *
+ * The sandbox anchor this is built against now runs on the same machine, and a loopback
+ * address is the one place a browser treats plain HTTP as trustworthy. Hardcoding `https`
+ * made every request to it fail at the TLS handshake — an error that reads like the anchor
+ * being down rather than the URL being wrong.
+ */
+export function anchorOrigin(homeDomain: string): string {
+  const local = /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(homeDomain);
+  return `${local ? "http" : "https"}://${homeDomain}`;
+}
 
 /** The asset being ramped. The issuer is read from stellar.toml, never hardcoded here. */
 export const ANCHOR_ASSET_CODE = "USDC";

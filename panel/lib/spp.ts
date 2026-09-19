@@ -159,12 +159,35 @@ export interface SppSession {
 export type SppAccount = SppAccountApi;
 
 /**
+ * One session per document, however many callers ask for it.
+ *
+ * `Storage.open()` takes an exclusive OPFS access handle, so a second concurrent open fails
+ * with "another tab or window is using this app's local database" — which in development is
+ * usually not another tab at all, but StrictMode mounting the page twice. A guard inside the
+ * page cannot catch that: both effect runs read the same state before either one has set it.
+ * Memoising the promise here makes the second caller wait for the first session instead of
+ * racing it, and covers every future caller by construction.
+ *
+ * Cleared on failure so the page's retry button reaches a fresh attempt rather than being
+ * handed the same rejection forever.
+ */
+let session: Promise<SppSession> | null = null;
+
+export function openSpp(): Promise<SppSession> {
+  session ??= boot().catch((e) => {
+    session = null;
+    throw e;
+  });
+  return session;
+}
+
+/**
  * Boots the SDK and reports what the environment allows.
  *
  * Dynamic import: 90MB of wasm and circuits has no business loading for a visitor who came
  * to read the landing page.
  */
-export async function openSpp(): Promise<SppSession> {
+async function boot(): Promise<SppSession> {
   const sdk = await import("stellar-private-payments");
   await sdk.default();
 

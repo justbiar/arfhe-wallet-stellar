@@ -525,6 +525,64 @@ Kalan maliyetler, gizlemeden yazılsın:
 
 ---
 
+## 5.10 Relayer yazıldı ve çalıştı — `relayer/`
+
+§5.9'daki bulgu koda döküldü. `npm run relayer`.
+
+```
+POST /relay  {pool, proof, extData}  →  {hash, kind, fee, status}
+GET  /health                         →  {ok, publicKey, pools}
+```
+
+### Uçtan uca ölçüm
+
+Gerçek bir yük, gerçek bir servis, gerçek bir zincir:
+
+1. `spp` CLI yerel olarak yamandı (`SPP_DUMP_PAYLOAD`) — `transact`'in iki argümanını base64
+   XDR olarak dosyaya yazıp **göndermeden** duruyor. Yama scratchpad'deki klonda, bizim
+   repoda değil.
+2. alice → bob 1 XLM transferi için yük üretildi.
+3. Yük relayer'a POST edildi.
+
+```
+tx 36c9513dacb42a84073bc6d1707b0db0ef1490581231ec8cfe6b1f84ce38cd32
+source     : GACSHNVC…  (relayer)
+[4] sender : GACSHNVC…  (relayer)
+ext_amount : 0
+ücret      : 202.878 stroop
+```
+
+alice 4 → 3, bob 3 → 4. **Alice zincirde hiçbir yerde yok.**
+
+### Reddetme yolları da canlı denendi
+
+| İstek | Cevap |
+|---|---|
+| `ext_amount = 100000000` (depozito) | 422 `deposit_rejected` |
+| Listede olmayan havuz | 422 `pool_not_allowed` |
+| Bozuk proof | 400 `bad_request` |
+| **Aynı yükün tekrarı** | 422 `simulation_failed` — kontrat hatası #9 (harcanmış nullifier) |
+
+Sonuncusu önemli: relayer çift harcama aracı olarak kullanılamıyor, ve hata dürüstçe
+"yükün sorunu" diye raporlanıyor.
+
+### Depozito reddi neden bu kadar önemli
+
+`transact` depozitoyu `token.transfer(sender, pool, amount)` ile fonluyor ve `sender`
+gönderen — yani relayer. Korumasız bir relayer, başkasının yatırımını kendi cebinden öder.
+Testlerdeki (`src/backend/__tests__/RelayerPolicy.test.ts`, 8 test) en önemli satır bu.
+
+Test fixture'ı uydurma değil: CLI'ın ürettiği gerçek, **harcanmış** bir transfer yükü.
+Ayrıştırıcının gerçek istemciyle eşleştiği başka türlü kanıtlanamaz.
+
+### Kalan
+
+Ücreti relayer ödüyor çünkü `ExtData`'da `fee` alanı yok. Protokol içi ödeme yolu açılana
+kadar maliyet bizim: transfer başına ~0,02 XLM. Kullanıcının açık adresinden ödeme alma
+fikri **reddedildi** — sildiğimiz bağı geri koyuyor (§5.9).
+
+---
+
 ## 6. Panel (demo sitesi)
 
 `panel/`, kökün bağımlılıklarını paylaşan ikinci bir Vite girişi (`vite.panel.config.js`).

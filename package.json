@@ -12,6 +12,7 @@
     "build:firefox": "cross-env TARGET=firefox vite build",
     "build:panel": "vite build --config vite.panel.config.js",
     "typecheck:panel": "tsc --noEmit -p tsconfig.panel.json",
+    "relayer": "node relayer/server.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest",

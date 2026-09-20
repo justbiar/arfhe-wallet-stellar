@@ -224,6 +224,19 @@ export async function readTransaction(cfg: AnchorConfig, jwt: string, id: string
     headers: { Authorization: `Bearer ${jwt}` },
   });
   const body = await res.json();
+
+  // A request the anchor no longer knows about is the end of this flow, not a slow tick.
+  // The anchor keeps its records in memory, so a restart drops whatever was in flight; the
+  // page used to read the 404 as "no status yet" and poll for another minute before
+  // reporting that the anchor had not settled in time — which sends the user looking for a
+  // payment that nothing is working on.
+  if (res.status === 404) {
+    throw new Error(
+      "Bu talep anchor'da bulunamadı — büyük ihtimalle anchor yeniden başlatıldı. " +
+      "Yeni bir yükleme açın; gönderilmiş bir para varsa duruyor.",
+    );
+  }
+  if (!res.ok) throw new Error(body.error ?? `Anchor işlem durumunu vermedi (HTTP ${res.status}).`);
   const t = body.transaction ?? {};
   return {
     status: t.status ?? "unknown",

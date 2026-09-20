@@ -107,13 +107,14 @@ const LIMITS: { limit: string; answer: string }[] = [
       "EVM tarafında kalıyor, Stellar tarafında Confidential Token kullanıyoruz.",
   },
   {
-    limit: "Gizlilik havuzu sayfası bugün işlem gönderemiyor.",
+    limit: "Gizlilik havuzunu siteden kaldırdık.",
     answer:
       "Kanıt tarayıcıda üretiliyor ve yatırma bir kez testnette çalıştı — ama npm'deki havuz " +
       "SDK'sı (0.1.0) zincirdeki kontrattan eski: kontrat ext_data_hash'i havuz ve token " +
       "kimliğine bağladıktan sonra o istemcinin ürettiği her işlem WrongExtHash ile reddediliyor. " +
-      "Depodan derlenmiş bir kopyayla çalıştı; sitede yayınlanan sürümde çalışmıyor. SDK sürümü " +
-      "gelene kadar sayfa ortamı ve engeli olduğu gibi gösteriyor.",
+      "Depodan derlenmiş bir kopya çalışıyor, yayınlanan sürüm çalışmıyor. Ziyaretçiye 83 MB " +
+      "devre indirtip sonunda reddedilen bir işlem sunmaktansa sayfayı kaldırdık; SDK sürümü " +
+      "gelince geri gelir. Havuzun ne yaptığı yukarıda, ağın verdikleri arasında duruyor.",
   },
   {
     limit: "Kanıt üretmek bedava değil.",

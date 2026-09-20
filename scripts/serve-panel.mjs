@@ -1,10 +1,5 @@
 /**
- * Serves the built panel, with the headers the build expects.
- *
- * `dist-panel/_headers` is a Cloudflare Pages file; nothing reads it locally, so a plain
- * static server drops cross-origin isolation and the privacy page's prover loses
- * SharedArrayBuffer — it fails in the worker, far from the missing header. This sends the
- * same two headers the dev server does.
+ * Serves the built panel.
  *
  *   node scripts/serve-panel.mjs [port]
  *
@@ -36,12 +31,7 @@ const TYPES = {
 };
 
 const server = createServer(async (req, res) => {
-  const headers = {
-    // Same pair the dev server sends. `credentialless` so Horizon and the anchor answer
-    // without having to send CORP headers of their own.
-    "cross-origin-opener-policy": "same-origin",
-    "cross-origin-embedder-policy": "credentialless",
-  };
+  const headers = {};
 
   // A visitor who cancels a download — or a tunnel that drops mid-transfer — destroys the
   // socket, and the write below rejects. Unhandled, that error is an event on the request

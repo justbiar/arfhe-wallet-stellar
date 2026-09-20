@@ -17,7 +17,6 @@ const NAV = [
   { to: "/roadmap", label: "Yol Haritası" },
   { to: "/bridge", label: "Köprü" },
   { to: "/payroll", label: "Gizli Ödeme" },
-  { to: "/privacy", label: "Gizlilik Havuzu" },
   { to: "/anchor", label: "Anchor" },
   { to: "/about", label: "Arfhe Wallet" },
 ];

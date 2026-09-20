@@ -2,12 +2,12 @@
  * Panel entry point.
  *
  * Routes in the order a visitor meets them: the landing page, the split-screen ramp demo
- * where a bank sits beside the wallet, the confidential payment demo, the privacy pool,
+ * where a bank sits beside the wallet, the confidential payment demo,
  * and the pages explaining the anchor and the wallet itself.
  */
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { HashRouter, Routes, Route } from "react-router";
+import { HashRouter, Navigate, Routes, Route } from "react-router";
 import { ThemeProvider, CssBaseline } from "@mui/material";
 import getTheme from "./theme";
 import { usePanelLanguage } from "./lib/language";
@@ -20,7 +20,6 @@ import Payroll from "./pages/Payroll";
 import Roadmap from "./pages/Roadmap";
 import About from "./pages/About";
 import Anchor from "./pages/Anchor";
-import Privacy from "./pages/Privacy";
 import Shell from "./components/Shell";
 
 /**
@@ -47,8 +46,11 @@ function App() {
             <Route path="/payroll" element={<Payroll />} />
             <Route path="/roadmap" element={<Roadmap />} />
             <Route path="/anchor" element={<Anchor />} />
-            <Route path="/privacy" element={<Privacy />} />
             <Route path="/about" element={<About />} />
+            {/* /privacy was a page once and is linked from elsewhere. Without this, an old
+                link renders the shell around nothing, which reads as a broken site rather
+                than a page that moved. */}
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Shell>
       </HashRouter>

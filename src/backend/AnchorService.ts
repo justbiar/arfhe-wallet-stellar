@@ -132,6 +132,31 @@ export async function discover(homeDomain = ANCHOR_HOME_DOMAIN): Promise<AnchorC
 /** SEP-10 tokens, per Stellar address, for this session only. */
 const tokens = new Map<string, string>();
 
+/**
+ * How long before its stated expiry a token stops being reused.
+ *
+ * The anchor issues fifteen-minute tokens and this cache had no notion of that: a session
+ * opened, its token was kept forever, and every call after the fifteenth minute came back
+ * `authentication required` — which reads on screen as "the anchor rejected you" rather
+ * than "your pass expired". The margin covers a request that starts just before the edge.
+ */
+const TOKEN_EXPIRY_MARGIN_SECONDS = 30;
+
+/** Whether a SEP-10 token is still good, read from its own `exp`. */
+function stillValid(token: string): boolean {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return false;
+    const json = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));
+    return typeof json.exp === "number"
+      && json.exp - TOKEN_EXPIRY_MARGIN_SECONDS > Math.floor(Date.now() / 1000);
+  } catch {
+    // An unreadable token is one we should not be sending. Re-authenticating costs a
+    // round trip; guessing costs a screen full of errors nobody can act on.
+    return false;
+  }
+}
+
 /** Dropped wherever the wallet locks, alongside the derived Stellar keys. */
 export function forgetAnchorSessions(): void {
   tokens.clear();
@@ -143,7 +168,8 @@ export async function authenticate(account: Account, index = 0): Promise<string>
   if (!kp) throw new Error("Bu hesabın Stellar adresi yok.");
 
   const hit = tokens.get(kp.publicKey());
-  if (hit) return hit;
+  if (hit && stillValid(hit)) return hit;
+  tokens.delete(kp.publicKey());
 
   const cfg = await discover();
   const chRes = await fetch(`${cfg.webAuthEndpoint}?account=${encodeURIComponent(kp.publicKey())}`);
@@ -171,6 +197,29 @@ export async function authenticate(account: Account, index = 0): Promise<string>
 
   tokens.set(kp.publicKey(), body.token);
   return body.token;
+}
+
+/**
+ * A request the anchor requires a SEP-10 session for, retried once if it is refused.
+ *
+ * The expiry check above covers the ordinary case. This covers the rest: a clock that
+ * drifted, an anchor restarted with different keys, a token revoked mid-session. All of
+ * them arrive as 401 or 403, and all of them are fixed by asking for a new challenge —
+ * which is cheaper than showing someone "authentication required" and leaving them with
+ * nothing to press.
+ */
+async function authedFetch(
+  account: Account, index: number, url: string, init: RequestInit = {},
+): Promise<Response> {
+  const send = async (token: string) =>
+    fetch(url, { ...init, headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}` } });
+
+  const res = await send(await authenticate(account, index));
+  if (res.status !== 401 && res.status !== 403) return res;
+
+  const kp = await getKeypair(account, index);
+  if (kp) tokens.delete(kp.publicKey());
+  return send(await authenticate(account, index));
 }
 
 /**
@@ -237,7 +286,6 @@ export async function openDeposit(
   const kp = await getKeypair(account, index);
   if (!kp) throw new Error("Bu hesabın Stellar adresi yok.");
   const cfg = await discover();
-  const token = await authenticate(account, index);
 
   const url =
     `${cfg.transferServer}/deposit?asset_code=${ASSET_CODE}` +
@@ -245,7 +293,7 @@ export async function openDeposit(
     // SEP-6 makes the amount optional, and the anchor answers without it — which is what
     // lets the bank screen show a reference before the user has picked a number.
     (amountTry ? `&amount=${encodeURIComponent(amountTry)}` : "");
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await authedFetch(account, index, url);
   const body = await res.json();
   if (!res.ok || !body.id) {
     throw new Error(body.error ?? `Yatırma talimatı alınamadı (HTTP ${res.status}).`);
@@ -291,8 +339,7 @@ const IBAN_KEY = "arfhe_bank_payout_iban";
 export async function getAssignedIban(account: Account, index = 0): Promise<string | null> {
   const cfg = await discover();
   try {
-    const token = await authenticate(account, index);
-    const res = await fetch(`${cfg.transferServer}/iban`, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await authedFetch(account, index, `${cfg.transferServer}/iban`);
     if (!res.ok) return null;
     const body = await res.json();
     return typeof body.iban === "string" ? body.iban : null;
@@ -362,13 +409,12 @@ export async function openWithdraw(
   const kp = await getKeypair(account, index);
   if (!kp) throw new Error("Bu hesabın Stellar adresi yok.");
   const cfg = await discover();
-  const token = await authenticate(account, index);
 
   const url =
     `${cfg.transferServer}/withdraw?asset_code=${ASSET_CODE}&type=bank_account` +
     `&account=${encodeURIComponent(kp.publicKey())}&amount=${encodeURIComponent(amountUsdc)}` +
     `&dest=${encodeURIComponent(normaliseIban(iban))}`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await authedFetch(account, index, url);
   const body = await res.json();
   if (!res.ok || !body.account_id) {
     throw new Error(body.error ?? `Çekim talebi açılamadı (HTTP ${res.status}).`);
@@ -436,12 +482,10 @@ export async function simulateBankTransfer(
   index = 0
 ): Promise<void> {
   const cfg = await discover();
-  const token = await authenticate(account, index);
-  const res = await fetch(`${cfg.transferServer}/tx/${encodeURIComponent(depositId)}/simulate-bank-transfer`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({ amount: amountTry }),
-  });
+  const res = await authedFetch(
+    account, index, `${cfg.transferServer}/tx/${encodeURIComponent(depositId)}/simulate-bank-transfer`,
+    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ amount: amountTry }) },
+  );
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `Havale simülasyonu reddedildi (HTTP ${res.status}).`);
@@ -452,12 +496,11 @@ export async function listTransactions(account: Account, index = 0): Promise<Anc
   const kp = await getKeypair(account, index);
   if (!kp) return [];
   const cfg = await discover();
-  const token = await authenticate(account, index);
 
   const url =
     `${cfg.transferServer}/transactions?asset_code=${ASSET_CODE}` +
     `&account=${encodeURIComponent(kp.publicKey())}`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await authedFetch(account, index, url);
   if (!res.ok) throw new Error(`Anchor işlemleri okunamadı (HTTP ${res.status}).`);
 
   const body = await res.json();

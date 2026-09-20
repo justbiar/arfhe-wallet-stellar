@@ -30,6 +30,12 @@
 
 ---
 
+> **New here?** [`OVERVIEW.md`](OVERVIEW.md) is the whole project in one page — what the
+> wallet has been since 2023, what was built on Stellar for this hackathon, what is hidden
+> and what is not, and where it goes next. English and Turkish.
+
+---
+
 > **Testnet preview (v0.9.0).** Arfhe runs on public testnets and has not been through an
 > external security audit. Do not put mainnet funds in it yet.
 

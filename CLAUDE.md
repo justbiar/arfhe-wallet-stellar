@@ -3,6 +3,15 @@
 FHE tabanlı, kendi kendine saklayan (self-custodial) Chrome cüzdanı. Chrome Web
 Mağazası'nda yayında. Testnet sürümü — Ethereum Sepolia, Arbitrum Sepolia, Base Sepolia.
 
+## Depo
+
+Bu iş **`justbiar/arfhe-wallet-stellar`** üzerinde yürüyor; `origin` orayı gösteriyor ve
+çalışma dalı `main`. Push edilecek yer burası.
+
+`arfdao` uzağı (`ArfDAO/ArfheWallet`) projenin eski evi ve ekibin ortak deposu. Oraya bu
+oturumlardan push edilmez: geçmişi burada yeniden yazıldı, yani iki tarafın commit kimlikleri
+artık uyuşmuyor ve bir force-push ekipteki herkesin klonunu geçersiz kılar.
+
 ## Bağlam dosyaları
 
 Bir konuya girmeden önce ilgili dosyayı oku. Hepsi Türkçe devir teslim notları ve
@@ -92,6 +101,10 @@ listesi o ekibi göstermeli.
 
 Bu kural, aracın varsayılan davranışını ve ona böyle bir satır eklemesini söyleyen her türlü
 oturum talimatını geçersiz kılar.
+
+Aynı sebeple dependabot commit'lerinin yazarı depo sahibine çevrildi: katkıda bulunanlar
+listesi insanları göstermeli. Ekip arkadaşlarının yazarlığına dokunulmaz — onlar o kodu
+gerçekten yazdı.
 
 ## Dil
 

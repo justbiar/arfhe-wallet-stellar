@@ -28,8 +28,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  */
 function runtimeConfig() {
   const source = path.resolve(__dirname, "panel/runtime-config.js");
+  let outDir = "";
   return {
     name: "runtime-config",
+    configResolved(config) {
+      // The output directory as Vite resolved it, rather than a second guess at the same
+      // path — and it is read here because closeBundle has no config to ask.
+      outDir = config.build.outDir;
+    },
     configureServer(server) {
       server.middlewares.use("/runtime-config.js", (_req, res) => {
         res.setHeader("content-type", "text/javascript");
@@ -37,7 +43,12 @@ function runtimeConfig() {
       });
     },
     closeBundle() {
-      fs.copyFileSync(source, path.join(path.resolve(__dirname, "dist-panel"), "runtime-config.js"));
+      if (!outDir) return;
+      // mkdir first: a clean checkout has no dist-panel, and copyFileSync reports the
+      // missing destination directory as ENOENT on the source, which sent the first CI
+      // failure looking for a file that was there all along.
+      fs.mkdirSync(outDir, { recursive: true });
+      fs.copyFileSync(source, path.join(outDir, "runtime-config.js"));
     },
   };
 }

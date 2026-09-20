@@ -18,7 +18,7 @@ const NAV = [
   { to: "/bridge", label: "Köprü" },
   { to: "/payroll", label: "Gizli Ödeme" },
   { to: "/privacy", label: "Gizlilik Havuzu" },
-  { to: "/anchor", label: "Confidential Anchor" },
+  { to: "/anchor", label: "Anchor" },
   { to: "/about", label: "Arfhe Wallet" },
 ];
 

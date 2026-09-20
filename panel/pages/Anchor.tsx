@@ -15,8 +15,12 @@ import {
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOffOutlined";
 import { Link } from "react-router";
-import { FIAT_CODE, ANCHOR_ASSET_CODE, ANCHOR_HOME_DOMAIN } from "../lib/anchor";
+import {
+  FIAT_CODE, ANCHOR_ASSET_CODE, ANCHOR_HOME_DOMAIN, anchorOrigin,
+  DEPOSIT_MAX_USDC, DEPOSIT_TOTAL_CAP_USDC, NETWORK_PASSPHRASE,
+} from "../lib/anchor";
 import { readAnchorLive, type AnchorLive } from "../lib/anchorLive";
+import FundAnchor from "../components/FundAnchor";
 
 function Section({ children, sx }: { children: React.ReactNode; sx?: object }) {
   return <Box sx={{ maxWidth: 900, mx: "auto", px: { xs: 2, md: 3 }, ...sx }}>{pt(children)}</Box>;
@@ -123,7 +127,7 @@ export default function Anchor() {
     <>
       <Section sx={{ pt: { xs: 6, md: 10 }, pb: { xs: 4, md: 6 } }}>
         <Chip
-          label={pt("YAPIM AŞAMASINDA")}
+          label={pt("ÇALIŞIYOR · TESTNET")}
           size="small"
           sx={{
             borderRadius: 3, fontWeight: 700, letterSpacing: "0.06em",
@@ -135,9 +139,10 @@ export default function Anchor() {
             mt: 2.5, fontFamily: "var(--font-arbeit-contrast)", fontWeight: 800,
             fontSize: { xs: 36, md: 52 }, lineHeight: 1.05, letterSpacing: "-0.03em",
           }}
-        >{pt(" Confidential Anchor ")}</Typography>
-        <Typography variant="body1" color="text.secondary" sx={{ mt: 2.5, fontSize: 17, lineHeight: 1.7, maxWidth: 660 }}>{pt(" Sıradan bir anchor ")}{pt(FIAT_CODE)}{pt(" ile ")}{pt(ANCHOR_ASSET_CODE)}{pt(" arasında köprü kurar ve zincirde açık bir ödeme bırakır — tutarı okumak isteyen herkes okur. Confidential Anchor aynı işi yapar, ama ")}<strong>{pt("tutarı ağa yazmaz.")}</strong>
+        >{pt(" Anchor ")}</Typography>
+        <Typography variant="body1" color="text.secondary" sx={{ mt: 2.5, fontSize: 17, lineHeight: 1.7, maxWidth: 660 }}>{pt(" Kendi yazdığımız SEP-6 anchor'ı: ")}{pt(FIAT_CODE)}{pt(" ile ")}{pt(ANCHOR_ASSET_CODE)}{pt(" arasında iki yönlü köprü, çekimde verdiğiniz IBAN'a ödeme yapan tarafıyla. Çalışıyor ve aşağıdaki sayılar ondan geliyor. ")}
         </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 2, lineHeight: 1.7, maxWidth: 660 }}><strong>{pt("Tutarları gizlemiyor")}</strong>{pt(": ödeme düz ")}{pt(ANCHOR_ASSET_CODE)}{pt(" olarak yapılıyor ve zincirde herkese açık. Gizli rampa bu sayfanın sonunda anlatılan tasarım — gizli ödeme katmanı çalışıyor, ama rampaya henüz bağlanmadı. ")}</Typography>
       </Section>
 
       {/* ── Fark ── */}
@@ -145,7 +150,7 @@ export default function Anchor() {
         <Section>
           <Stack direction="row" alignItems="center" gap={1.2} sx={{ mb: 3 }}>
             <VisibilityOffIcon sx={{ fontSize: 18, color: "text.secondary" }} />
-            <Typography variant="caption" color="text.secondary" fontWeight={700}>{pt("Kim neyi görür")}</Typography>
+            <Typography variant="caption" color="text.secondary" fontWeight={700}>{pt("Kim neyi görür — hedeflenen tasarım")}</Typography>
           </Stack>
           <Stack gap={1.5}>
             {VISIBILITY.map((r) => (
@@ -260,6 +265,35 @@ export default function Anchor() {
           </Paper>
         </Stack>
 
+        <Box sx={{ mt: 2 }}>
+          <FundAnchor />
+        </Box>
+
+        {/* The anchor is on the open internet and speaks the standard, so anything that
+            speaks SEP-6 can use it. Saying so costs nothing and is the difference between a
+            demo and a service. */}
+        <Paper elevation={0} sx={{ mt: 2, p: 2.5, border: "1px solid", borderColor: "divider", borderRadius: 3 }}>
+          <Typography variant="caption" color="text.secondary" fontWeight={700}>{pt("BU ANCHOR'I SİZ DE KULLANABİLİRSİNİZ")}</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1.2, lineHeight: 1.7 }}>{pt(" Açık internette duruyor ve standardı konuşuyor: SEP-6 bilen herhangi bir cüzdan ya da servis bağlanabilir. Kayıt yok, anahtar yok, izin listesi yok — SEP-10 herhangi bir Stellar anahtarını kabul ediyor. Tek gereken alan adı; geri kalan her şey ")}<code style={{ fontFamily: "var(--font-arbeit-technik)" }}>{pt("stellar.toml")}</code>{pt("'dan okunuyor. ")}</Typography>
+
+          <Box
+            sx={{
+              mt: 1.8, p: 1.5, borderRadius: 2, border: "1px solid", borderColor: "divider",
+              bgcolor: alpha(theme.palette.text.primary, 0.03),
+              fontFamily: "var(--font-arbeit-technik)", fontSize: 12, overflowX: "auto", whiteSpace: "pre",
+            }}
+          >{`curl ${anchorOrigin(ANCHOR_HOME_DOMAIN)}/.well-known/stellar.toml`}</Box>
+
+          <Box sx={{ mt: 1.5 }}>
+            <Reading label={pt("Alan adı")} value={ANCHOR_HOME_DOMAIN} mono />
+            <Reading label={pt("Varlık")} value={`${ANCHOR_ASSET_CODE} · Circle testnet`} />
+            <Reading label={pt("Ağ")} value={NETWORK_PASSPHRASE} mono />
+            <Reading label={pt("Yükleme sınırı")} value={pt(`${DEPOSIT_MAX_USDC} ${ANCHOR_ASSET_CODE} / işlem · ${DEPOSIT_TOTAL_CAP_USDC} ${ANCHOR_ASSET_CODE} / hesap`)} />
+          </Box>
+
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1.5, textTransform: "none", lineHeight: 1.6 }}>{pt(" Sınırlar kasa gerçek testnet ")}{pt(ANCHOR_ASSET_CODE)}{pt(" tuttuğu için var: havalenin geldiğini söyleyen çağrı burada bir kanıt istemiyor, yani sınırsız bırakılsa kasa tek istekte boşalırdı. Alan adı hızlı tünelle yayınlandığı için değişebiliyor — yukarıdaki değer sayfanın baktığı adrestir. ")}</Typography>
+        </Paper>
+
         <Stack direction={{ xs: "column", md: "row" }} gap={4} sx={{ mt: 4 }}>
           <Steps title={pt(`YÜKLEME · ${FIAT_CODE} → ${ANCHOR_ASSET_CODE}`)} steps={ON_RAMP} />
           <Steps title={pt(`ÇEKME · ${ANCHOR_ASSET_CODE} → ${FIAT_CODE}`)} steps={OFF_RAMP} />
@@ -276,7 +310,7 @@ export default function Anchor() {
       <Divider />
 
       <Section sx={{ py: { xs: 5, md: 7 } }}>
-        <Typography variant="body1" color="text.secondary" sx={{ lineHeight: 1.7, maxWidth: 660 }}>{pt(" Confidential Anchor şu an yapım aşamasında. Köprü sayfası akışın iki ucunu — banka ve cüzdan — bugünkü haliyle gösteriyor; gizli ayak buraya bağlanacak. ")}</Typography>
+        <Typography variant="body1" color="text.secondary" sx={{ lineHeight: 1.7, maxWidth: 660 }}>{pt(" Yukarıdaki gizli rampa tasarımı henüz kurulmadı. Bugün çalışan şey bu anchor ve köprü sayfası: banka ile cüzdan arasındaki yol, iki yönde, tutarlar açık. Gizli ayak buraya bağlanacak. ")}</Typography>
         <Button
           component={Link} to="/bridge" variant="contained" size="large" endIcon={<ArrowForwardIcon />}
           sx={{ mt: 3, borderRadius: 3, px: 3, py: 1.4, fontWeight: 700 }}

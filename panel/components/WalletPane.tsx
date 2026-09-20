@@ -1,4 +1,5 @@
 import { pt } from "../lib/language";
+import DownloadExtension from "./DownloadExtension";
 import { CHROME_STORE_URL } from "../lib/product";
 /**
  * The Arfhe side: the account, its balances, and the leg of the ramp the wallet owns.
@@ -270,6 +271,9 @@ export default function WalletPane({ direction, ramp }: { direction: Direction; 
                   variant="outlined"
                   sx={{ borderRadius: 3, py: 1.2, borderColor: "divider", color: "text.primary" }}
                 >{pt(" Arfhe Wallet'ı kur ")}</Button>
+                {/* The store link above installs the EVM wallet, which cannot answer this
+                    page. The build that can is right underneath it. */}
+                <DownloadExtension compact />
               </Stack>
             )}
             <Typography variant="caption" color="text.secondary" sx={{ textTransform: "none", textAlign: "center" }}>{pt(" Denemek için testnet USDC gerekiyor: faucet.circle.com üzerinden Stellar testnet'i seçip cüzdanınızın Stellar adresine 20 USDC isteyin. ")}</Typography>

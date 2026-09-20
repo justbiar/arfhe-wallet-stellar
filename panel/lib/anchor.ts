@@ -6,8 +6,8 @@
  * standard: the integration is two values, a home domain and an asset code, and swapping in
  * a real anchor later changes only those and the network passphrase.
  *
- * @see https://tr-mock-anchor.fly.dev/ — the sandbox this is built against. The bank and KYC
- * are simulated there; the Stellar leg is real testnet USDC.
+ * The anchor is ours (`anchor/`, `npm run anchor`). Its bank and identity checks are
+ * simulated; the Stellar leg is real testnet USDC.
  */
 
 /** The anchor's home domain. SEP-1 discovery starts here. */
@@ -54,9 +54,27 @@ export const FIAT_CODE = "TRY";
 export const NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
 export const HORIZON_URL = "https://horizon-testnet.stellar.org";
 
-/** Deposit limits the anchor advertises, in TRY. Shown in the UI before a request is made. */
+/**
+ * The deposit caps — the anchor's, not the panel's, and counted in the asset it pays out.
+ *
+ * These must match `anchor/config.ts`. They drifted once, in lira, and the form took a
+ * number the anchor then refused; an error nobody could have predicted from the screen.
+ * Naming them in USDC removes the other half of that problem: a cap written in lira moves
+ * with the rate, so the screen and the rule stop agreeing without either one changing.
+ */
+export const DEPOSIT_MAX_USDC = 20;
+export const DEPOSIT_TOTAL_CAP_USDC = 60;
+
+/** The panel's own floor on the form. The anchor enforces no minimum. */
 export const DEPOSIT_MIN_TRY = 50;
-export const DEPOSIT_MAX_TRY = 3000;
+
+/**
+ * The lira ceiling to show before the anchor has answered.
+ *
+ * The anchor publishes its own, computed from the rate it is quoting right now; this is
+ * only what the form says while that request is in flight.
+ */
+export const DEPOSIT_MAX_TRY_FALLBACK = 985;
 
 /** Minimum off-ramp, in USDC. */
 export const WITHDRAW_MIN_USDC = 1;

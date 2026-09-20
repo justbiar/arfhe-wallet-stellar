@@ -22,8 +22,10 @@ const DONE: Item[] = [
     title: "Gizli ödeme katmanı",
     body:
       "Kendi gizli USDC katmanımız Stellar testnetinde dağıtıldı ve anchor'ın gerçek Circle " +
-      "USDC'sini sarmalıyor. Bordro, tedarikçi ödemesi, perakende ve kurumsal takas — dördü de " +
-      "uçtan uca çalıştı. Ödemenin kime gittiği zincirde görünüyor, ne kadar gittiği görünmüyor.",
+      "USDC'sini sarmalıyor. Dört senaryonun dördü de uçtan uca ölçüldü — bordro, tedarikçi " +
+      "ödemesi, perakende ve kurumsal takas: toplam sekiz gizli ödeme, her biri 5,3 ile 9,5 " +
+      "saniye arasında. Ödemenin kime gittiği zincirde görünüyor, ne kadar gittiği görünmüyor: " +
+      "her ödemenin zarfında 31.788 baytın 15.308'i opak ve tutarlar arandığında bulunamıyor.",
   },
   {
     title: "Türk Lirası rampası, iki yönde",
@@ -36,12 +38,6 @@ const DONE: Item[] = [
     body:
       "Her ödemenin zincirdeki hâli sayfada duruyor: çağrılan fonksiyon, açıktaki adresler, " +
       "opak bloğun boyutu, ve tutarların zarfta aranıp bulunamaması. İddia değil, ölçüm.",
-  },
-  {
-    title: "Gizlilik havuzu tarayıcıda",
-    body:
-      "Havuz işlemlerinin kanıtı tarayıcıda üretiliyor ve yatırma testnette çalıştı. Havuz içi " +
-      "transferde alıcı da tutar da zincire yazılmıyor.",
   },
   {
     title: "EVM tarafı yayında",
@@ -72,10 +68,10 @@ const NETWORK: Item[] = [
       "doğrulamayı zincirde ucuz hâle getiriyor. Bu katmanların ikisi de onların üstünde duruyor.",
   },
   {
-    title: "Anchor ve CCTP",
+    title: "Anchor standartları",
     body:
-      "SEP-6 ile bir bankaya, CCTP ile EVM zincirlerine bağlanıyor. Yani gizli ödeme bir " +
-      "gösteriden ibaret kalmıyor: parayı bir IBAN'a kadar götürebiliyor.",
+      "SEP-1, 6, 10, 12 ve 38 bir fiat rayını protokol seviyesinde tarif ediyor. Gizli ödemenin " +
+      "bir gösteriden ibaret kalmamasını sağlayan şey bu: para bir IBAN'a kadar gidebiliyor.",
   },
 ];
 
@@ -109,6 +105,15 @@ const LIMITS: { limit: string; answer: string }[] = [
       "kanıtlarıyla kuruluyor. ElGamal tabanlı bir prototipi ölçtük, tek bir gizli transfer " +
       "2,85 milyar CPU talimatı istiyor — ağın işlem başına sınırı 400 milyon. Bu yüzden FHE " +
       "EVM tarafında kalıyor, Stellar tarafında Confidential Token kullanıyoruz.",
+  },
+  {
+    limit: "Gizlilik havuzu sayfası bugün işlem gönderemiyor.",
+    answer:
+      "Kanıt tarayıcıda üretiliyor ve yatırma bir kez testnette çalıştı — ama npm'deki havuz " +
+      "SDK'sı (0.1.0) zincirdeki kontrattan eski: kontrat ext_data_hash'i havuz ve token " +
+      "kimliğine bağladıktan sonra o istemcinin ürettiği her işlem WrongExtHash ile reddediliyor. " +
+      "Depodan derlenmiş bir kopyayla çalıştı; sitede yayınlanan sürümde çalışmıyor. SDK sürümü " +
+      "gelene kadar sayfa ortamı ve engeli olduğu gibi gösteriyor.",
   },
   {
     limit: "Kanıt üretmek bedava değil.",

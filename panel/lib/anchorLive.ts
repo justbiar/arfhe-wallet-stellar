@@ -35,6 +35,19 @@ export interface AnchorLimits {
   feePercent: number | null;
 }
 
+/**
+ * What the anchor can still pay out.
+ *
+ * Kept apart from AnchorLive because it is the one reading that changes while the page is
+ * open: a visitor who funds the treasury should be able to see it land without a reload.
+ */
+export interface AnchorTreasury {
+  /** The account deposits are paid from — the one a faucet should be pointed at. */
+  distribution: string | null;
+  usdc: number | null;
+  xlm: number | null;
+}
+
 export interface AnchorLive {
   health: AnchorHealth | null;
   rates: AnchorRates;
@@ -131,4 +144,31 @@ export async function readAnchorLive(): Promise<AnchorLive> {
     limits,
     assetIssuer: issuer,
   };
+}
+
+/** The distribution account and its balances, as /health publishes them. */
+export async function readTreasury(): Promise<AnchorTreasury> {
+  const body = await getJson("/health");
+  const funds = body?.treasury as { usdc?: string; xlm?: string } | null | undefined;
+  const amount = (raw: string | undefined) => (raw != null && raw !== "" ? Number(raw) : null);
+  return {
+    distribution: typeof body?.distribution === "string" ? body.distribution : null,
+    // A treasury of null is the account not existing on-chain at all, which is a different
+    // thing from a zero balance and must not be flattened into one.
+    usdc: funds ? amount(funds.usdc) : null,
+    xlm: funds ? amount(funds.xlm) : null,
+  };
+}
+
+/**
+ * The lira ceiling for one deposit, as the anchor computes it from its own rate.
+ *
+ * Published next to the SEP-6 amounts rather than derived here: the rate is the anchor's,
+ * and a ceiling the panel works out itself is a second opinion that can disagree with the
+ * one actually enforced.
+ */
+export async function readDepositCeilingFiat(): Promise<number | null> {
+  const info = await getJson("/sep6/info");
+  const asset = (info?.deposit as Record<string, Record<string, unknown>> | undefined)?.[ANCHOR_ASSET_CODE];
+  return typeof asset?.max_amount_fiat === "number" ? asset.max_amount_fiat : null;
 }

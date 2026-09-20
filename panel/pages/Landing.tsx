@@ -10,7 +10,9 @@ import { Box, Stack, Typography, Button, Paper, Chip, useTheme, alpha } from "@m
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import SyncAltIcon from "@mui/icons-material/SyncAlt";
 import { Link } from "react-router";
-import { ANCHOR_HOME_DOMAIN, DEPOSIT_MIN_TRY, DEPOSIT_MAX_TRY } from "../lib/anchor";
+import {
+  ANCHOR_HOME_DOMAIN, ANCHOR_ASSET_CODE, DEPOSIT_MAX_USDC, DEPOSIT_TOTAL_CAP_USDC,
+} from "../lib/anchor";
 import { CHROME_STORE_URL, FOUNDED_YEAR } from "../lib/product";
 
 function Section({ children, sx }: { children: React.ReactNode; sx?: object }) {
@@ -100,7 +102,7 @@ export default function Landing() {
                 "Cüzdanınızın anahtarıyla giriş yaparsınız — şifre yok, hesap açmak yok. Anahtar kimliğinizdir.",
                 "Karşı taraf bir IBAN ve açıklamaya yazılacak bir referans verir.",
                 "Havale “gelir” ve TRY bakiyeniz görünür. Bu demoda bankayı siz oynarsınız.",
-                "Kur o an kilitlenir, karşılığı kadar testnet USDC cüzdanınıza geçer.",
+                "Sabit kurdan karşılığı hesaplanır ve o kadar testnet USDC cüzdanınıza geçer.",
               ]}
             />
             <Flow
@@ -109,7 +111,7 @@ export default function Landing() {
               steps={[
                 "Çekim başlatırsınız; size bir hazine adresi ve bir memo verilir.",
                 "Cüzdan, USDC'yi o memo ile Stellar üzerinden gönderir.",
-                "Ödeme zincirde görülür ve kur kilitli fiyattan bozulur.",
+                "Ödeme zincirde görülür ve aynı sabit kurdan bozulur.",
                 "TRY, IBAN'ınıza geçer — bu demoda simüle edilmiş bir FAST transferi olarak.",
               ]}
             />
@@ -130,7 +132,7 @@ export default function Landing() {
           </Box>
           <Box>
             <Typography variant="caption" color="text.secondary" fontWeight={700}>{pt("SINIRLAR")}</Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 1, lineHeight: 1.65 }}>{pt(" Yükleme başına ")}{DEPOSIT_MIN_TRY}{pt("–")}{DEPOSIT_MAX_TRY}{pt(" TRY. Kur, bir fiyat oracle'ından geliyor ve üzerine sabit bir marj biniyor. ")}</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1, lineHeight: 1.65 }}>{pt(" Yükleme başına en fazla ")}{DEPOSIT_MAX_USDC}{pt(" ")}{pt(ANCHOR_ASSET_CODE)}{pt(", hesap başına toplam ")}{DEPOSIT_TOTAL_CAP_USDC}{pt(" ")}{pt(ANCHOR_ASSET_CODE)}{pt(". Sınır dolar tarafında, çünkü kasadan çıkan o. Kur sabit: anchor'ın ayarındaki tek bir orta fiyat, iki yöne açılan sabit bir makasla — canlı bir piyasadan gelmiyor, öyle olsa aynı ölçüm iki kere aynı sonucu vermezdi. ")}</Typography>
           </Box>
         </Box>
 

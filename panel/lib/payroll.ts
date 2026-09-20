@@ -11,8 +11,16 @@
  * without this service ever being involved. Only paying needs it.
  */
 
-/** Same-machine demo, like the relayer on :8787. A deployed panel has no service to call. */
-export const PAYROLL_URL = "http://localhost:8788";
+/**
+ * Where the service answers.
+ *
+ * Build-time, because the page and the service do not have to share a machine: the panel
+ * can be served from a tunnel while the service stays here, and a visitor's browser has no
+ * idea what "localhost" means to us. `VITE_PAYROLL_URL` moves it; the default keeps
+ * `npm run payroll` working with no configuration.
+ */
+export const PAYROLL_URL =
+  (import.meta.env?.VITE_PAYROLL_URL as string | undefined) ?? "http://localhost:8788";
 
 export interface ScenarioDef {
   id: string;

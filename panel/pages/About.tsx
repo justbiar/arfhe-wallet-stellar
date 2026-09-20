@@ -1,4 +1,5 @@
 import { pt } from "../lib/language";
+import DownloadExtension from "../components/DownloadExtension";
 /**
  * What Arfhe Wallet is, for someone who arrived from the demo and has not met it.
  *
@@ -102,6 +103,12 @@ export default function About() {
           title={pt("arfhewallet.dev")}
           desc={pt("Ürünün kendi sayfası.")}
         />
+      </Box>
+
+      {/* The store build has no Stellar in it, so the page that sends people to the store
+          has to be the page that also offers the build that does. */}
+      <Box sx={{ mt: 3 }}>
+        <DownloadExtension />
       </Box>
 
       {/* ── Özellikler ── */}

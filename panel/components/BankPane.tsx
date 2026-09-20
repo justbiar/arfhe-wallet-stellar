@@ -16,7 +16,10 @@ import {
 } from "@mui/material";
 import AccountBalanceIcon from "@mui/icons-material/AccountBalanceOutlined";
 import PaneFrame from "./PaneFrame";
-import { DEPOSIT_MIN_TRY, DEPOSIT_MAX_TRY, FIAT_CODE, ANCHOR_ASSET_CODE } from "../lib/anchor";
+import {
+  DEPOSIT_MIN_TRY, DEPOSIT_MAX_TRY_FALLBACK, DEPOSIT_MAX_USDC, FIAT_CODE, ANCHOR_ASSET_CODE,
+} from "../lib/anchor";
+import { readDepositCeilingFiat } from "../lib/anchorLive";
 import type { Ramp } from "../lib/useRamp";
 import type { Direction } from "../pages/Bridge";
 
@@ -48,8 +51,17 @@ function Filled({ label, value, help }: { label: string; value: string | null; h
 export default function BankPane({ direction, ramp }: { direction: Direction; ramp: Ramp }) {
   const [amount, setAmount] = React.useState("100");
 
+  // The ceiling the anchor is enforcing right now. It follows the rate, so the form asks
+  // rather than assumes; the fallback only fills the first render.
+  const [ceiling, setCeiling] = React.useState(DEPOSIT_MAX_TRY_FALLBACK);
+  React.useEffect(() => {
+    let cancelled = false;
+    void readDepositCeilingFiat().then((max) => { if (!cancelled && max) setCeiling(max); });
+    return () => { cancelled = true; };
+  }, []);
+
   const numeric = Number(amount.replace(",", "."));
-  const outOfRange = amount !== "" && (numeric < DEPOSIT_MIN_TRY || numeric > DEPOSIT_MAX_TRY);
+  const outOfRange = amount !== "" && (numeric < DEPOSIT_MIN_TRY || numeric > ceiling);
 
   const connected = ramp.address !== null && ramp.phase !== "connecting";
   const ordering = ramp.phase === "ordering";
@@ -57,7 +69,25 @@ export default function BankPane({ direction, ramp }: { direction: Direction; ra
   const paying = ramp.phase === "paying";
   const hasOrder = ramp.order !== null;
 
-  const tryAmount = direction === "deposit" ? ramp.status?.amountIn : ramp.status?.amountOut;
+  /**
+   * The lira figure, as early as there is an honest one to show.
+   *
+   * The anchor's own number (`amount_in` on a deposit, `amount_out` on a withdrawal) is the
+   * truth once a transaction exists — but it does not exist until an order is opened, and
+   * until then the pane read "—" while the person was staring at the amount they had just
+   * typed. Falling back to that input is not an invented balance: it is what they are about
+   * to send, which is exactly what a bank screen shows before a transfer goes out.
+   *
+   * A withdrawal has no such fallback. The lira there are the anchor's quote, and guessing
+   * it from a rate would put a number on screen that the anchor never agreed to.
+   */
+  const typed = direction === "deposit" && amount !== "" && !outOfRange ? amount : null;
+  const tryAmount = direction === "deposit"
+    ? ramp.status?.amountIn ?? typed
+    // On the way out the lira are the anchor's quote, so they appear as soon as it has made
+    // one — with the order — rather than only after the transfer settles. Guessing from a
+    // rate before that would put a figure on screen the anchor never agreed to.
+    : ramp.status?.amountOut ?? ramp.withdrawOrder?.amountOut ?? null;
 
   return (
     <PaneFrame
@@ -78,19 +108,28 @@ export default function BankPane({ direction, ramp }: { direction: Direction; ra
         <Typography variant="caption" color="text.secondary">{pt("VADESİZ HESAP · SİMÜLE MÜŞTERİ")}</Typography>
         <Typography sx={{ fontFamily: "var(--font-arbeit-technik)", fontSize: 13, mt: 0.5, color: "text.secondary" }}>{pt(" TR00 0001 0000 0000 0000 0000 00 ")}</Typography>
         <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5, textTransform: "none" }}>{pt("Paranın çıktığı hesap. Gideceği IBAN'ı anchor veriyor ve aşağıda görünüyor — cüzdanda gördüğünüzle aynıdır.")}</Typography>
-        {/* Which side of the pair is TRY flips with the direction: on a deposit the user
-            sends fiat (`amount_in`), on a withdrawal they receive it (`amount_out`).
-            Showing the same field in both would print USDC under a TRY label. */}
-        <Stack direction="row" alignItems="baseline" gap={0.8} sx={{ mt: 1.5 }}>
+        {/* The figure is the transfer, never a balance — and it has to say so above itself.
+            Sat under an account heading in large type it read as money in the account, so
+            the wallet's real balance (thousands) and this (a default of 100) looked like the
+            same quantity disagreeing. Which side of the pair is TRY flips with the
+            direction: on a deposit the user sends fiat (`amount_in`), on a withdrawal they
+            receive it (`amount_out`). */}
+        <Divider sx={{ my: 1.5 }} />
+        <Typography variant="caption" color="text.secondary" fontWeight={700}>
+          {pt(!tryAmount
+            ? "BU İŞLEM"
+            : ramp.status
+              ? (direction === "deposit" ? "BU İŞLEMDE GÖNDERİLEN" : "BU İŞLEMDE ALINAN")
+              : "GÖNDERİLECEK TUTAR")}
+        </Typography>
+        <Stack direction="row" alignItems="baseline" gap={0.8} sx={{ mt: 0.5 }}>
           <Typography sx={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em" }}>
             {pt(tryAmount ?? "—")}
           </Typography>
           <Typography variant="body2" color="text.secondary" fontWeight={700}>{pt(FIAT_CODE)}</Typography>
         </Stack>
         <Typography variant="caption" color="text.secondary" sx={{ textTransform: "none" }}>
-          {pt(tryAmount
-            ? (direction === "deposit" ? "Bu işlemde gönderilen tutar" : "Bu işlemde alınan tutar")
-            : "Bakiye, bir işlem başlatıldığında görünür")}
+          {pt("Bu bir bakiye değil. Cüzdanınızdaki bakiye Arfhe Wallet'ın Banka sekmesinde.")}
         </Typography>
       </Box>
 
@@ -110,8 +149,8 @@ export default function BankPane({ direction, ramp }: { direction: Direction; ra
               error={outOfRange}
               helperText={
                 pt(outOfRange
-                  ? `${DEPOSIT_MIN_TRY} – ${DEPOSIT_MAX_TRY} ${FIAT_CODE} arasında olmalı`
-                  : `İşlem başına ${DEPOSIT_MIN_TRY} – ${DEPOSIT_MAX_TRY} ${FIAT_CODE}`)
+                  ? `${DEPOSIT_MIN_TRY} – ${ceiling} ${FIAT_CODE} arasında olmalı`
+                  : `İşlem başına ${DEPOSIT_MIN_TRY} – ${ceiling} ${FIAT_CODE} · en fazla ${DEPOSIT_MAX_USDC} ${ANCHOR_ASSET_CODE}`)
               }
               InputProps={{
                 endAdornment: <InputAdornment position="end">{pt(FIAT_CODE)}</InputAdornment>,

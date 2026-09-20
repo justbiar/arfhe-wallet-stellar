@@ -16,6 +16,7 @@ import { ANCHOR_HOME_DOMAIN, FIAT_CODE, ANCHOR_ASSET_CODE } from "../lib/anchor"
 import { useRamp } from "../lib/useRamp";
 import BankPane from "../components/BankPane";
 import WalletPane from "../components/WalletPane";
+import FundAnchor from "../components/FundAnchor";
 
 export type Direction = "deposit" | "withdraw";
 
@@ -67,6 +68,9 @@ export default function Bridge() {
           }}
         />
       </Stack>
+
+      {/* Only speaks up when the anchor cannot pay — see FundAnchor. */}
+      <FundAnchor compact />
 
       {/* ── İki pano ── */}
       <Box

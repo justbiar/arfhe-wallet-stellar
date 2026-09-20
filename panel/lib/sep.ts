@@ -158,6 +158,8 @@ export interface WithdrawOrder {
   iban: string | null;
   /** Minimum off-ramp the anchor will accept, in the asset's units. */
   minAmount: string | null;
+  /** The lira the anchor quoted for this withdrawal, when it names a figure. */
+  amountOut: string | null;
 }
 
 /**
@@ -198,6 +200,10 @@ export async function startWithdraw(
     // here costs nothing but a blank line.
     iban: message.match(/\b(TR\d{24})\b/)?.[1] ?? null,
     minAmount: body.min_amount != null ? String(body.min_amount) : null,
+    // Read as a field where the anchor offers one, and left null otherwise rather than
+    // scraped out of the sentence: a quote picked out of prose is a number the screen
+    // cannot stand behind.
+    amountOut: body.amount_out != null ? String(body.amount_out) : null,
   };
 }
 

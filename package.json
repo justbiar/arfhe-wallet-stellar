@@ -11,6 +11,7 @@
     "build:store": "cross-env TARGET=chrome STORE_BUILD=true vite build",
     "build:firefox": "cross-env TARGET=firefox vite build",
     "build:panel": "vite build --config vite.panel.config.js",
+    "build:site": "npm run build:panel && node scripts/package-extension.mjs",
     "typecheck:panel": "tsc --noEmit -p tsconfig.panel.json",
     "relayer": "node relayer/server.mjs",
     "payroll": "tsx payroll/service.ts",
@@ -25,7 +26,8 @@
     "verify:anchor": "node scripts/verify-anchor-ramp.mjs",
     "audit:privacy": "node scripts/audit-privacy.mjs",
     "audit:secrets": "node scripts/secret-guard.mjs",
-    "anchor": "tsx anchor/service.ts"
+    "anchor": "tsx anchor/service.ts",
+    "serve:panel": "node scripts/serve-panel.mjs"
   },
   "dependencies": {
     "@aztec/bb.js": "0.87.0",

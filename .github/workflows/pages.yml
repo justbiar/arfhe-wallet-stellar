@@ -39,7 +39,10 @@ jobs:
       # tree nobody develops against.
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          # 10, matching the version this repository is developed with. pnpm 9 rejects a
+          # pnpm-workspace.yaml without a `packages` field; 10 uses that same file to carry
+          # settings like onlyBuiltDependencies, which is what it holds here.
+          version: 10
       # No dependency cache: pnpm-workspace.yaml here carries only build-script allowances
       # and no `packages` field, which is valid for a single-package repository but makes
       # `pnpm store path` — the command setup-node's cache calls — refuse to answer.

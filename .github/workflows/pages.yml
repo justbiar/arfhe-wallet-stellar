@@ -40,10 +40,12 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 9
+      # No dependency cache: pnpm-workspace.yaml here carries only build-script allowances
+      # and no `packages` field, which is valid for a single-package repository but makes
+      # `pnpm store path` — the command setup-node's cache calls — refuse to answer.
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Build the panel
         # The repository name is the sub-path Pages serves from.

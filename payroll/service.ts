@@ -155,6 +155,33 @@ const server = createServer(async (req, res) => {
       return send(res, 200, { amountTry, ...(await readState(session)) });
     }
 
+    /**
+     * "Çalışan maaşını bozar" — demonun eksik olan son adımı.
+     *
+     * Ödeme gizli, ama bir maaşın işe yaraması için bir noktada paraya dönmesi gerekiyor.
+     * Bu uç o dönüşü yapıyor ve yaparken ne sızdırdığını da söylüyor: `withdraw` tutarı
+     * açık deftere yazıyor, anchor da ödediği lirayı biliyor. Gizli kalan şey o paranın
+     * hangi maaş olduğu ve alıcının geri kalan bakiyesi.
+     */
+    if (req.method === "POST" && req.url === "/cash-out") {
+      if (!session) return send(res, 404, { error: "önce /prepare çağırın" });
+      const body = await readBody(req);
+      const index = Number(body.recipient ?? 0);
+      const party = session.recipients[index];
+      if (!party) return send(res, 400, { error: `alıcı yok: ${index}` });
+
+      const iban = String(body.iban ?? "").replace(/\s+/g, "").toUpperCase();
+      if (!/^TR\d{24}$/.test(iban)) return send(res, 400, { error: "dest bir Türk IBAN'ı olmalı" });
+
+      const started = Date.now();
+      const out = await engine.cashOut(party, iban);
+      console.log(
+        `  [cash-out] ${party.label}: ${out.unshielded.amount} USDC → ${out.ramp.amountTry} TRY ` +
+        `(${((Date.now() - started) / 1000).toFixed(1)}s)`,
+      );
+      return send(res, 200, { label: party.label, ...out, state: await readState(session) });
+    }
+
     if (req.method === "POST" && req.url === "/pay") {
       if (!session) return send(res, 404, { error: "önce /prepare çağırın" });
       const def = SCENARIOS[session.scenario];
@@ -167,7 +194,10 @@ const server = createServer(async (req, res) => {
 
     return send(res, 404, {
       error: "not found",
-      endpoints: ["GET /health", "GET /scenarios", "GET /state", "GET /chain/:hash", "POST /prepare", "POST /pay"],
+      endpoints: [
+        "GET /health", "GET /scenarios", "GET /state", "GET /chain/:hash",
+        "POST /prepare", "POST /pay", "POST /cash-out",
+      ],
     });
   } catch (e) {
     // Yük içeriği loglanmıyor; sadece ne olduğu.

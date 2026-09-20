@@ -6,7 +6,9 @@
  * kadar dağıtıldığı.
  */
 
-import { Keypair, Horizon, TransactionBuilder, Networks, Operation, Asset, BASE_FEE } from "@stellar/stellar-sdk";
+import {
+  Keypair, Horizon, TransactionBuilder, Networks, Operation, Asset, Memo, BASE_FEE,
+} from "@stellar/stellar-sdk";
 import { ANCHOR, HORIZON_URL } from "./deployment.js";
 
 const horizon = new Horizon.Server(HORIZON_URL);
@@ -43,8 +45,16 @@ async function authenticate(ep: AnchorEndpoints, kp: Keypair): Promise<string> {
   return body.token;
 }
 
-/** Güven hattı yoksa açar. Hat olmadan anchor ödeyemez, `pending_trust`'ta kalır. */
-async function ensureTrustline(kp: Keypair, issuer: string): Promise<void> {
+/**
+ * Güven hattı yoksa açar.
+ *
+ * Yüklemede şart: hat olmadan anchor ödeyemez, yatırma `pending_trust`'ta kalır. Çekimde de
+ * şart, ve orada daha az belli: gizli bakiye kontratın içinde yaşadığı için alıcının hiç
+ * hattı olmuyor — ta ki parayı açık deftere çıkarana kadar. O anda kanıt doğrulanıyor,
+ * kontrat `transfer` çağırıyor ve klasik varlık "trustline entry is missing" ile reddediyor.
+ * Kriptografi değil, muhasebe.
+ */
+export async function ensureTrustline(kp: Keypair, issuer: string): Promise<void> {
   const acct = await horizon.loadAccount(kp.publicKey());
   if (acct.balances.some((b) => "asset_code" in b && b.asset_code === "USDC" && b.asset_issuer === issuer)) return;
   const tx = new TransactionBuilder(acct, { fee: BASE_FEE, networkPassphrase: Networks.TESTNET })
@@ -158,4 +168,64 @@ export async function rampIn(kp: Keypair, amountTry: string): Promise<string> {
 
   const amounts = await Promise.all(ids.map((id) => settled(ep, H, id)));
   return amounts.reduce((sum, a) => sum + a, 0).toFixed(7);
+}
+
+/** Ne kadar TRY, hangi IBAN'a, ve hangi işlemlerle. */
+export interface RampOutResult {
+  amountUsdc: string;
+  amountTry: string | null;
+  iban: string;
+  /** Kullanıcının anchor'a gönderdiği ödeme — zincirde açık. */
+  paymentHash: string;
+  memo: string;
+}
+
+/**
+ * USDC'yi anchor'a gönderip karşılığında IBAN'a TRY almak.
+ *
+ * `rampIn`'in tersi, ama simetrik değil: burada değer önce çıkıyor. Kullanıcı ödemeyi
+ * yaptıktan sonra anchor onu **yalnızca memodan** eşleştiriyor, yani memo yanlışsa para
+ * anchor'ın hesabında sahipsiz kalır. Bu yüzden memo tipi tanınmıyorsa işlem hiç
+ * kurulmuyor — gönderilmemiş bir ödeme, eşleşmeyen bir ödemeden iyidir.
+ */
+export async function rampOut(kp: Keypair, amountUsdc: string, iban: string): Promise<RampOutResult> {
+  const ep = await discover();
+  await ensureTrustline(kp, ep.issuer);
+  const jwt = await authenticate(ep, kp);
+  const H = { Authorization: `Bearer ${jwt}` };
+
+  const order = await json(await fetch(
+    `${ep.sep6}/withdraw?asset_code=USDC&type=bank_account` +
+    `&amount=${encodeURIComponent(amountUsdc)}&dest=${encodeURIComponent(iban)}`,
+    { headers: H },
+  ));
+  if (!order.id || !order.account_id || !order.memo) {
+    throw new Error(order.error ?? "anchor eksik çekim talimatı döndürdü");
+  }
+  if (order.memo_type !== "text") throw new Error(`beklenmeyen memo tipi: ${order.memo_type}`);
+
+  const account = await horizon.loadAccount(kp.publicKey());
+  const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: Networks.TESTNET })
+    .addOperation(Operation.payment({
+      destination: order.account_id,
+      asset: new Asset("USDC", ep.issuer),
+      amount: amountUsdc,
+    }))
+    .addMemo(Memo.text(String(order.memo)))
+    .setTimeout(120)
+    .build();
+  tx.sign(kp);
+  const sent = await horizon.submitTransaction(tx as Parameters<typeof horizon.submitTransaction>[0]);
+
+  // Anchor ödemeyi gördüğünde fiat ayağını kapatıyor; işçi turu 1,5 sn.
+  let amountTry: string | null = null;
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const t = await json(await fetch(`${ep.sep6}/transaction?id=${order.id}`, { headers: H }));
+    if (t.transaction?.status === "completed") { amountTry = t.transaction.amount_out ?? null; break; }
+    if (t.transaction?.status === "error") throw new Error("anchor çekimi hata ile bitirdi");
+  }
+  if (amountTry === null) throw new Error("anchor çekimi beklenen sürede sonuçlandırmadı");
+
+  return { amountUsdc, amountTry, iban, paymentHash: sent.hash, memo: String(order.memo) };
 }

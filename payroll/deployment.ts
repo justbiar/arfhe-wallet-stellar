@@ -15,6 +15,14 @@ export const CT_DEPLOYMENT = {
   auditor: "CAV7XOZQIJBQ4GJFLMHWGHAVOVN5UROJL7WLJK4ADK3O5FPVLAFPSKZA",
   /** Anchor'ın ödediği Circle testnet USDC'sinin SAC adresi. */
   underlying: "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+  /**
+   * Aynı varlığın klasik ihraççısı.
+   *
+   * SAC adresi kontrat çağrıları için, bu ise güven hattı için — bir hesap `C…` adresine
+   * hat açamaz. İkisi aynı varlığın iki adı; ayrışırlarsa gizli katman bir varlığı sarmalar,
+   * hesaplar başkasına hat açar ve çekim "trustline entry is missing" ile düşer.
+   */
+  underlyingIssuer: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
   deployedAtLedger: 4761744,
 } as const;
 

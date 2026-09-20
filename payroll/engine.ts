@@ -24,12 +24,15 @@ import { randomScalar } from "../vendor/ctd-sdk/src/crypto/field.js";
 import type { Point } from "../vendor/ctd-sdk/src/crypto/grumpkin.js";
 import { buildRegisterWitness } from "../vendor/ctd-sdk/src/witness/register.js";
 import { buildTransferWitness } from "../vendor/ctd-sdk/src/witness/transfer.js";
+import { buildWithdrawWitness } from "../vendor/ctd-sdk/src/witness/withdraw.js";
 import { CircuitProver } from "../vendor/ctd-sdk/src/proving/prover.js";
 import { loadCircuit } from "../vendor/ctd-sdk/src/proving/artifacts.js";
-import { submitRegister, submitDeposit, submitMerge, submitTransfer } from "../vendor/ctd-sdk/src/chain/contract.js";
+import {
+  submitRegister, submitDeposit, submitMerge, submitTransfer, submitWithdraw,
+} from "../vendor/ctd-sdk/src/chain/contract.js";
 import { StateEngine, MemoryStore } from "../vendor/ctd-sdk/src/state/index.js";
 import { CT_DEPLOYMENT, RPC_URL, PASSPHRASE, AUDITOR_ID, toUnits, fromUnits } from "./deployment.js";
-import { rampIn, fundWithFriendbot } from "./anchor.js";
+import { rampIn, rampOut, ensureTrustline, fundWithFriendbot, type RampOutResult } from "./anchor.js";
 
 export interface Party {
   label: string;
@@ -60,6 +63,7 @@ export class PayrollEngine {
   #auditorKey: Point | null = null;
   #registerProver = new CircuitProver(loadCircuit("register"));
   #transferProver = new CircuitProver(loadCircuit("transfer"));
+  #withdrawProver = new CircuitProver(loadCircuit("withdraw"));
 
   constructor() {
     this.client = new ChainClient({
@@ -115,6 +119,65 @@ export class PayrollEngine {
     const units = toUnits(amountUsdc);
     await submitDeposit(this.client, party.signer, party.address, party.address, units);
     await submitMerge(this.client, party.signer, party.address);
+  }
+
+  /**
+   * Maaşı nakde çevirme: gizli bakiye → açık USDC → anchor → IBAN'a TRY.
+   *
+   * Üç adım, üçü de ayrı bir sebepten ayrı:
+   *
+   *   merge    — gelen para ayrı bir kovada birikiyor ve harcanabilir değil. Alıcının kendi
+   *              imzası olmadan kimse onu harcanabilir yapamaz; bu, ödeme almanın alıcıdan
+   *              bir işlem beklememesinin bedeli.
+   *   withdraw — gizli bakiyeden açık deftere dönüş. **Tutar burada açığa çıkıyor**, çünkü
+   *              açık defterin tuttuğu şey bir sayı. Gizlenen, bu iki uç arasındaki hareket.
+   *   rampOut  — açık USDC'yi anchor'a gönderip karşılığında IBAN'a TRY almak.
+   *
+   * Ara adımın sızıntısı gerçek ve kaçınılmaz: çekim anında zincire bakan biri bu adresin
+   * ne kadar bozdurduğunu görür. Göremediği şey o paranın hangi maaş olduğu — ödeme zaten
+   * gizliydi ve bakiyenin geçmişi hâlâ gizli.
+   */
+  async cashOut(party: Party, iban: string): Promise<{
+    merged: string | null;
+    unshielded: { amount: string; hash: string };
+    ramp: RampOutResult;
+  }> {
+    // Güven hattı önce: `withdraw` kontrattan klasik USDC gönderiyor ve hattı olmayan bir
+    // hesap onu kabul edemiyor. Kanıt doğrulandıktan sonra düşen bir işlem, sebebi zincirin
+    // derinliğinde kalan bir hata demek.
+    await ensureTrustline(party.keypair, CT_DEPLOYMENT.underlyingIssuer);
+
+    const state = this.stateFor(party);
+    await state.sync();
+
+    // Gelen bakiye varsa harcanabilir hale getir. Yoksa merge boşuna bir işlem olur.
+    let merged: string | null = null;
+    const before = await state.current();
+    if (before.receiving.v > 0n) {
+      const r = await submitMerge(this.client, party.signer, party.address);
+      merged = r.hash;
+      await state.sync();
+    }
+
+    const current = await state.current();
+    if (current.spendable.v <= 0n) throw new Error(`${party.label} için harcanabilir bakiye yok`);
+
+    const kAud = await this.auditorKey();
+    const w = buildWithdrawWitness({
+      keys: party.keys,
+      v: current.spendable.v,
+      r: current.spendable.r,
+      amount: current.spendable.v,
+      kAudS: kAud,
+    });
+    const { proof } = await this.#withdrawProver.prove(w.inputs);
+    const out = await submitWithdraw(
+      this.client, party.signer, party.address, party.address, current.spendable.v, w, proof,
+    );
+    await state.sync();
+
+    const amount = fromUnits(current.spendable.v);
+    return { merged, unshielded: { amount, hash: out.hash }, ramp: await rampOut(party.keypair, amount, iban) };
   }
 
   /** Bir tarafın gizli bakiyesi, zincirdeki olaylardan yeniden kurularak. */
@@ -177,6 +240,8 @@ export class PayrollEngine {
   }
 
   async close(): Promise<void> {
-    await Promise.all([this.#registerProver.destroy(), this.#transferProver.destroy()]);
+    await Promise.all([
+      this.#registerProver.destroy(), this.#transferProver.destroy(), this.#withdrawProver.destroy(),
+    ]);
   }
 }

@@ -21,9 +21,18 @@
  *
  * Only the domain. Everything else — auth endpoint, transfer server, asset issuer — is read
  * from the anchor's own TOML at runtime, which is what makes swapping one in this cheap.
+ *
+ * `runtime-config.js` wins over the build-time variable, so a published site can follow a
+ * tunnel that rotated without being rebuilt or moved.
  */
+declare global {
+  interface Window { __ARFHE_CONFIG__?: { anchor?: string; payroll?: string } }
+}
+
 export const ANCHOR_HOME_DOMAIN =
-  (import.meta.env?.VITE_ANCHOR_DOMAIN as string | undefined) ?? "localhost:8790";
+  (typeof window !== "undefined" ? window.__ARFHE_CONFIG__?.anchor : undefined)
+  ?? (import.meta.env?.VITE_ANCHOR_DOMAIN as string | undefined)
+  ?? "localhost:8790";
 
 /**
  * `http` for a local anchor, `https` for anything else.

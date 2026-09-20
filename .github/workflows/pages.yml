@@ -1,0 +1,57 @@
+# Publishes the demo site to GitHub Pages.
+#
+# The demo's link used to be a Cloudflare quick tunnel, which rotates: an address given out
+# on Friday is dead by Saturday, and a submitted link cannot be taken back. This gives the
+# site one address that never moves. The backends still live behind tunnels, but the site
+# reads their hostnames from `panel/runtime-config.js` at run time — so when a tunnel
+# rotates, that one file changes and the link stays where it is.
+name: Deploy the demo site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "panel/**"
+      - "src/components/ArfTheme*"
+      - "vite.panel.config.js"
+      - "package.json"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a queued run is allowed to finish rather than being cancelled,
+# because a half-published site is worse than a slightly stale one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - name: Build the panel
+        # The repository name is the sub-path Pages serves from.
+        run: PANEL_BASE="/${GITHUB_REPOSITORY#*/}/" npm run build:panel
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist-panel
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

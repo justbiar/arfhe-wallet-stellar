@@ -12,15 +12,47 @@
  */
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Ships `panel/runtime-config.js` beside the bundle, unprocessed.
+ *
+ * It is deliberately not in `public/`: that directory is shared with the extension build,
+ * and the extension has no business carrying the demo's backend addresses. It is also
+ * deliberately not bundled — the point is a file that can be edited after a build, when a
+ * tunnel rotates, without touching anything else.
+ */
+function runtimeConfig() {
+  const source = path.resolve(__dirname, "panel/runtime-config.js");
+  return {
+    name: "runtime-config",
+    configureServer(server) {
+      server.middlewares.use("/runtime-config.js", (_req, res) => {
+        res.setHeader("content-type", "text/javascript");
+        fs.createReadStream(source).pipe(res);
+      });
+    },
+    closeBundle() {
+      fs.copyFileSync(source, path.join(path.resolve(__dirname, "dist-panel"), "runtime-config.js"));
+    },
+  };
+}
+
 export default defineConfig({
+  /**
+   * GitHub Pages serves the site from a sub-path, a local server from the root.
+   *
+   * `PANEL_BASE` carries that difference into the build rather than into two configs, so
+   * the published link and `npm run serve:panel` come out of the same file.
+   */
+  base: process.env.PANEL_BASE ?? "/",
   root: path.resolve(__dirname, "panel"),
   publicDir: path.resolve(__dirname, "public"),
-  plugins: [react()],
+  plugins: [react(), runtimeConfig()],
   server: {
     port: 5174,
     // Some imports resolve to the repo root's node_modules, which is outside this config's

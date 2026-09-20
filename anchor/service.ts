@@ -28,7 +28,19 @@ const CORS = {
   "cross-origin-resource-policy": "cross-origin",
 };
 
+/**
+ * Every answer, on one line, with the reason when it is a refusal.
+ *
+ * A wallet reports "failed" and stops there; the sentence explaining why is here and was
+ * being thrown away. Logging the refusal — not the whole payload, just the status and the
+ * message the caller already receives — is the difference between debugging a demo from
+ * the outside and reading what happened.
+ */
 const send = (res: ServerResponse, status: number, body: unknown): void => {
+  const why = status >= 400 && body && typeof body === "object" && "error" in body
+    ? ` — ${String((body as { error: unknown }).error)}`
+    : "";
+  console.log(`  [http] ${status} ${(res as ServerResponse & { req?: { method?: string; url?: string } }).req?.method ?? "?"} ${(res as ServerResponse & { req?: { url?: string } }).req?.url ?? "?"}${why}`);
   res.writeHead(status, { ...CORS, "content-type": "application/json" });
   res.end(JSON.stringify(body));
 };

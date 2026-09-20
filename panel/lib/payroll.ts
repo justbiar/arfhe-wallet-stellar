@@ -20,7 +20,9 @@
  * `npm run payroll` working with no configuration.
  */
 export const PAYROLL_URL =
-  (import.meta.env?.VITE_PAYROLL_URL as string | undefined) ?? "http://localhost:8788";
+  (typeof window !== "undefined" ? window.__ARFHE_CONFIG__?.payroll : undefined)
+  ?? (import.meta.env?.VITE_PAYROLL_URL as string | undefined)
+  ?? "http://localhost:8788";
 
 export interface ScenarioDef {
   id: string;

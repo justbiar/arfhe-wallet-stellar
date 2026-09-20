@@ -1,7 +1,7 @@
 {
   // The payroll service and the vendored confidential-token SDK: Node, not the browser.
   // Kept apart from the root config for the same reason as the panel's — the root's error
-  // count is a documented baseline (CLAUDE.md) and must not move.
+  // count is a documented baseline (AGENTS.md) and must not move.
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "lib": ["ESNext"],

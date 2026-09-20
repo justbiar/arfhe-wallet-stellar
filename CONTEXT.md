@@ -13,12 +13,12 @@
 > güncellenmemiş, kod bug'ı değil test-fixture drift'i, hâlâ düzeltilmedi (bkz. 19.5). Kapanan
 > eski maddeler: Wrangler artık güncel (4.125.0), İngilizce başlık kalıntıları bulunamadı.
 > **Bölüm 20 (aynı gün, ilerleyen saatlerde): VPS özelliği artık HEM sunucu HEM istemci
-> tarafında uçtan uca doğrulandı** — Claude, kullanıcının verdiği gerçek VPS'e SSH ile bağlanıp
+> tarafında uçtan uca doğrulandı** — Ajan, kullanıcının verdiği gerçek VPS'e SSH ile bağlanıp
 > `qwen2.5:3b` + PM2'de çalışan `server.js`'i inceledi, gerçek bir test cüzdanıyla login→JWT→
 > kredi→chat akışını `curl`/script ile bizzat çalıştırdı (7.9 sn'de doğru cevap). Ardından
 > kullanıcı gerçek Chrome extension'ından ("Kendi VPS'im" ayarı, `http://83.229.86.69:3000`)
 > ilk mesajı gönderdi, sorunsuz çalıştığını bildirdi (bu son adım kullanıcının kendi ifadesine
-> dayanıyor, Claude tarafından ekran/console ile bağımsız doğrulanmadı — bkz. bölüm 20.4 madde
+> dayanıyor, ekran/console ile bağımsız doğrulanmadı — bkz. bölüm 20.4 madde
 > 4). **BÖLÜM 17.4 (model hallüsinasyonu) HÂLÂ ÇÖZÜLMEDİ** — bölüm 20'de çözülen tamamen
 > ERİŞİM/ALTYAPI sorunuydu, model KALİTESİ sorunu ayrı ve hâlâ açık (bkz. bölüm 20.5),
 > **sıradaki oturumun ilk önceliği olmaya devam ediyor.**
@@ -919,7 +919,7 @@ olduğu ortaya çıktı, sonra kapsam "sadece sosyal login kullananlar"dan **"he
 kullanıcı"**ya genişledi, en son kullanıcı cüzdan hareketlerinin de (ne kadar/ne sıklıkla
 kullanmış) takip edilmesini istedi.
 
-### 18.2 — Mimari keşif (Claude Code ile, kod tabanı incelenerek)
+### 18.2 — Mimari keşif (kod tabanı incelenerek)
 
 - **Sosyal login**: Web3Auth (`@web3auth/base`, `@web3auth/ethereum-provider`,
   `@web3auth/modal`), **sadece Google**, `SAPPHIRE_DEVNET` ağı. `Auth.tsx` (~satır
@@ -960,7 +960,7 @@ kullanmış) takip edilmesini istedi.
 - Her iki ping de **sessiz/bloklamayan** (`.catch(()=>{})`) — mevcut `retrieve-context`
   deseniyle aynı ilke, kullanıcı akışını asla etkilemiyor.
 
-### 18.4 — Uygulama (Claude Code ile)
+### 18.4 — Uygulama (kod ajanıyla)
 
 - **D1**: `arfio-users` (`database_id: 5927fb0c-38cb-4469-a07e-e2e84d649313`).
   `migrations/0001_create_users_activity.sql` — `users` (`wallet_address` PK, `email`,
@@ -1009,7 +1009,7 @@ başarıyla göründü. Sistem uçtan uca doğrulandı, canlı.
 - **ÖNCELİK 1 — hâlâ bölüm 17.4: model hallüsinasyon sorunu** — bu oturumda hiç
   dokunulmadı, sıradaki oturumun ilk maddesi olmaya devam ediyor.
 - **`/admin` web sayfası** — spesifikasyon hazır (arama/sıralama, sessionStorage'da
-  secret, iki sekme: kullanıcılar/aktivite) ama henüz Claude Code'a uygulatılmadı.
+  secret, iki sekme: kullanıcılar/aktivite) ama henüz uygulanmadı.
 - **`ADMIN_SECRET`'ın güçlendirilmesi** — şu an test amaçlı zayıf bir değerde, prod
   öncesi değiştirilmeli.
 - **Gizlilik politikası kararı** (bkz. 18.6 madde 3) — henüz alınmadı.
@@ -1309,11 +1309,11 @@ hiç araya girmediği bir yol olduğu için çıplak-IP kısıtına da hiç tak�
    extension'ından bizzat yaptı — dişli → "Kendi VPS'im" → `http://83.229.86.69:3000` girip
    kaydetti, ilk mesajı gönderdi. Cüzdan arka planda otomatik imzalayıp giriş yaptı, VPS'ten
    cevap geldi, sorunsuz çalıştı. **Not: bu sonuç kullanıcının kendi ifadesine dayanıyor** — bu
-   oturumda Claude tarafında `claude-in-chrome` ile bağımsız bir ekran/console doğrulaması
+   oturumda tarayıcı ajanıyla bağımsız bir ekran/console doğrulaması
    yapılmadı (bölüm 20.2'deki gibi `curl`/script çıktısı görülmedi), önceki bölümlerin "canlı
    doğrulandı" standardından bu farkla ayrılıyor. Yine de bu, madde 4'ün başındaki "sıradaki
    oturumun/kullanıcının doğrulaması gereken tek kalan adım" notunu kapatıyor — extension→VPS
-   uçtan uca zinciri artık hem sunucu tarafında (bölüm 20.2, Claude tarafından bizzat) hem
+   uçtan uca zinciri artık hem sunucu tarafında (bölüm 20.2, ajan tarafından bizzat) hem
    istemci tarafında (bu güncelleme, kullanıcı tarafından) doğrulanmış durumda.
 5. **Güvenlik notu (kod dışı):** kullanıcı bu görev sırasında VPS'in root SSH şifresini bu
    sohbete düz metin olarak yazdı — konuşma geçmişinde kalıcı. Şifrenin değiştirilmesi veya

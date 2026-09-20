@@ -43,9 +43,11 @@ bun.lockb
 deploy/artifacts/
 deploy/cache/
 
-# Claude Code's local dev-server launch config (Browser-pane preview target) — machine-
+# The coding agent's local dev-server launch config (preview target) — machine-
 # specific tooling, not project source.
 .claude/
+# Local pointer for agents that look for this exact filename. The notes live in AGENTS.md.
+CLAUDE.md
 
 # Chrome Web Store submission artifacts — generated, not sources.
 # The listing text and the privacy page ARE tracked (they are content); the zip and the

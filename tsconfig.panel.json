@@ -4,7 +4,7 @@
   // the first thing that ever read these files for types was the browser.
   //
   // Kept as its own config rather than added to the root include, because the root's error
-  // count is a documented baseline (see CLAUDE.md) that this must not move. Run it with
+  // count is a documented baseline (see AGENTS.md) that this must not move. Run it with
   // `npm run typecheck:panel`.
   "extends": "./tsconfig.json",
   "compilerOptions": {

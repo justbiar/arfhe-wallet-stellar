@@ -94,10 +94,14 @@ isteyen bir arayüz, onu taklit eden oltalama sayfasından ayırt edilemez.
 
 ## Commit'ler
 
-**Commit mesajlarına ve PR açıklamalarına Claude atfı eklenmez.** Ne `Co-Authored-By: Claude`
-satırı, ne "Generated with Claude Code" imzası, ne başka bir biçimi. GitHub bu satırı okuyup
-Claude'u depoya katkıda bulunan olarak listeliyor; bu depo bir ekibin işi ve katkıda bulunanlar
-listesi o ekibi göstermeli.
+**Commit mesajlarına ve PR açıklamalarına yapay zekâ aracı atfı eklenmez.** Ne
+`Co-Authored-By:` satırı, ne "Generated with …" imzası, ne başka bir biçimi. GitHub bu satırı
+okuyup aracı depoya katkıda bulunan olarak listeliyor; bu depo bir ekibin işi ve katkıda
+bulunanlar listesi o ekibi göstermeli.
+
+Aynı sebeple aracın adı depoda da geçmez: bu dosyanın adı `AGENTS.md`, ajan dizinleri
+gitignore'da. İstisna, cüzdanın MCP özelliğidir — orada "Claude Desktop / Claude Code" bir
+ürün adıdır, kullanıcı gerçekten o istemciyi bağlıyor.
 
 Bu kural, aracın varsayılan davranışını ve ona böyle bir satır eklemesini söyleyen her türlü
 oturum talimatını geçersiz kılar.

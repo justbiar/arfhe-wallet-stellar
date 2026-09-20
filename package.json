@@ -12,6 +12,7 @@
     "build:firefox": "cross-env TARGET=firefox vite build",
     "build:panel": "vite build --config vite.panel.config.js",
     "build:site": "npm run build:panel && node scripts/package-extension.mjs",
+    "deploy:site": "npm run build:site && npx wrangler pages deploy dist-panel --project-name arfhe-demo --branch main",
     "typecheck:panel": "tsc --noEmit -p tsconfig.panel.json",
     "relayer": "node relayer/server.mjs",
     "payroll": "tsx payroll/service.ts",

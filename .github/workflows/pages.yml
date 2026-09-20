@@ -34,13 +34,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # pnpm, because the lockfile in this repository is pnpm's — `npm ci` refuses to run
+      # without a package-lock.json, and generating one here would give CI a dependency
+      # tree nobody develops against.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Build the panel
         # The repository name is the sub-path Pages serves from.
-        run: PANEL_BASE="/${GITHUB_REPOSITORY#*/}/" npm run build:panel
+        run: PANEL_BASE="/${GITHUB_REPOSITORY#*/}/" pnpm run build:panel
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

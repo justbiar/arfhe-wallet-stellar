@@ -248,24 +248,75 @@ What runs today:
 | Piece | What it is | Run it |
 |---|---|---|
 | Confidential payment service | Payroll, supplier payments and institutional settlement over a confidential USDC layer deployed on testnet | `npm run payroll` → `payroll/` |
-| Our own SEP-6 anchor | A TRY ⇄ USDC ramp: SEP-1/6/10/12/38, and it honours the IBAN a withdrawal names | `npm run anchor` → `anchor/` |
-| Demo site | The bridge, the confidential-payment demo, the privacy pool, the roadmap | `npm run dev:panel` → `panel/` |
+| Our own SEP-6 anchor | A TRY ⇄ USDC ramp: SEP-1/6/10/38, and it honours the IBAN a withdrawal names | `npm run anchor` → `anchor/` |
+| Demo site | The bridge, the confidential-payment demo, the roadmap | `npm run dev:panel` → `panel/` |
 | Bank mode in the wallet | A TRY balance and an IBAN next to the Web3 side, the way a Turkish exchange presents it | `src/pages/Bank.tsx` |
-
-**Measured, in both directions.** 2730 TRY became 55.68 USDC and paid three salaries at
-~5s per payment; `GET /chain/:hash` returns what the ledger actually holds, and none of the
-amounts are in it. A 250 TRY deposit arrived as 5.07 USDC, and a withdrawal paid 96.61 TRY
-to the IBAN it was given.
 
 **What is simulated and what is not.** The bank and the identity checks are a sandbox — no
 institution issues these IBANs and no lira moves. Everything on the Stellar side is real
 testnet: real accounts, real trustlines, real payments you can look up on Horizon.
 
-The anchor is ours because the public sandbox anchor we first built against kept answering
-HTTP after it had stopped paying, and it ignored the destination a withdrawal named — three
+### The anchor is ours
+
+We wrote it because the public sandbox anchor we first built against kept answering HTTP
+after it had stopped paying, and it ignored the destination a withdrawal named — three
 different IBANs came back with the same payout account. A demo cannot depend on a service
-nobody can restart. The design notes, and the traps worth not rediscovering, are in
-[`stellar.md`](stellar.md) and [`anchor/README.md`](anchor/README.md).
+nobody can restart, and "send it to my IBAN" was not expressible at all.
+
+It speaks **SEP-1, SEP-6, SEP-10 and SEP-38**, and deliberately not SEP-12: it asks for no
+identity documents, so it advertises no KYC server. A few decisions worth naming:
+
+- **It pays out to the IBAN a withdrawal names.** That is the whole reason it exists.
+- **Your IBAN is derived from your Stellar account** — mod-97 valid, the same number every
+  time, stored nowhere. The wallet fills it in the way it fills in an address.
+- **The caps are counted in dollars, not lira**: at most 20 USDC per transfer and 60 per
+  account. The treasury pays USDC, so a lira ceiling would protect a different amount every
+  time the rate moved. `simulate-bank-transfer` credits an account with no proof that any
+  money moved, which is exactly why it needs a ceiling.
+- **The rate is fixed** — one mid price with a 50bp spread — so a measurement made twice
+  gives the same answer.
+
+The design notes, and the traps worth not rediscovering, are in [`stellar.md`](stellar.md)
+and [`anchor/README.md`](anchor/README.md).
+
+### Measured, with the transactions
+
+Every hash below is testnet and resolves on
+[stellar.expert](https://stellar.expert/explorer/testnet). Confidential payments are
+`confidential_transfer` calls: the recipient is visible, the amount is not — 15,308 of the
+envelope's 31,788 bytes are opaque, and searching it for the figures finds nothing.
+
+**Confidential payments** — four scenarios, eight payments, 20 September 2026:
+
+| Scenario | Payment | Time | Transaction |
+|---|---|---|---|
+| Payroll | 18 USDC | 7.9s | [`86e313eb…`](https://stellar.expert/explorer/testnet/tx/86e313eb4576e32c51a2fbecd5b8f707f9f09501ada1772f9f71bbe77617e3d4) |
+| Payroll | 25 USDC | 6.0s | [`0c51e13b…`](https://stellar.expert/explorer/testnet/tx/0c51e13b9d4dec9fc0ad40817c80578413355f8740a50a54a0f3105583396306) |
+| Payroll | 9.5 USDC | 5.3s | [`dc60d125…`](https://stellar.expert/explorer/testnet/tx/dc60d1254270ba50ac79f91d752ae0f2996b886ad604adcc2891ce10bfbe74f0) |
+| Supplier | 42.75 USDC | 7.4s | [`ecf77978…`](https://stellar.expert/explorer/testnet/tx/ecf7797878774fa5e6e067e123c93a52850bd31674a2287c84248dfed82fbe8a) |
+| Retail | 18.4 USDC | 7.6s | [`e1c6000c…`](https://stellar.expert/explorer/testnet/tx/e1c6000c8cea8130653652d048a460995f3ee461495c0c37bfcdac0be6a065ea) |
+| Retail | 6.25 USDC | 5.5s | [`81949e8f…`](https://stellar.expert/explorer/testnet/tx/81949e8fb9098635a2de0c0b32f6dcec61cc6af9de9eeaef2b44b8d4a863bc5e) |
+| Retail | 4.9 USDC | 9.5s | [`27dd8066…`](https://stellar.expert/explorer/testnet/tx/27dd8066c40e774cee3f5def73917a9df3ce39d05b01d9ed654757f937ef6495) |
+| Settlement | 31.25 USDC | 9.3s | [`6508e672…`](https://stellar.expert/explorer/testnet/tx/6508e67214c838b7b9fbb37f17e48fafbfafce894d1d8fccd3858ae42f6b61e4) |
+
+**The ramp, in both directions.** A payroll run needs more than the 20 USDC cap allows, so
+the request is split into deposits under it and the anchor settles them in one pass —
+2,730 TRY arrived as 55.40 USDC across three payouts:
+
+| Leg | Amount | Transaction |
+|---|---|---|
+| Deposit payout | 19.9876820 USDC | [`1340cf67…`](https://stellar.expert/explorer/testnet/tx/1340cf6762dd496435de7ee405ec6a1241685c0f0c124b8274c4972e8f68f53c) |
+| Deposit payout | 19.9876820 USDC | [`512b33b1…`](https://stellar.expert/explorer/testnet/tx/512b33b1710210b17b750501f74e2935dce70bbbc86cdf9829bf20e99d24cda1) |
+| Deposit payout | 15.4219678 USDC | [`97905f62…`](https://stellar.expert/explorer/testnet/tx/97905f62b31394f7750921c3a8b1e5373e6f5878cd3d52e242e939554bffb5f6) |
+| Withdrawal, wallet → anchor | 2 USDC, memo `9737859183` | [`2dda337c…`](https://stellar.expert/explorer/testnet/tx/2dda337c8b1ae21c1fcf051f3338a08d2f9c7a88ad30ebc4592218398f5bdb36) |
+
+The withdrawal's fiat leg is the simulated half: the anchor matched the memo and paid the
+lira to the IBAN the request named. Nothing on a bank's rails moved, and nothing here
+pretends otherwise.
+
+The anchor's own account is
+[`GASJWPWN…`](https://stellar.expert/explorer/testnet/account/GASJWPWNEPYVZ376VTFA6MINHQUE7UYJAXVPSJLTPRO2JY2HTRAC5LOY)
+— every payout above leaves from it, and anyone can watch it work.
 
 ---
 

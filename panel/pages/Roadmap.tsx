@@ -25,12 +25,13 @@ const DONE: Item[] = [
       "USDC'sini sarmalıyor. Dört senaryonun dördü de uçtan uca ölçüldü — bordro, tedarikçi " +
       "ödemesi, perakende ve kurumsal takas: toplam sekiz gizli ödeme, her biri 5,3 ile 9,5 " +
       "saniye arasında. Ödemenin kime gittiği zincirde görünüyor, ne kadar gittiği görünmüyor: " +
-      "her ödemenin zarfında 31.788 baytın 15.308'i opak ve tutarlar arandığında bulunamıyor.",
+      "her senaryodan bir ödemenin zarfını açtık, dördünde de 31.788 baytın 15.308'i opak ve " +
+      "aranan tutarlar zarfta bulunamıyor.",
   },
   {
     title: "Türk Lirası rampası, iki yönde",
     body:
-      "SEP-6 anchor üzerinden TRY → USDC ve geri. Bordro senaryosunda 2.730 TRY girdi, 55,68 " +
+      "SEP-6 anchor üzerinden TRY → USDC ve geri. Bordro senaryosunda 2.730 TRY girdi, 55,40 " +
       "USDC çıktı, üç maaş gizli ödendi. Rampanın kendisi zincirde açık — ve bu kaçınılmaz.",
   },
   {
@@ -70,8 +71,9 @@ const NETWORK: Item[] = [
   {
     title: "Anchor standartları",
     body:
-      "SEP-1, 6, 10, 12 ve 38 bir fiat rayını protokol seviyesinde tarif ediyor. Gizli ödemenin " +
-      "bir gösteriden ibaret kalmamasını sağlayan şey bu: para bir IBAN'a kadar gidebiliyor.",
+      "SEP-1, 6, 10 ve 38 bir fiat rayını protokol seviyesinde tarif ediyor; bizim anchor bu " +
+      "dördünü konuşuyor, kimlik doğrulama (SEP-12) hiç istemiyor. Gizli ödemenin bir gösteriden " +
+      "ibaret kalmamasını sağlayan şey bu: para bir IBAN'a kadar gidebiliyor.",
   },
 ];
 
@@ -149,8 +151,10 @@ const NEXT: Item[] = [
   {
     title: "Gönderen gizliliği",
     body:
-      "Ücreti başkasının ödediği, gönderenin imzasını zincire yazmayan bir akış. SDK tarafında " +
-      "“hazırla ama gönderme” adımı yeni geldi; bu yolu açan şey o.",
+      "Ücreti başkasının ödediği, gönderenin imzasını zincire yazmayan bir akış. Havuzda bunu " +
+      "bir kez ölçtük — relayer gönderdi, alice zincirde hiçbir yerde görünmedi — ama yükü " +
+      "üretmek için havuz CLI'ını kendimiz yamamak gerekti: yayınlanan istemcide “hazırla ama " +
+      "gönderme” adımı yok. Ürün yolu o adımın gelmesinden geçiyor.",
   },
   {
     title: "Cüzdanın içine",

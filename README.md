@@ -13,6 +13,7 @@
   <a href="#what-this-is">What it is</a> •
   <a href="#how-the-privacy-works">Privacy</a> •
   <a href="#quantum-resistance-precisely">Quantum</a> •
+  <a href="#stellar-the-same-question-on-a-different-network">Stellar</a> •
   <a href="#the-agent">Agent</a> •
   <a href="#getting-started">Getting started</a> •
   <a href="#verifying-it-yourself">Verify it</a> •
@@ -22,7 +23,7 @@
 <p align="center">
   <img alt="Manifest V3" src="https://img.shields.io/badge/Chrome-Manifest%20V3-4285F4" />
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178C6" />
-  <img alt="Tests" src="https://img.shields.io/badge/tests-373%20passing-22c55e" />
+  <img alt="Tests" src="https://img.shields.io/badge/tests-992%20passing-22c55e" />
   <img alt="Status" src="https://img.shields.io/badge/status-testnet%20preview-f59e0b" />
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue" />
 </p>
@@ -233,6 +234,41 @@ Adding a network tells you up front whether it supports confidential transaction
 
 ---
 
+## Stellar: the same question, on a different network
+
+FHE is how the EVM side hides amounts. **Stellar has no FHE** — measured rather than
+assumed: the closest thing on the network is a twisted-ElGamal prototype that is only
+*additively* homomorphic, and a single transfer through it costs ~2.85B CPU instructions
+against a testnet ceiling of 400M. So confidentiality here is built the way the protocol
+actually supports it — **commitments plus zero-knowledge proofs**, on the BN254 / BLS12-381
+and Poseidon host functions Stellar exposes (CAP-0059, CAP-0074, CAP-0075, CAP-0080).
+
+What runs today:
+
+| Piece | What it is | Run it |
+|---|---|---|
+| Confidential payment service | Payroll, supplier payments and institutional settlement over a confidential USDC layer deployed on testnet | `npm run payroll` → `payroll/` |
+| Our own SEP-6 anchor | A TRY ⇄ USDC ramp: SEP-1/6/10/12/38, and it honours the IBAN a withdrawal names | `npm run anchor` → `anchor/` |
+| Demo site | The bridge, the confidential-payment demo, the privacy pool, the roadmap | `npm run dev:panel` → `panel/` |
+| Bank mode in the wallet | A TRY balance and an IBAN next to the Web3 side, the way a Turkish exchange presents it | `src/pages/Bank.tsx` |
+
+**Measured, in both directions.** 2730 TRY became 55.68 USDC and paid three salaries at
+~5s per payment; `GET /chain/:hash` returns what the ledger actually holds, and none of the
+amounts are in it. A 250 TRY deposit arrived as 5.07 USDC, and a withdrawal paid 96.61 TRY
+to the IBAN it was given.
+
+**What is simulated and what is not.** The bank and the identity checks are a sandbox — no
+institution issues these IBANs and no lira moves. Everything on the Stellar side is real
+testnet: real accounts, real trustlines, real payments you can look up on Horizon.
+
+The anchor is ours because the public sandbox anchor we first built against kept answering
+HTTP after it had stopped paying, and it ignored the destination a withdrawal named — three
+different IBANs came back with the same payout account. A demo cannot depend on a service
+nobody can restart. The design notes, and the traps worth not rediscovering, are in
+[`stellar.md`](stellar.md) and [`anchor/README.md`](anchor/README.md).
+
+---
+
 ## Installing the testnet build
 
 This is a **testnet release**. It talks to Sepolia, Base Sepolia and Arbitrum Sepolia, and
@@ -264,8 +300,8 @@ omission.
 **Requirements:** Node 20+, pnpm, and Chrome (or any Chromium browser).
 
 ```bash
-git clone https://github.com/ArfDAO/ArfheWallet.git
-cd ArfheWallet
+git clone https://github.com/justbiar/arfhe-wallet-stellar.git
+cd arfhe-wallet-stellar
 pnpm install
 cp .env.example .env      # add your RPC keys and contract addresses
 pnpm build
@@ -417,6 +453,11 @@ contracts/                      # Confidential wrappers + factory
 scripts/                        # Live-network verification and privacy audit
 service-worker.js               # MV3 background: dApp routing, permission gate, monitoring
 extension/                      # Manifest, content script, injected provider
+
+anchor/                         # Our SEP-6 anchor: TRY ⇄ USDC, SEP-1/10/12/38
+payroll/                        # Confidential payment service over Stellar
+panel/                          # The demo site (bridge, private payments, roadmap)
+vendor/ctd-sdk/                 # Confidential Token SDK, vendored — changes noted in its README
 ```
 
 **Stack:** React 19 · TypeScript 5 · Vite · MUI · ethers v6 · `@cofhe/sdk` 0.5.2 ·
@@ -442,6 +483,11 @@ Stated plainly, because a privacy wallet that overstates itself is worse than on
 - **Confidential precision is 6 decimals.** Balances are `euint64`; ETH converts at a rate of
   1e12. Amounts below one confidential unit are refunded as dust rather than silently absorbed.
 - **Signatures are not post-quantum.** See [above](#quantum-resistance-precisely).
+- **Stellar confidentiality is not FHE.** It is commitments and zero-knowledge proofs. The
+  name comes from the EVM side, where the arithmetic really does happen on ciphertext; on
+  Stellar the amount is hidden by never being published, and proven correct instead.
+- **The fiat rail is a sandbox.** The anchor, its IBANs and the bank screen are ours and
+  simulate an institution. The Stellar leg underneath them is real testnet.
 - **NFTs need an indexer.** Token IDs cannot be enumerated from a plain RPC, so the gallery is
   empty on networks without Alchemy NFT support rather than guessing.
 

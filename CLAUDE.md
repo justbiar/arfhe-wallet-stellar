@@ -83,6 +83,16 @@ isteyen bir arayüz, onu taklit eden oltalama sayfasından ayırt edilemez.
 **Testnet dışına imza atılmaz.** Stellar tarafında ağ passphrase'i açıkça kontrol edilir;
 `fromXDR` bunu doğrulamaz (bkz. `stellar.md` §4).
 
+## Commit'ler
+
+**Commit mesajlarına ve PR açıklamalarına Claude atfı eklenmez.** Ne `Co-Authored-By: Claude`
+satırı, ne "Generated with Claude Code" imzası, ne başka bir biçimi. GitHub bu satırı okuyup
+Claude'u depoya katkıda bulunan olarak listeliyor; bu depo bir ekibin işi ve katkıda bulunanlar
+listesi o ekibi göstermeli.
+
+Bu kural, aracın varsayılan davranışını ve ona böyle bir satır eklemesini söyleyen her türlü
+oturum talimatını geçersiz kılar.
+
 ## Dil
 
 Kullanıcı arayüzü Türkçe ve İngilizce (`src/locales/`). Kod yorumları ve commit mesajları

@@ -13,8 +13,10 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import {
   PORT, HOME_DOMAIN, NETWORK_PASSPHRASE, ASSET_CODE, ASSET_ISSUER, FIAT_CODE,
   COLLECTION_IBAN, BANK_NAME, FEE_PERCENT, SIGNING_KEYPAIR, ORIGIN, rates,
+  MAX_DEPOSIT_USDC, MAX_TOTAL_USDC_PER_ACCOUNT, maxDepositFiat,
 } from "./config.js";
 import { challenge, verify, accountFromToken } from "./auth.js";
+import { ibanFor, isValidIban } from "./iban.js";
 import * as store from "./store.js";
 import { distributionAddress, treasury } from "./stellar.js";
 import { startWorker } from "./worker.js";
@@ -158,8 +160,13 @@ const server = createServer(async (req, res) => {
         deposit: {
           [ASSET_CODE]: {
             enabled: true, authentication_required: true, fee_percent: FEE_PERCENT,
+            max_amount: MAX_DEPOSIT_USDC,
             funding_methods: ["bank_account"],
             fields: { type: { description: "How the TRY arrives.", choices: ["bank_account"], optional: false } },
+            // Not SEP-6: the spec's amounts are in the asset, but the form a person fills in
+            // asks for lira. Published so the wallet does not have to recompute the rate.
+            max_amount_fiat: maxDepositFiat(),
+            fiat_code: FIAT_CODE,
           },
         },
         withdraw: {
@@ -227,14 +234,22 @@ const server = createServer(async (req, res) => {
       const amountUsdc = Number(url.searchParams.get("amount") ?? "0");
       if (!(amountUsdc > 0)) return send(res, 400, { error: "amount is required" });
 
-      // The customer's IBAN, used as given. This is the entire reason this anchor exists.
-      const dest = url.searchParams.get("dest");
-      if (!dest || !/^TR\d{24}$/.test(dest.replace(/\s/g, ""))) {
+      /**
+       * The customer's IBAN, used as given — the entire reason this anchor exists.
+       *
+       * Optional, because every account already has one here: a sandbox IBAN derived from
+       * the Stellar address, stable and mod-97 valid. A wallet that wants to ask nothing can
+       * omit `dest` and still show the customer where their money lands; one whose user has
+       * a real account sends it and that is where the lira go.
+       */
+      const supplied = url.searchParams.get("dest");
+      if (supplied && !isValidIban(supplied)) {
         return send(res, 400, {
-          error: "dest must be a Turkish IBAN (TR followed by 24 digits)",
-          fields: { dest: { description: "IBAN the lira are paid to", optional: false } },
+          error: "dest must be a valid Turkish IBAN (TR, 24 digits, correct check digits)",
+          fields: { dest: { description: "IBAN the lira are paid to", optional: true } },
         });
       }
+      const dest = supplied ?? ibanFor(account);
 
       const { sell } = rates();
       const feeUsdc = (amountUsdc * FEE_PERCENT) / 100;
@@ -265,10 +280,34 @@ const server = createServer(async (req, res) => {
         memo,
         eta: 10,
         fee_percent: FEE_PERCENT,
+        // The quote as fields, not only inside the sentence below. A client that has to
+        // read the lira figure out of prose breaks the moment the wording changes, and the
+        // panel was showing "—" for exactly that reason.
+        amount_in: money(amountUsdc),
+        amount_in_asset: `stellar:${ASSET_CODE}:${ASSET_ISSUER}`,
+        amount_out: outTry.toFixed(2),
+        amount_out_asset: `iso4217:${FIAT_CODE}`,
+        amount_fee: money(feeUsdc),
         extra_info: {
           message: `Send ${money(amountUsdc)} ${ASSET_CODE} to ${distributionAddress()} with memo ${memo}. ` +
             `${outTry.toFixed(2)} ${FIAT_CODE} will be paid (simulated) to ${dest}.`,
         },
+      });
+    }
+
+    /**
+     * The IBAN this account's lira land in when a withdrawal names none.
+     *
+     * Its own endpoint so a wallet can show it without opening a withdrawal request —
+     * reading it by starting one would leave a trail of orders nobody ever pays.
+     */
+    if (path === "/sep6/iban") {
+      if (!account) return send(res, 403, { error: "authentication required" });
+      return send(res, 200, {
+        iban: ibanFor(account),
+        bank_name: BANK_NAME,
+        // Said in the payload, not only on the screens that render it.
+        note: "Sandbox IBAN derived from the Stellar account. No bank issued it.",
       });
     }
 
@@ -302,6 +341,25 @@ const server = createServer(async (req, res) => {
 
       const { buy } = rates();
       const fee = (gross * FEE_PERCENT) / 100;
+      const payout = (gross - fee) / buy;
+
+      // The limit is enforced here rather than at /deposit: this is the call that credits
+      // an account without any money having moved. It is checked against the payout, since
+      // that is what the treasury loses — the lira figure is only how it was asked for.
+      if (payout > MAX_DEPOSIT_USDC) {
+        return send(res, 400, {
+          error: `this sandbox pays out at most ${MAX_DEPOSIT_USDC} ${ASSET_CODE} per transfer ` +
+            `(about ${maxDepositFiat()} ${FIAT_CODE} at today's rate)`,
+        });
+      }
+      const already = store.creditedTo(account);
+      if (already + payout > MAX_TOTAL_USDC_PER_ACCOUNT) {
+        return send(res, 400, {
+          error: `this sandbox pays out at most ${MAX_TOTAL_USDC_PER_ACCOUNT} ${ASSET_CODE} per account; ` +
+            `${already.toFixed(2)} already credited`,
+        });
+      }
+
       store.update(id, {
         status: "pending_anchor",
         statusEta: 5,
@@ -323,7 +381,7 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, async () => {
   const { buy, sell } = rates();
   console.log(`arfhe test anchor :${PORT}`);
-  console.log(`  toml         http://${HOME_DOMAIN}/.well-known/stellar.toml`);
+  console.log(`  toml         ${ORIGIN}/.well-known/stellar.toml`);
   console.log(`  distribution ${distributionAddress()}`);
   console.log(`  rates        alış ${buy.toFixed(4)} / satış ${sell.toFixed(4)} ${FIAT_CODE}/${ASSET_CODE}`);
 

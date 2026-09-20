@@ -17,7 +17,15 @@
 import { owingPayout, awaitingPayment, update } from "./store.js";
 import { hasTrustline, payout, incoming } from "./stellar.js";
 
-const TICK_MS = 4000;
+/**
+ * How often the anchor looks for work.
+ *
+ * Every deposit waits for the next tick before it is paid, so this interval is dead time on
+ * the demo's critical path — four seconds of it, in a flow a visitor is watching. A second
+ * and a half keeps the payout inside a Stellar ledger close and still leaves Horizon alone
+ * between passes; the tick only reads one page of payments.
+ */
+const TICK_MS = 1500;
 
 /** Payments already turned into a settlement. Re-reading the same page must be harmless. */
 const settled = new Set<string>();

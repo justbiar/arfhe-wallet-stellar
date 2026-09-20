@@ -75,6 +75,42 @@ export const SPREAD_BPS = 50;
 
 export const FEE_PERCENT = 0.5;
 
+/**
+ * How much the sandbox will credit, per request and per account.
+ *
+ * `simulate-bank-transfer` stands in for a bank confirming a transfer, so anyone who can
+ * authenticate — which is anyone, SEP-10 accepts any keypair — can ask this anchor to pay
+ * out USDC for lira nobody sent. The treasury is real testnet USDC and finite, and an empty
+ * one is a demo that fails in front of an audience.
+ *
+ * Caps rather than an allowlist: the point of a public sandbox is that a stranger can try
+ * it. These are large enough for the whole flow and small enough that emptying the treasury
+ * takes deliberate effort rather than one request.
+ *
+ * Counted in USDC rather than lira, because USDC is what leaves the treasury. A cap written
+ * in lira is a cap on the wrong side of the rate: move the rate and the same number of lira
+ * pays out a different amount, so the thing being protected drifts while the setting stays
+ * still.
+ *
+ * Overridable from the environment because our own measurements do not fit inside them: a
+ * payroll scenario ramps tens of dollars in one go. Raising them is a deliberate act on the
+ * machine running the anchor, for as long as the measurement takes — not something a caller
+ * can ask for.
+ */
+export const MAX_DEPOSIT_USDC = Number(process.env.ANCHOR_MAX_DEPOSIT_USDC ?? 20);
+export const MAX_TOTAL_USDC_PER_ACCOUNT = Number(process.env.ANCHOR_MAX_TOTAL_USDC ?? 60);
+
+/**
+ * The same cap said in lira, for a form that asks for lira.
+ *
+ * Rounded down: a ceiling that rounds up is a ceiling the next call rejects, and a visitor
+ * reads that as the anchor contradicting its own screen.
+ */
+export function maxDepositFiat(): number {
+  const { buy } = rates();
+  return Math.floor((MAX_DEPOSIT_USDC * buy) / (1 - FEE_PERCENT / 100));
+}
+
 interface Keys { signing: string; distribution: string }
 
 const KEYS_PATH = new URL("./.keys.json", import.meta.url);

@@ -91,6 +91,14 @@ export const forAccount = (account: string): AnchorTransaction[] =>
 export const awaitingPayment = (): AnchorTransaction[] =>
   [...transactions.values()].filter((t) => t.kind === "withdrawal" && t.status === "pending_user_transfer_start");
 
+/** Lira an account has already had credited, for the sandbox's own spending limit. */
+/** How much USDC this account has already been credited, across every deposit it opened. */
+export const creditedTo = (account: string): number =>
+  [...transactions.values()]
+    .filter((t) => t.account === account && t.kind === "deposit" && t.status !== "pending_user_transfer_start")
+    // amountOut, not amountIn: the cap protects the treasury, and the treasury pays USDC.
+    .reduce((sum, t) => sum + Number(t.amountOut ?? 0), 0);
+
 /** Deposits whose fiat leg the sandbox has confirmed and which now owe USDC. */
 export const owingPayout = (): AnchorTransaction[] =>
   [...transactions.values()].filter(

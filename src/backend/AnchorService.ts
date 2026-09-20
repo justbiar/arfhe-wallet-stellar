@@ -268,37 +268,68 @@ export async function openDeposit(
 }
 
 /**
- * The IBAN this account's lira come out to, as the anchor assigns it.
+ * The IBAN this account's lira are paid to.
  *
- * Measured: the anchor mints one per Stellar account and returns the same one across
- * sessions, so a single lookup is enough for good. Cached for that reason and one more —
- * reading it means opening a withdrawal request, and a wallet that opened a fresh request
- * every time someone looked at the screen would leave a trail of orders nobody ever paid.
+ * Given by the person, not assigned by the anchor. The sandbox we replaced ignored the
+ * destination it was handed and paid an account of its own, so the wallet could only show
+ * whatever it had picked; ours uses what it is given, which is the whole reason it exists.
  *
- * Stored beside the deposit identity: both are public bank details, neither is a secret.
+ * Remembered per Stellar account so it is typed once. A bank account number is not a
+ * secret, and it sits beside the deposit instructions rather than in the encrypted store —
+ * but it is the destination of money, so it is only ever written by the person on the
+ * withdrawal screen and never inferred.
  */
-const PAYOUT_KEY = "arfhe_bank_payout_iban";
+const IBAN_KEY = "arfhe_bank_payout_iban";
 
-export async function getPayoutIban(account: Account, index = 0): Promise<string | null> {
-  const kp = await getKeypair(account, index);
-  if (!kp) return null;
-  const key = kp.publicKey();
-
+/**
+ * The IBAN the anchor keeps for this account, derived from its Stellar address.
+ *
+ * Fetched rather than computed here: the derivation is the anchor's business, and a wallet
+ * that reimplemented it would drift from the anchor the first time either side changed.
+ * It is what a withdrawal uses when the person names no account of their own.
+ */
+export async function getAssignedIban(account: Account, index = 0): Promise<string | null> {
+  const cfg = await discover();
   try {
-    const got = await chrome.storage.local.get(PAYOUT_KEY);
-    const store = (got?.[PAYOUT_KEY] as Record<string, string>) ?? {};
-    if (store[key]) return store[key];
-
-    // The smallest request that makes the anchor name the account. Never paid, and the
-    // anchor drops an unpaid request on its own.
-    const order = await openWithdraw(account, "1", index);
-    if (!order.payoutIban) return null;
-    await chrome.storage.local.set({ [PAYOUT_KEY]: { ...store, [key]: order.payoutIban } });
-    return order.payoutIban;
+    const token = await authenticate(account, index);
+    const res = await fetch(`${cfg.transferServer}/iban`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return null;
+    const body = await res.json();
+    return typeof body.iban === "string" ? body.iban : null;
   } catch {
     return null;
   }
 }
+
+export async function getSavedIban(account: Account, index = 0): Promise<string | null> {
+  const kp = await getKeypair(account, index);
+  if (!kp) return null;
+  try {
+    const got = await chrome.storage.local.get(IBAN_KEY);
+    return ((got?.[IBAN_KEY] as Record<string, string>) ?? {})[kp.publicKey()] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveIban(account: Account, iban: string, index = 0): Promise<void> {
+  const kp = await getKeypair(account, index);
+  if (!kp) return;
+  try {
+    const got = await chrome.storage.local.get(IBAN_KEY);
+    const store = (got?.[IBAN_KEY] as Record<string, string>) ?? {};
+    await chrome.storage.local.set({ [IBAN_KEY]: { ...store, [kp.publicKey()]: normaliseIban(iban) } });
+  } catch {
+    // Not remembering it costs a retype, not a failed withdrawal.
+  }
+}
+
+/** Spaces out, upper case in. What the anchor validates is the bare form. */
+export const normaliseIban = (iban: string): string => iban.replace(/\s+/g, "").toUpperCase();
+
+/** TR plus 24 digits, the same rule the anchor enforces — checked here so the screen can
+ *  say so before a round trip. */
+export const isValidIban = (iban: string): boolean => /^TR\d{24}$/.test(normaliseIban(iban));
 
 export interface WithdrawOrder {
   id: string;
@@ -324,8 +355,10 @@ export interface WithdrawOrder {
 export async function openWithdraw(
   account: Account,
   amountUsdc: string,
+  iban: string,
   index = 0
 ): Promise<WithdrawOrder> {
+  if (!isValidIban(iban)) throw new Error("IBAN 'TR' ile başlayıp 24 rakam içermeli.");
   const kp = await getKeypair(account, index);
   if (!kp) throw new Error("Bu hesabın Stellar adresi yok.");
   const cfg = await discover();
@@ -333,7 +366,8 @@ export async function openWithdraw(
 
   const url =
     `${cfg.transferServer}/withdraw?asset_code=${ASSET_CODE}&type=bank_account` +
-    `&account=${encodeURIComponent(kp.publicKey())}&amount=${encodeURIComponent(amountUsdc)}`;
+    `&account=${encodeURIComponent(kp.publicKey())}&amount=${encodeURIComponent(amountUsdc)}` +
+    `&dest=${encodeURIComponent(normaliseIban(iban))}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   const body = await res.json();
   if (!res.ok || !body.account_id) {
@@ -345,7 +379,7 @@ export async function openWithdraw(
     accountId: body.account_id,
     memo: String(body.memo ?? ""),
     memoType: String(body.memo_type ?? "id"),
-    payoutIban: body.extra_info?.message?.match(/\b(TR\d{24})\b/)?.[1] ?? null,
+    payoutIban: normaliseIban(iban),
     etaSeconds: typeof body.eta === "number" ? body.eta : null,
   };
 }

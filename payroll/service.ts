@@ -111,26 +111,45 @@ const server = createServer(async (req, res) => {
       // Adım adım loglanıyor: /prepare dakikalarca sürebiliyor ve bir yerde takılırsa
       // hangi adımda olduğunu bilmek, tek satırlık bir timeout mesajından çok daha fazlasını
       // söylüyor.
-      const step = (m: string) => console.log(`  [prepare] ${m}`);
+      // Timed, because "why is this slow" is a question about a specific step and the log
+      // could not answer it: proof generation, friendbot and the ramp all look the same
+      // from outside, and they are not the same at all.
+      const startedAt = Date.now();
+      let lastAt = startedAt;
+      const step = (m: string) => {
+        const now = Date.now();
+        console.log(`  [prepare +${((now - startedAt) / 1000).toFixed(1)}s] ${m} (${((now - lastAt) / 1000).toFixed(1)}s)`);
+        lastAt = now;
+      };
 
-      step(`taraflar oluşturuluyor (${1 + def.recipients.length})`);
-      const payer = await engine.createParty(def.payer);
-      const recipients = [];
-      for (const r of def.recipients) recipients.push(await engine.createParty(r.label));
+      // Hesapları friendbot fonluyor ve her çağrı ~5 saniye sürüyor; dördünü sırayla
+      // beklemek yirmi saniyeydi. Birlikte isteniyorlar — friendbot art arda çağrıldığında
+      // bağlantı düşürüyor, ama `fundWithFriendbot` zaten geri çekilerek tekrar deniyor.
+      const [payer, ...recipients] = await Promise.all(
+        [def.payer, ...def.recipients.map((r) => r.label)].map((label) => engine.createParty(label)),
+      );
+      step(`taraflar hazır (${1 + recipients.length})`);
 
-      for (const p of [payer, ...recipients]) {
-        step(`kayıt: ${p.label}`);
-        await engine.register(p);
-      }
+      // Ödeyen önce kaydolmalı: gizleme onun kaydına bağlı.
+      await engine.register(payer);
+      step(`kayıt: ${payer.label}`);
 
       // Rampadan, senaryonun toplamını karşılayacak kadar TRY çek.
       const need = Math.ceil(scenarioTotal(def) * TRY_PER_USDC);
       const amountTry = String(Math.min(DEPOSIT_MAX_TRY, Math.max(DEPOSIT_MIN_TRY, need)));
-      step(`rampa: ${amountTry} TRY`);
-      const funded = await engine.fundFromAnchor(payer, amountTry);
-      step(`gizleniyor: ${funded} USDC`);
+
+      // Rampa ile alıcı kayıtları birbirini beklemiyor: biri anchor'ı ve zinciri bekliyor,
+      // diğeri kanıt üretiyor. Sırayla koşturmak ikisinin toplamı kadar sürüyordu.
+      const ramp = engine.fundFromAnchor(payer, amountTry);
+      for (const p of recipients) {
+        await engine.register(p);
+        step(`kayıt: ${p.label}`);
+      }
+
+      const funded = await ramp;
+      step(`rampa: ${amountTry} TRY → ${funded} USDC`);
       await engine.shield(payer, funded);
-      step("hazır");
+      step("gizlendi · hazır");
 
       session = { scenario: id, payer, recipients, funded, payments: [] };
       return send(res, 200, { amountTry, ...(await readState(session)) });

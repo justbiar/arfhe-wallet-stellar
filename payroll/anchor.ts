@@ -78,10 +78,62 @@ export async function fundWithFriendbot(publicKey: string, attempts = 4): Promis
 }
 
 /**
- * TRY yatırır, USDC bekler, gelen tutarı döndürür.
+ * Anchor'ın tek bir yatırmada kabul ettiği en yüksek TRY.
+ *
+ * Sorulmuyor değil, okunuyor: tavan anchor'ın kendi kurundan hesaplanıyor ve kur değişince
+ * o sayı da değişiyor. Burada bir kopyasını tutmak, bir gün iki tarafın sessizce ayrışması
+ * demek olurdu — nitekim bir kere oldu.
+ */
+async function maxPerDeposit(ep: AnchorEndpoints): Promise<number> {
+  const info = await json(await fetch(`${ep.sep6}/info`));
+  const ceiling = info.deposit?.USDC?.max_amount_fiat;
+  return typeof ceiling === "number" && ceiling > 0 ? ceiling : Number.POSITIVE_INFINITY;
+}
+
+/** Bir yatırma açar ve havaleyi bildirir. Ödemeyi beklemez. */
+async function openDeposit(
+  ep: AnchorEndpoints, H: Record<string, string>, account: string, amountTry: string,
+): Promise<string> {
+  const dep = await json(await fetch(
+    `${ep.sep6}/deposit?asset_code=USDC&account=${account}&type=bank_account&amount=${encodeURIComponent(amountTry)}`,
+    { headers: H },
+  ));
+  if (!dep.id) throw new Error(dep.error ?? "yükleme açılamadı");
+
+  // Sandbox: bankayı biz oynuyoruz. Cevabı okuyoruz — reddedilen bir havale sessizce
+  // `pending` bırakıyordu ve hata, kırk saniye sonra "anchor sonuçlandırmadı" diye
+  // görünüyordu. Sebebi anchor zaten söylüyordu, kimse bakmıyordu.
+  const sim = await fetch(`${ep.sep6}/tx/${dep.id}/simulate-bank-transfer`, {
+    method: "POST", headers: { ...H, "Content-Type": "application/json" },
+    body: JSON.stringify({ amount: amountTry }),
+  });
+  if (!sim.ok) throw new Error((await json(sim)).error ?? `anchor havaleyi reddetti (HTTP ${sim.status})`);
+
+  return dep.id as string;
+}
+
+/** Açılmış bir yatırmanın ödenmesini bekler ve gelen USDC'yi döndürür. */
+async function settled(ep: AnchorEndpoints, H: Record<string, string>, id: string): Promise<number> {
+  // Gözlemlenen sonuçlanma 2–4 yoklama; dar bir timeout başarılı işlemi hata sayar.
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const t = await json(await fetch(`${ep.sep6}/transaction?id=${id}`, { headers: H }));
+    if (t.transaction?.status === "completed") return Number(t.transaction.amount_out);
+    if (t.transaction?.status === "error") throw new Error("anchor işlemi hata ile bitirdi");
+  }
+  throw new Error("anchor beklenen sürede sonuçlandırmadı");
+}
+
+/**
+ * TRY yatırır, USDC bekler, gelen toplamı döndürür.
  *
  * `amount` TRY cinsinden — USDC değil. Anchor'ın en kolay yanlış okunan alanı bu
  * (stellar.md §4): 100 istersen ~2 USDC gelir.
+ *
+ * Tavanı aşan bir senaryo tek istekte geçmiyor: anchor işlem başına 20 USDC ödüyor, bir
+ * bordro ise bunun üç katını istiyor. Talep, tavanın altına bölünüp sırayla gönderiliyor —
+ * gerçek bir rampada da limit böyle aşılır, ve bölmek, demoyu ayakta tutmak için herkese
+ * açık tavanı yükseltmekten iyidir.
  */
 export async function rampIn(kp: Keypair, amountTry: string): Promise<string> {
   const ep = await discover();
@@ -89,24 +141,21 @@ export async function rampIn(kp: Keypair, amountTry: string): Promise<string> {
   const jwt = await authenticate(ep, kp);
   const H = { Authorization: `Bearer ${jwt}` };
 
-  const dep = await json(await fetch(
-    `${ep.sep6}/deposit?asset_code=USDC&account=${kp.publicKey()}&type=bank_account&amount=${encodeURIComponent(amountTry)}`,
-    { headers: H },
-  ));
-  if (!dep.id) throw new Error(dep.error ?? "yükleme açılamadı");
-
-  // Sandbox: bankayı biz oynuyoruz.
-  await fetch(`${ep.sep6}/tx/${dep.id}/simulate-bank-transfer`, {
-    method: "POST", headers: { ...H, "Content-Type": "application/json" },
-    body: JSON.stringify({ amount: amountTry }),
-  });
-
-  // Gözlemlenen sonuçlanma 2–4 yoklama; dar bir timeout başarılı işlemi hata sayar.
-  for (let i = 0; i < 16; i++) {
-    await new Promise((r) => setTimeout(r, 2500));
-    const t = await json(await fetch(`${ep.sep6}/transaction?id=${dep.id}`, { headers: H }));
-    if (t.transaction?.status === "completed") return t.transaction.amount_out;
-    if (t.transaction?.status === "error") throw new Error("anchor işlemi hata ile bitirdi");
+  const ceiling = await maxPerDeposit(ep);
+  const slices: string[] = [];
+  for (let remaining = Number(amountTry); remaining > 0; ) {
+    const slice = Math.min(remaining, ceiling);
+    slices.push(slice.toFixed(2));
+    remaining -= slice;
   }
-  throw new Error("anchor beklenen sürede sonuçlandırmadı");
+
+  // Açılışlar sırayla, ödemeler birlikte beklenir. Anchor'ın işçisi bekleyen yatırmaların
+  // hepsini aynı turda ödüyor, yani her dilim için ayrı ayrı beklemek — üç dilimde otuz
+  // saniye — tamamen boşa geçen bir süreydi. Açılış sırası korunuyor, çünkü hesap başına
+  // tavan birikimli sayılıyor ve eşzamanlı istekler onu farklı sırayla görebilir.
+  const ids: string[] = [];
+  for (const slice of slices) ids.push(await openDeposit(ep, H, kp.publicKey(), slice));
+
+  const amounts = await Promise.all(ids.map((id) => settled(ep, H, id)));
+  return amounts.reduce((sum, a) => sum + a, 0).toFixed(7);
 }

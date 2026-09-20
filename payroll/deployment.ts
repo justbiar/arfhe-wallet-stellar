@@ -21,7 +21,17 @@ export const CT_DEPLOYMENT = {
 export const RPC_URL = "https://soroban-testnet.stellar.org";
 export const HORIZON_URL = "https://horizon-testnet.stellar.org";
 export const PASSPHRASE = "Test SDF Network ; September 2015";
-export const ANCHOR = "https://tr-mock-anchor.fly.dev";
+/**
+ * Rampanın bağlandığı anchor — artık kendi yazdığımız (`anchor/`, `npm run anchor`).
+ *
+ * Önceki adres `tr-mock-anchor.fly.dev`'di ve sessizce bozuldu: HTTP'ye cevap vermeye devam
+ * ederken ödeme yapmayı bıraktı, yani yatırma `pending_anchor`'da kalıp zaman aşımına düştü.
+ * Hata mesajı "anchor sonuçlandırmadı" olduğu için, ölü bir bağımlılık gibi değil, bizim
+ * tarafımızdaki bir yavaşlık gibi okunuyordu.
+ *
+ * `ANCHOR_URL` ile taşınabiliyor; varsayılan, aynı makinede çalışan anchor.
+ */
+export const ANCHOR = process.env.ANCHOR_URL ?? "http://localhost:8790";
 
 /** Tek denetçi kaydı. Dağıtımda id 0 olarak kaydedildi. */
 export const AUDITOR_ID = 0;

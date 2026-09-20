@@ -48,6 +48,38 @@ Bordro senaryosu, 19 Eylül 2026:
 
 Üç çalışan da kendi tutarını **yalnızca zincirden** çözdü.
 
+### Diğer üç senaryo, 20 Eylül 2026
+
+Aynı motor, aynı çağrı; değişen tek şey tutarların neden gizlenmesi gerektiği. Hepsi kendi
+anchor'ımızdan fonlandı:
+
+```
+tedarik    2223 TRY → 45.1092559 USDC   (rampa 47 sn)
+  Tedarikçi A  42.75 USDC  7.4 sn  ecf7797878774fa5e6e067e123c93a52850bd31674a2287c84248dfed82fbe8a
+
+perakende  1537 TRY → 31.1889008 USDC   (rampa 60 sn)
+  Mağaza       18.4  USDC  7.6 sn  e1c6000c8cea8130653652d048a460995f3ee461495c0c37bfcdac0be6a065ea
+  Eczane        6.25 USDC  5.5 sn  81949e8fb9098635a2de0c0b32f6dcec61cc6af9de9eeaef2b44b8d4a863bc5e
+  Kitapçı       4.9  USDC  9.5 sn  27dd8066c40e774cee3f5def73917a9df3ce39d05b01d9ed654757f937ef6495
+
+takas      1625 TRY → 32.9746023 USDC   (rampa 57 sn)
+  Kurum B      31.25 USDC  9.3 sn  6508e67214c838b7b9fbb37f17e48fafbfafce894d1d8fccd3858ae42f6b61e4
+```
+
+Üçünde de zincir görünümü aynı: `confidential_transfer`, 15.308 baytlık opak blok, 31.788
+baytlık zarf, ve aranan tutarların hiçbiri zarfta yok.
+
+Ölçüm tek komutla tekrarlanıyor:
+
+```bash
+node scripts/measure-scenarios.mjs tedarik perakende takas
+```
+
+Anchor'ın sandbox tavanı (işlem başına 20 USDC) bu tutarların altında kaldığı için ölçüm
+sırasında `ANCHOR_MAX_DEPOSIT_USDC=60 ANCHOR_MAX_TOTAL_USDC=60` ile başlatılıyor, sonra
+varsayılana dönülüyor. Tavan, havalenin geldiğini kanıtsız söyleyebilen bir uçta kasayı
+koruyan şey.
+
 ### Zincir ne görüyor
 
 `GET /chain/f6d09a93…` — Mehmet'in 25 USDC'lik maaşı:

@@ -20,9 +20,9 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 import {
   Box, Container, Typography, Paper, Stack, IconButton, Chip, Alert, CircularProgress,
-  Divider, TextField, Button, Tooltip, alpha, useTheme,
+  Divider, Button, Tooltip, alpha, useTheme,
 } from "@mui/material";
-import { ArrowBack, ContentCopyOutlined, Check, Refresh } from "@mui/icons-material";
+import { ContentCopyOutlined, Check, Refresh } from "@mui/icons-material";
 import { Link as MuiLink } from "@mui/material";
 import { WalletContext } from "../AppContext.js";
 import WalletModeSwitch from "../components/WalletModeSwitch.js";
@@ -40,6 +40,15 @@ const TIMEOUT_MS = 20_000;
  * spinner that implies progress nobody is making.
  */
 const STALLED_AFTER_MS = 60_000;
+
+/**
+ * Where a hash can be checked by someone who does not trust this screen.
+ *
+ * The anchor reports "completed" and the balance changes, but both of those are this side
+ * of the wall saying so. The transaction id is the part anyone can verify against the
+ * ledger, which is why it belongs on the row rather than in a log.
+ */
+const EXPLORER_TX = "https://stellar.expert/explorer/testnet/tx";
 
 function withTimeout<T>(work: Promise<T>, message: string): Promise<T> {
   return Promise.race([
@@ -80,15 +89,11 @@ export default function Bank() {
   const [address, setAddress] = useState<string | null>(null);
   const [state, setState] = useState<{ exists: boolean; trusted: boolean } | null>(null);
   const [txs, setTxs] = useState<AnchorTx[] | null>(null);
-  const [amount, setAmount] = useState("500");
   /** The account's standing deposit instructions — created once, then shown. */
   const [identity, setIdentity] = useState<DepositInstructions | null>(null);
   const [usdc, setUsdc] = useState<string | null>(null);
   /** TRY per USDC, as the anchor prices it. Null when it will not say. */
   const [rate, setRate] = useState<number | null>(null);
-  /** The account's own payout IBAN, as the anchor assigns it. */
-  const [payoutIban, setPayoutIban] = useState<string | null>(null);
-  const [withdrawAmount, setWithdrawAmount] = useState("5");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -98,6 +103,26 @@ export default function Bank() {
   const pendingTry = (txs ?? [])
     .filter((tx) => tx.kind === "deposit" && tx.status !== "completed" && tx.amountIn)
     .reduce((sum, tx) => sum + Number(tx.amountIn), 0) || null;
+
+  /**
+   * Lira that actually came through this rail: deposits in, withdrawals out.
+   *
+   * The headline used to be the whole USDC balance converted at today's rate, which reads
+   * as "this much money arrived from the bank" and is not true — an account's USDC also
+   * comes from a faucet, a payroll run, someone else's payment. Converting all of it dressed
+   * unrelated money up as bank money.
+   *
+   * Only settled transfers count. A deposit the anchor has not paid out yet is money it
+   * holds, not money that arrived, and it has its own line.
+   */
+  const settled = (txs ?? []).filter((tx) => tx.status === "completed");
+  const depositedTry = settled
+    .filter((tx) => tx.kind === "deposit" && tx.amountIn)
+    .reduce((sum, tx) => sum + Number(tx.amountIn), 0);
+  const withdrawnTry = settled
+    .filter((tx) => tx.kind === "withdrawal" && tx.amountOut)
+    .reduce((sum, tx) => sum + Number(tx.amountOut), 0);
+  const netTry = depositedTry - withdrawnTry;
 
   const load = useCallback(async () => {
     if (!account) { setLoading(false); return; }
@@ -117,7 +142,6 @@ export default function Bank() {
       const read = await stellar.getBalances(derived);
       setUsdc(read.balances.find((b) => b.code === "USDC")?.balance ?? null);
       setRate(await anchor.getSellRate());
-      setPayoutIban(await anchor.getPayoutIban(account));
 
       try {
         setIdentity(await withTimeout(anchor.getDepositIdentity(account), t("bank.timedOut")));
@@ -181,36 +205,11 @@ export default function Bank() {
     }
   };
 
-  const simulate = () => run("simulate", async () => {
-    if (!account || !identity) return;
-    const anchor = await import("../backend/AnchorService.js");
-    // Settled against the standing request, so the money arrives under the reference the
-    // screen has been showing all along rather than a second one made for this click.
-    await withTimeout(anchor.simulateBankTransfer(account, identity.id, amount), t("bank.timedOut"));
-    setTxs(await anchor.listTransactions(account));
-  });
-
   const fund = () => run("fund", async () => {
     if (!address) return;
     const anchor = await import("../backend/AnchorService.js");
     await withTimeout(anchor.fundWithFriendbot(address), t("bank.timedOut"));
     setState(await anchor.hasTrustline(address));
-  });
-
-  /**
-   * Out to the bank: open the request, then pay the anchor with the memo it asked for.
-   *
-   * One button rather than two steps, because the second without the first is a payment
-   * into the anchor's account that nothing is expecting. If the payment fails the request
-   * is simply never settled, which is the state the anchor already handles.
-   */
-  const withdraw = () => run("withdraw", async () => {
-    if (!account) return;
-    const anchor = await import("../backend/AnchorService.js");
-    const order = await withTimeout(anchor.openWithdraw(account, withdrawAmount), t("bank.timedOut"));
-    setPayoutIban(order.payoutIban);
-    await withTimeout(anchor.payWithdrawal(account, order, withdrawAmount), t("bank.timedOut"));
-    setTxs(await anchor.listTransactions(account));
   });
 
   const trust = () => run("trust", async () => {
@@ -227,11 +226,10 @@ export default function Bank() {
     <Container maxWidth="sm" sx={{ py: 2 }}>
       <Box sx={{ mx: -2, mb: 1 }}><WalletModeSwitch mode="bank" /></Box>
 
+      {/* No title and no back arrow: the Web3 / Bank switch above is both. A heading that
+          repeats the selected tab and an arrow that does what the other tab does are two
+          ways of saying the same thing, in a popup that has no room to say anything twice. */}
       <Stack direction="row" alignItems="center" gap={1} sx={{ mb: 2 }}>
-        <IconButton onClick={() => navigate("/home")} size="small" aria-label={t("common.back")}>
-          <ArrowBack fontSize="small" />
-        </IconButton>
-        <Typography variant="h6" fontWeight={800}>{t("bank.title")}</Typography>
         <Box sx={{ flex: 1 }} />
         <Chip size="small" label={t("bank.testnet")} sx={{ fontWeight: 700, fontSize: "0.65rem" }} />
         <Tooltip title={t("common.refresh")}>
@@ -295,32 +293,25 @@ export default function Bank() {
             variant="outlined"
             sx={{ p: 3, borderRadius: 3, textAlign: "center", bgcolor: alpha(theme.palette.primary.main, 0.04) }}
           >
-            {/* The account's own number first, the way a bank app opens: this is the
-                identity, the balance is what is in it. It is the anchor's assignment, not
-                an IBAN the user chose — and the label says which. */}
-            {payoutIban && (
-              <Box sx={{ mb: 2, textAlign: "left" }}>
-                <CopyLine label={t("bank.yourIban")} value={payoutIban} />
-                <Divider sx={{ mt: 1.5 }} />
-              </Box>
-            )}
-
             <Typography variant="caption" color="text.secondary" fontWeight={700} letterSpacing="0.08em">
               {t("bank.balanceLabel")}
             </Typography>
             <Typography sx={{ fontSize: "clamp(2rem, 11vw, 3rem)", fontWeight: 800, lineHeight: 1.1, mt: 0.5 }}>
-              {rate !== null && usdc !== null
-                ? Number(usdc) * rate > 0
-                  ? (Number(usdc) * rate).toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                  : "0,00"
-                : "—"}
+              {netTry.toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               <Typography component="span" sx={{ fontSize: 16, fontWeight: 700, ml: 0.75 }}>TRY</Typography>
             </Typography>
-            {/* Quiet, but present: the lira figure is a conversion, and the thing the
-                account actually holds should never be a number the screen hides. */}
+            {/* The chain balance belongs here too, and separately: it is what the account
+                actually holds, which is a different quantity from what the bank rail
+                delivered. Keeping them apart is the point of the line. */}
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+              {t("bank.railSummary", {
+                deposited: depositedTry.toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                withdrawn: withdrawnTry.toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+              })}
+            </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
               {rate !== null
-                ? t("bank.backedBy", {
+                ? t("bank.chainHolds", {
                     usdc: usdc ?? "0",
                     rate: rate.toLocaleString("tr-TR", { minimumFractionDigits: 4, maximumFractionDigits: 4 }),
                   })
@@ -352,65 +343,6 @@ export default function Bank() {
               <Typography variant="body2" color="text.secondary">{t("bank.identityUnavailable")}</Typography>
             )}
 
-            <Divider sx={{ my: 2 }} />
-
-            {/* Stacked, not side by side. The wallet renders at popup width and this
-                button's label is a sentence; in a row the amount field collapsed to about
-                forty pixels and clipped both its label and the number inside it. */}
-            <Stack gap={1.5}>
-              <TextField
-                fullWidth
-                size="small"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value.replace(/[^\d.,]/g, ""))}
-                label={t("bank.amountTry")}
-                inputProps={{ inputMode: "decimal", style: { fontSize: 18, fontWeight: 700 } }}
-              />
-              <Button
-                fullWidth
-                variant="contained"
-                onClick={simulate}
-                disabled={busy !== null || amount === "" || !identity}
-                startIcon={busy === "simulate" ? <CircularProgress size={13} color="inherit" /> : null}
-                sx={{ minHeight: 44, borderRadius: 2 }}
-              >
-                {t("bank.simulate")}
-              </Button>
-            </Stack>
-            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
-              {t("bank.simulateWhy")}
-            </Typography>
-          </Paper>
-
-          {/* Out. Deliberately below the deposit card: money leaving is the rarer action and
-              the one with a step that cannot be undone. */}
-          <Paper variant="outlined" sx={{ p: 2, borderRadius: 3 }}>
-            <Typography fontWeight={700} sx={{ mb: 1.5 }}>{t("bank.withdrawTitle")}</Typography>
-
-            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.5 }}>
-              {t("bank.payoutNote")}
-            </Typography>
-
-            <Stack gap={1.5}>
-              <TextField
-                fullWidth
-                size="small"
-                value={withdrawAmount}
-                onChange={(e) => setWithdrawAmount(e.target.value.replace(/[^\d.,]/g, ""))}
-                label={t("bank.amountUsdc")}
-                inputProps={{ inputMode: "decimal", style: { fontSize: 18, fontWeight: 700 } }}
-              />
-              <Button
-                fullWidth
-                variant="outlined"
-                onClick={withdraw}
-                disabled={busy !== null || withdrawAmount === "" || !state?.trusted}
-                startIcon={busy === "withdraw" ? <CircularProgress size={13} /> : null}
-                sx={{ minHeight: 44, borderRadius: 2 }}
-              >
-                {t("bank.withdraw")}
-              </Button>
-            </Stack>
           </Paper>
 
           {/* Only when there is something to list. An empty "no transactions yet" card is
@@ -431,7 +363,9 @@ export default function Bank() {
                       <Stack direction="row" justifyContent="space-between" alignItems="center">
                         <Box sx={{ minWidth: 0 }}>
                           <Typography variant="body2" fontWeight={600}>
-                            {tx.amountIn} TRY → {tx.amountOut} USDC
+                            {tx.kind === "withdrawal"
+                              ? `${tx.amountIn} USDC → ${tx.amountOut} TRY`
+                              : `${tx.amountIn} TRY → ${tx.amountOut} USDC`}
                           </Typography>
                           <Typography variant="caption" color="text.secondary">
                             {t("bank.fee")}: {tx.amountFee} · {tx.status}
@@ -441,6 +375,32 @@ export default function Bank() {
                           ? <Check sx={{ fontSize: 16, color: "success.main" }} />
                           : <CircularProgress size={13} />}
                       </Stack>
+
+                      {/* The chain's receipt, once there is one.
+                          On a deposit this is the anchor's payout; on a withdrawal it is
+                          the payment that was sent to it. Either way it is the only line
+                          here that can be checked without taking the anchor's word. */}
+                      {tx.stellarTxId && (
+                        <Box sx={{ mt: 0.8 }}>
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              display: "block", fontFamily: "monospace", fontSize: 10,
+                              wordBreak: "break-all", color: "text.secondary", lineHeight: 1.5,
+                            }}
+                          >
+                            {tx.stellarTxId}
+                          </Typography>
+                          <MuiLink
+                            href={`${EXPLORER_TX}/${tx.stellarTxId}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            variant="caption"
+                          >
+                            {t("bank.viewOnChain")}
+                          </MuiLink>
+                        </Box>
+                      )}
 
                       {/* The anchor's own words, not a paraphrase. */}
                       {!settled && tx.message && (
